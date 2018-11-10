@@ -1,0 +1,26 @@
+workflow realign {
+    (fastq1, fastq2) = extract_reads()
+    (bam, bai) = align_reads(fastq1, fastq2)
+}
+
+task extract_reads {
+    (bam file) -> (fastq1 file temporary, fastq2 file temporary) 
+} in bash {
+    samtools fastq ${bam} -1 ${fastq1} -2 ${fastq2}
+} with runtime {
+    cpu: 1
+    memory: 512M
+    disk: 1G
+}
+
+task align_reads {
+    (fastq1 file, fastq2 file, ref file) -> (bam file, bai file)
+} in bash {
+    bwa mem ${ref} ${fastq1} ${fastq2} | samtools view -b - > aligned.bam
+    samtools sort aligned.bam ${bam}
+    samtools index ${bam} ${bai}
+} with runtime {
+    cpu: 2
+    memory: 1G
+    disk: 2 * (size(fastq1) + size(fastq2))
+}

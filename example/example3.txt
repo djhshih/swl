@@ -1,0 +1,114 @@
+# reads/extract_reads.task #####################################################
+
+task extract_reads
+from
+    bam file
+to
+    fastq1 file
+    fastq2 file
+with
+    cpu int = 1
+    memory size = 512M
+    disk size = base + 1G
+    duration time = 1:00
+    language string = "bash"
+    image string = "djhshih/seqkit:0.1"
+by
+    samtools fastq ${bam} -1 ${fastq1} -2 ${fastq2}
+
+
+# reads/align_reads.task #####################################################
+
+task align_reads
+from
+    fastq1 file
+    fastq2 file
+    ref file
+    ref_bwt file = ref + ".bwt"
+    ref_sa file = ref + ".sa"
+to
+    bam file
+    bai file
+with
+    cpu int = 2
+    memory size = 2G
+    disk size = base + 2
+    duration time = 10:00
+    language string = "bash"
+    image string = "djhshih/seqkit:0.1"
+by include "realign.sh"
+
+# realign_reads.workflow #####################################################
+
+import reads as rd
+
+workflow realign_reads where
+    (fastq1, fastq2) = rd.extract_reads(_)
+    (bam, bai) = rd.align_reads(fastq1, fastq2, _)
+
+
+# the above files are assembled into:
+# during assembly, the file is automatically formatted
+
+# realign_reads.cwf ##########################################################
+
+workflow realign_reads
+where
+    (fastq1, fastq2) = rd.extract_reads(_)
+    (bam, bai) = rd.align_reads(fastq1, fastq2, _)
+
+task extract_reads in rd
+from
+    bam file
+to
+    fastq1 file
+    fastq2 file
+with
+    cpu = 1
+    memory = 512M
+    disk = base + 1G
+    duration = 1:00
+    language = "bash"
+    image = "djhshih/seqkit:0.1"
+by
+    samtools fastq ${bam} -1 ${fastq1} -2 ${fastq2}
+
+task align_reads in rd
+from
+    fastq1 file
+    fastq2 file
+    ref file
+    ref_bwt file = ref + ".bwt"
+    ref_sa file = ref + ".sa"
+to
+    bam file
+    bai file
+with
+    cpu = 2
+    memory = 2G
+    disk = base * 2
+    duration = 10:00
+    language = "bash"
+    image = "djhshih/seqkit:0.1"
+by
+    bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > aligned.bam
+
+    samtools sort -@ ${cpu} -m ${memory/cpu} aligned.bam ${bam}
+    samtools index ${bam} ${bai}
+
+
+# indentation is mandatory; otherwise, we don't know where block ends!
+# use space (allow easier editing in text boxes and repl)
+
+# task name overloading vs. type inference tradeoff:
+# 1. use task signature (name + parameter types) to determine which function to call
+#    result: permits task name overloading; prohibits parameter type inference
+# 2. use task name to determine which function to call
+#    result: prohibits task name overloading; permits parameter type inference
+#            should include namespace
+
+# builtin functions for workflow
+# seq(start float, end float, step float) list
+# split(x item) list
+# map(mapping task, xs list) list
+# reduce(merge task, b item, xs list) item
