@@ -13,9 +13,13 @@ with
     duration time = 1:00
     command string = "bash"
     image string = "djhshih/seqkit:0.1"
-by
+by ''
     samtools fastq ${bam} -1 ${fastq1} -2 ${fastq2}
+''
 
+# Strings enclosed by '' can span multiple lines.
+# If the first line only contain white space, it is ignored.
+# For all subsequent lines, one level of indentation is removed.
 
 # reads/align_reads.task #####################################################
 
@@ -71,8 +75,9 @@ with
     duration time = 1:00
     command string = "bash"
     image string = "djhshih/seqkit:0.1"
-by
+by ''
     samtools fastq ${bam} -1 ${fastq1} -2 ${fastq2}
+''
 
 task align_reads in rd
 from
@@ -91,12 +96,12 @@ with
     duration time = 10:00
     command string = "bash"
     image string = "djhshih/seqkit:0.1"
-by
+by ''
     bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > aligned.bam
 
     samtools sort -@ ${cpu} -m ${memory/cpu} aligned.bam ${bam}
     samtools index ${bam} ${bai}
-
+''
 
 # indentation is mandatory; otherwise, we don't know where block ends!
 # use space (allow easier editing in text boxes and repl)
