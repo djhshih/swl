@@ -54,6 +54,8 @@ where
 # A workflow can call tasks and other workflows.
 # Input files can be inferred from called tasks.
 # Output files are inferred from named variables that are never read.
+# These output file names need to be specified by the caller.
+# What about string or integer output variables?
 
 # during assembly, the above files are assembled into:
 
