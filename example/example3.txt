@@ -24,8 +24,8 @@ from
     fastq1 file
     fastq2 file
     ref file
-    ref_bwt file = ref + ".bwt"
-    ref_sa file = ref + ".sa"
+    ref_bwt file = ref ++ ".bwt"
+    ref_sa file = ref ++ ".sa"
 to
     bam file
     bai file
@@ -78,8 +78,8 @@ from
     fastq1 file
     fastq2 file
     ref file
-    ref_bwt file = ref + ".bwt"
-    ref_sa file = ref + ".sa"
+    ref_bwt file = ref ++ ".bwt"
+    ref_sa file = ref ++ ".sa"
 to
     bam file
     bai file
