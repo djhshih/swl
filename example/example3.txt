@@ -42,10 +42,12 @@ by include "realign.sh"
 
 import reads as rd
 
-workflow realign_reads where
+workflow realign_reads
+where
     (fastq1, fastq2) = rd.extract_reads(_)
     (bam, bai) = rd.align_reads(fastq1, fastq2, _)
 
+# a workflow can call tasks and other workflows
 
 # during assembly, the above files are assembled into:
 
