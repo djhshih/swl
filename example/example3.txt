@@ -47,8 +47,7 @@ workflow realign_reads where
     (bam, bai) = rd.align_reads(fastq1, fastq2, _)
 
 
-# the above files are assembled into:
-# during assembly, the file is automatically formatted
+# during assembly, the above files are assembled into:
 
 # realign_reads.cwf ##########################################################
 
