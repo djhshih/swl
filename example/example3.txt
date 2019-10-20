@@ -54,8 +54,14 @@ where
 # A workflow can call tasks and other workflows.
 # Input files can be inferred from called tasks.
 # Output files are inferred from named variables that are never read.
-# These output file names need to be specified by the caller.
-# What about string or integer output variables?
+# We can assign wildcard names to output file names, in which case the execution engine will find the first matching file.
+# If the output file names are unassigned, they will be determine by the execution engine.
+# The end user will usually not specifiy the names of output files.
+# Non-file outputs will be temporarily stored by the execution engine.
+# The execution engine will write an JSON of all the workflow outputs.
+
+# Array example
+# bams [file] = "*.bam"
 
 # during assembly, the above files are assembled into:
 
