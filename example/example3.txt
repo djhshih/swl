@@ -11,7 +11,7 @@ with
     memory size = 512M
     disk size = base + 1G
     duration time = 1:00
-    language string = "bash"
+    command string = "bash"
     image string = "djhshih/seqkit:0.1"
 by
     samtools fastq ${bam} -1 ${fastq1} -2 ${fastq2}
@@ -34,7 +34,7 @@ with
     memory size = 2G
     disk size = base + 2
     duration time = 10:00
-    language string = "bash"
+    command string = "bash"
     image string = "djhshih/seqkit:0.1"
 by include "realign.sh"
 
@@ -63,12 +63,12 @@ to
     fastq1 file
     fastq2 file
 with
-    cpu = 1
-    memory = 512M
-    disk = base + 1G
-    duration = 1:00
-    language = "bash"
-    image = "djhshih/seqkit:0.1"
+    cpu int = 1
+    memory size = 512M
+    disk size = base + 1G
+    duration time = 1:00
+    command string = "bash"
+    image string = "djhshih/seqkit:0.1"
 by
     samtools fastq ${bam} -1 ${fastq1} -2 ${fastq2}
 
@@ -83,12 +83,12 @@ to
     bam file
     bai file
 with
-    cpu = 2
-    memory = 2G
-    disk = base * 2
-    duration = 10:00
-    language = "bash"
-    image = "djhshih/seqkit:0.1"
+    cpu int = 2
+    memory size = 2G
+    disk size = base * 2
+    duration time = 10:00
+    command string = "bash"
+    image string = "djhshih/seqkit:0.1"
 by
     bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > aligned.bam
 
