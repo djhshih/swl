@@ -1,7 +1,7 @@
 Tasks are annotated bash scripts.
 
 `align.task`
-```
+```{bash}
 #' doc Align paired-end sequencing reads
 #' in  fastq1   file                    | read 1
 #' in  fastq2   file                    | read 2
@@ -15,7 +15,7 @@ bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.b
 ```
 
 `sort.task`
-```
+```{bash}
 #' doc Sort alignment by coordinates and index
 #' in  bam      file                    | input bam
 #' in  ref      file                    | reference sequence
