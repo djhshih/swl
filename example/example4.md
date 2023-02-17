@@ -1,6 +1,6 @@
 Tasks are annotated bash scripts.
 
-`align.task`
+`align.sh`
 ```{bash}
 #' doc Align paired-end sequencing reads
 #' in  fastq1   file                    | read 1
@@ -14,7 +14,7 @@ Tasks are annotated bash scripts.
 bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam
 ```
 
-`sort.task`
+`sort.sh`
 ```{bash}
 #' doc Sort alignment by coordinates and index
 #' in  bam      file                    | input bam
@@ -39,8 +39,8 @@ We can import the tasks into a workflow by
 
 `align.workflow`
 ```
-align = import "align.task"
-sort  = import "sort.task"
+align = import "align.sh"
+sort  = import "sort.sh"
 ```
 
 We can then write a workflow as
