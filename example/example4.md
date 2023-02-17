@@ -59,7 +59,13 @@ where `argv` is a record of the workflow input. Comparing this two blocks of cod
 - Each task is separated from its input record by a space.
 - Records are constructed using `{ }`.
 - The first task is automatically given the workflow input `argv`.
+- Each subsequent task produce a record. Attributes in later records take precedence.
 - The output of a workflow is just the resulting record on the last line.
+
+Attributes in the input record may be qualified to resolve ambiguity:
+```
+{ align = { fastq1 = "1.fq", fastq2 = "2.fq" } }
+```
 
 Additionally, we can merge records by
 ```
@@ -71,3 +77,5 @@ This workflow can also be imported into another workflow similarly as above:
 ```
 align = import "align.workflow"
 ```
+
+Documentation for the workflow can be generated using the documentation of the tasks.
