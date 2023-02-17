@@ -6,7 +6,7 @@
 #' @out bam      file
 #' @out bai      file
 #' @run cpu      int     [default: 2]
-#' @run memory   int     [default: 8G]
+#' @run memory   size    [default: 8G]
 
 bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > aligned.bam
 
