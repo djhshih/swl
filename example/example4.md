@@ -94,7 +94,7 @@ Attributes in the input `argv` record may be qualified to resolve ambiguity:
 { align = { fastq1 = "1.fq", fastq2 = "2.fq" } }
 ```
 
-Alternatively, we can also write the workflow with explicit writing by
+Alternatively, we can also write the workflow with explicit passing of arguments by
 ```
 a = align argv
 s = sort { bam = b.bam, outbase = argv.outbase }
@@ -103,7 +103,7 @@ c = call { bam = s.bam, ref = argv.ref, ref_fai = argv.ref_fai, outbase = argv.o
 { bam = s.bam, bai = s.bai, bcf = c.bcf }
 ```
 
-Now, this workflow can also be imported into another workflow similarly as above:
+A workflow can be imported into another workflow similarly as above:
 ```
 mutation = import "mutation.wf"
 ```
