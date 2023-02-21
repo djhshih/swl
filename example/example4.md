@@ -61,7 +61,7 @@ We can import the tasks into a workflow by
 ```
 align = import "align.sh"
 sort  = import "sort.sh"
-call = import "call.sh"
+call  = import "call.sh"
 ```
 
 We can then write the workflow in `mutation.wf` simply with
