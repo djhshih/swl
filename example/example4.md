@@ -2,32 +2,46 @@ Tasks are annotated bash scripts.
 
 `align.sh`
 ```{bash}
-#' doc Align paired-end sequencing reads
-#' in  fastq1   file                    | read 1
-#' in  fastq2   file                    | read 2
-#' in  ref      file                    | reference sequence
-#' in  outbase  str                     | output base name
-#' out bam      file  =  ${outbase}.bam | output alignment
-#' run cpu      int   = 2
-#' run image    size  = djhshih/seqkit:0.1
+#? Align paired-end sequencing reads
+#
+# in  fastq1   file                    | read 1
+# in  fastq2   file                    | read 2
+# in  ref      file                    | reference sequence
+# in  outbase  str                     | output base name
+# out bam      file  =  ${outbase}.bam | output alignment
+# run cpu      int   = 2
+# run image    size  = djhshih/seqkit:0.1
 
 bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam
 ```
 
 `sort.sh`
 ```{bash}
-#' doc Sort alignment by coordinates and index
-#' in  bam      file                    | input bam
-#' in  ref      file                    | reference sequence
-#' in  outbase  str                     | output base name
-#' out bam      file  =  ${outbase}.bam | output alignment
-#' out bai      file  =  ${outbase}.bai | output alignment index
-#' run cpu    = 2
-#' run memory = 8G
-#' run image  = djhshih/seqkit:0.1
+#? Sort alignment by coordinates and index
+# in  bam      file                    | input bam
+# in  outbase  str                     | output base name
+# out bam      file  =  ${outbase}.bam | output alignment
+# out bai      file  =  ${outbase}.bai | output alignment index
+# run cpu    = 2
+# run memory = 8G
+# run image  = djhshih/seqkit:0.1
 
 samtools sort -@ ${cpu} -m ${memory / cpu} aligned.bam ${outbase}.bam
 samtools index ${outbase}.bam ${outbase}.bai
+```
+
+`call.sh`
+```{bash}
+#? Call mutations on read alignment
+#
+# in  bam      file                    | input bam
+# in  ref      file                    | reference sequence
+# in  outbase  str                     | output base name
+# out bcf      file  =  ${outbase}.bcf | output alignment
+# run image  = djhshih/seqkit:0.1
+
+bcftools mpileup -Ou -f ${ref} ${bam} | 
+	bcftools call -mv -Ob -o ${bcf}
 ```
 
 Tasks output records.
@@ -37,45 +51,55 @@ task `sort` takes a record of `bam` and outputs a record of `bam` and `bai`.
 
 We can import the tasks into a workflow by
 
-`align.workflow`
+`mutation.wf`
 ```
 align = import "align.sh"
 sort  = import "sort.sh"
+call = import "call.sh"
 ```
 
-We can then write a workflow as
+We can then write the workflow in `mutation.wf` simply with
 ```
-align |> sort
+align |> sort |> call
 ```
 which is syntactic sugar for
 ```
 a = align argv
-s = sort { bam = a.bam }
-
-{ bam = s.bam, bai = s.bai }
+s = sort ( argv & a )
+c = call ( argv & a & s )
+a & s & c
 ```
 where `argv` is a record of the workflow input. Comparing this two blocks of code, we also note that
 
 - Each task is separated from its input record by a space.
 - Records are constructed using `{ }`.
-- The first task is automatically given the workflow input `argv`.
-- Each subsequent task produce a record. Attributes in later records take precedence.
-- The output of a workflow is just the resulting record on the last line.
+- The first task is run with the workflow input `argv`, producing a record that is then given to subsequent tasks.
+- Each task produce a record using the workflow input merged with output records from the preceding tasks.
+- The output of a workflow is the merged output records of all tasks.
 
-Attributes in the input record may be qualified to resolve ambiguity:
+As seen above, we merge records by
+```
+s & c
+```
+The record on the right is always right (i.e. it takes precedence when both records have the same attribute).
+
+Attributes in the input `argv` record may be qualified to resolve ambiguity:
 ```
 { align = { fastq1 = "1.fq", fastq2 = "2.fq" } }
 ```
 
-Additionally, we can merge records by
+Alternatively, we can also write the workflow with explicit writing by
 ```
-a & s
-```
-The record on the right is always right (i.e. it takes precedence when both records have the same attribute).
+a = align argv
+s = sort { bam = b.bam, outbase = argv.outbase }
+c = call { bam = s.bam, ref = argv.ref, outbase = argv.outbase }
 
-This workflow can also be imported into another workflow similarly as above:
+{ bam = s.bam, bai = s.bai, bcf = c.bcf }
 ```
-align = import "align.workflow"
+
+Now, this workflow can also be imported into another workflow similarly as above:
+```
+mutation = import "mutation.wf"
 ```
 
 Documentation for the workflow can be generated using the documentation of the tasks.
