@@ -7,6 +7,11 @@ Tasks are annotated bash scripts.
 # in  fastq1   file                    | read 1
 # in  fastq2   file                    | read 2
 # in  ref      file                    | reference sequence
+# in  ref_amb  file                    | reference bwa index file
+# in  ref_ann  file                    | reference bwa index file
+# in  ref_bwt  file                    | reference bwa index file
+# in  ref_pac  file                    | reference bwa index file
+# in  ref_sa   file                    | reference bwa index file
 # in  outbase  str                     | output base name
 # out bam      file  =  ${outbase}.bam | output alignment
 # run cpu      int   = 2
@@ -36,6 +41,7 @@ samtools index ${outbase}.bam ${outbase}.bai
 #
 # in  bam      file                    | input bam
 # in  ref      file                    | reference sequence
+# in  ref_fai  file                    | reference index
 # in  outbase  str                     | output base name
 # out bcf      file  =  ${outbase}.bcf | output alignment
 # run image  = djhshih/seqkit:0.1
@@ -75,7 +81,7 @@ where `argv` is a record of the workflow input. Comparing this two blocks of cod
 - Records are constructed using `{ }`.
 - The first task is run with the workflow input `argv`, producing a record that is then given to subsequent tasks.
 - Each task produce a record using the workflow input merged with output records from the preceding tasks.
-- The output of a workflow is the merged output records of all tasks.
+- The output of a workflow is result on the final line.
 
 As seen above, we merge records by
 ```
@@ -92,7 +98,7 @@ Alternatively, we can also write the workflow with explicit writing by
 ```
 a = align argv
 s = sort { bam = b.bam, outbase = argv.outbase }
-c = call { bam = s.bam, ref = argv.ref, outbase = argv.outbase }
+c = call { bam = s.bam, ref = argv.ref, ref_fai = argv.ref_fai, outbase = argv.outbase }
 
 { bam = s.bam, bai = s.bai, bcf = c.bcf }
 ```
@@ -103,3 +109,21 @@ mutation = import "mutation.wf"
 ```
 
 Documentation for the workflow can be generated using the documentation of the tasks.
+
+### Partial function application
+
+When a function is applied to a record that does not have the full set of attributes,
+another function is returned.
+This function can then be applied to another record.
+```
+align = import "align.sh"
+align_hg38 = align {
+  ref = "hg38.fa",
+  ref_ann = "hg38.fa.ann",
+  ref_bwt = "hg38.fa.bwt",
+  ref_pac = "hg38.fa.pac",
+  ref_sa = "hg38.fa.sa"
+}
+
+align_hg38 { fastq1 = "sample1.r1.fq", fastq2 = "sample.r2.fq" }
+```
