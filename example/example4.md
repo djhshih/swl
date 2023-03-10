@@ -97,7 +97,7 @@ Attributes in the input `argv` record may be qualified to resolve ambiguity:
 Alternatively, we can also write the workflow with explicit passing of arguments by
 ```
 a = align argv
-s = sort { bam = b.bam, outbase = argv.outbase }
+s = sort { bam = a.bam, outbase = argv.outbase }
 c = call { bam = s.bam, ref = argv.ref, ref_fai = argv.ref_fai, outbase = argv.outbase }
 
 { bam = s.bam, bai = s.bai, bcf = c.bcf }
