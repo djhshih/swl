@@ -70,13 +70,16 @@ align |> sort |> call
 ```
 which is syntactic sugar for
 ```
-a = align argv
-s = sort ( argv & a )
-c = call ( argv & a & s )
-a & s & c
+\argv ->
+    a = align argv
+    s = sort ( argv & a )
+    c = call ( argv & a & s )
+    a & s & c
 ```
-where `argv` is a record of the workflow input. Comparing this two blocks of code, we also note that
+where `argv` is a record of the workflow input, and `\argv -> block` is a function.
+The result of a block of code is simply given by the final line.
 
+Comparing this two blocks of code, we also note that
 - Each task is separated from its input record by a space.
 - Records are constructed using `{ }`.
 - The first task is run with the workflow input `argv`, producing a record that is then given to subsequent tasks.
@@ -96,11 +99,12 @@ Attributes in the input `argv` record may be qualified to resolve ambiguity:
 
 Alternatively, we can also write the workflow with explicit passing of arguments by
 ```
-a = align argv
-s = sort { bam = a.bam, outbase = argv.outbase }
-c = call { bam = s.bam, ref = argv.ref, ref_fai = argv.ref_fai, outbase = argv.outbase }
+\argv ->
+    a = align argv
+    s = sort { bam = a.bam, outbase = argv.outbase }
+    c = call { bam = s.bam, ref = argv.ref, ref_fai = argv.ref_fai, outbase = argv.outbase }
 
-{ bam = s.bam, bai = s.bai, bcf = c.bcf }
+    { bam = s.bam, bai = s.bai, bcf = c.bcf }
 ```
 
 A workflow can be imported into another workflow similarly as above:
@@ -117,12 +121,13 @@ another function is returned.
 This function can then be applied to another record.
 ```
 align = import "align.sh"
+
 align_hg38 = align {
   ref = "hg38.fa",
   ref_ann = "hg38.fa.ann",
   ref_bwt = "hg38.fa.bwt",
   ref_pac = "hg38.fa.pac",
-  ref_sa = "hg38.fa.sa"
+  ref_sa = "hg38.fa.sa",
 }
 
 align_hg38 { fastq1 = "sample1.r1.fq", fastq2 = "sample.r2.fq" }
