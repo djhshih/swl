@@ -94,17 +94,17 @@ The record on the right is always right (i.e. it takes precedence when both reco
 
 Attributes in the input `argv` record may be qualified to resolve ambiguity:
 ```
-{ align = { fastq1 = "1.fq", fastq2 = "2.fq" } }
+{ align: { fastq1: "1.fq", fastq2: "2.fq" } }
 ```
 
 Alternatively, we can also write the workflow with explicit passing of arguments by
 ```
 \argv ->
     a = align argv
-    s = sort { bam = a.bam, outbase = argv.outbase }
-    c = call { bam = s.bam, ref = argv.ref, ref_fai = argv.ref_fai, outbase = argv.outbase }
+    s = sort { bam: a.bam, outbase: argv.outbase }
+    c = call { bam: s.bam, ref: argv.ref, ref_fai: argv.ref_fai, outbase: argv.outbase }
 
-    { bam = s.bam, bai = s.bai, bcf = c.bcf }
+    { bam: s.bam, bai: s.bai, bcf: c.bcf }
 ```
 
 A workflow can be imported into another workflow similarly as above:
@@ -123,12 +123,12 @@ This function can then be applied to another record.
 align = import "align.sh"
 
 align_hg38 = align {
-  ref = "hg38.fa",
-  ref_ann = "hg38.fa.ann",
-  ref_bwt = "hg38.fa.bwt",
-  ref_pac = "hg38.fa.pac",
-  ref_sa = "hg38.fa.sa",
+  ref: "hg38.fa",
+  ref_ann: "hg38.fa.ann",
+  ref_bwt: "hg38.fa.bwt",
+  ref_pac: "hg38.fa.pac",
+  ref_sa: "hg38.fa.sa",
 }
 
-align_hg38 { fastq1 = "sample1.r1.fq", fastq2 = "sample.r2.fq" }
+align_hg38 { fastq1: "sample1.r1.fq", fastq2: "sample.r2.fq" }
 ```
