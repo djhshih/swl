@@ -1,0 +1,9 @@
+align = import "align.sh"
+sort  = import "sort.sh"
+call  = import "call.sh"
+
+\argv ->
+    a = align argv
+    s = sort ( argv & a )
+    c = call ( argv & a & s )
+    a & s & c
