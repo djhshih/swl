@@ -12,8 +12,10 @@ class TokenType(Enum):
     lbrace = 9
     rbrace = 10
     function = 11
-    arrow = 12
-    comment = 14
+    amp = 12
+    dot = 13
+    arrow = 14
+    pipe = 15
 
 class Token:
     def __init__(self, ttype, value=None):
@@ -55,13 +57,12 @@ class Lexer:
                 return self.__next__()
 
             if s1 == '#':
-                # advance index past the end of line
-                end = self.s.find('\n', self.i)
-                if end == -1:
-                    self.i = len(self.s)
-                else:
-                    self.i = end + 1
-                return Token(TokenType.comment)
+                # ignore everything until end of line
+                self._find(self.i, '\n')
+                return self.__next__()
+
+            if s1 == '&':
+                return Token(TokenType.amp)
             
             if s1 == '(':
                 return Token(TokenType.lparen)
@@ -80,6 +81,9 @@ class Lexer:
 
             if s1 == ',':
                 return Token(TokenType.comma)
+
+            if s1 == '.':
+                return Token(TokenType.dot)
 
             if s1 == '\\':
                 return Token(TokenType.function)
@@ -107,6 +111,9 @@ class Lexer:
 
                 if s2 == '->':
                     return Token(TokenType.arrow)
+
+                if s2 == '|>':
+                    return Token(TokenType.pipe)
                 
                 # at this point, no 2-character match was found
                 # move the index back to the previous state
@@ -121,8 +128,23 @@ class Lexer:
         else:
             raise StopIteration
 
+
+    def _find(self, start, r):
+        '''Advance until substring r is found and return token,
+           returning exception if r is not found.'''
+        end = self.s.find(r, start)
+        if end == -1:
+            # advance index past the end of file
+            self.i = len(self.s)
+            return self.s[start:]
+        else:
+            # advance index past the matching substring
+            self.i = end + 1
+            return self.s[start:end]
+
     def _match(self, start, r):
-        '''Advance until substring r is found and return token.'''
+        '''Advance until substring r is found and return token,
+           returning exception if r is not found.'''
         end = self.s.find(r, start)
         if end == -1:
             raise Exception('Unexpected EOF when searching for "{}"'.format(r))
@@ -161,6 +183,34 @@ class TestLexer(ut.TestCase):
            [Token(TokenType.id, 'name1234'),
             Token(TokenType.equal),
             Token(TokenType.str, 'James'),
+            Token(TokenType.eof)]
+        )
+
+    def test_comment(self):
+        lexer = Lexer('name  # ignored comment')
+        self.assertEqual(
+           [x for x in lexer],
+           [Token(TokenType.id, 'name'),
+            Token(TokenType.eof)]
+        )
+
+    def test_record(self):
+        lexer = Lexer('{ align: { fastq1: "1.fq", fastq2: "2.fq" } }')
+        self.assertEqual(
+           [x for x in lexer],
+           [Token(TokenType.lbrace),
+            Token(TokenType.id, 'align'),
+            Token(TokenType.colon),
+            Token(TokenType.lbrace),
+            Token(TokenType.id, 'fastq1'),
+            Token(TokenType.colon),
+            Token(TokenType.str, '1.fq'),
+            Token(TokenType.comma),
+            Token(TokenType.id, 'fastq2'),
+            Token(TokenType.colon),
+            Token(TokenType.str, '2.fq'),
+            Token(TokenType.rbrace),
+            Token(TokenType.rbrace),
             Token(TokenType.eof)]
         )
 
