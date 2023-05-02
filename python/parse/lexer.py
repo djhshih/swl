@@ -100,19 +100,8 @@ class Lexer:
             if s1.isalpha():
                 # advance index past next character that is not a valid
                 # identifier character
-                end = -1
-                for j in range(self.i, len(self.s)):
-                    sj = self.s[j]
-                    if not (sj.isalnum() or sj == '_'):
-                        end = j
-                        break
-                start = self.i - 1
-                if end == -1:
-                    self.i = len(self.s)
-                    return Token(TokenType.identifier, self.s[start:])
-                else:
-                    self.i = end
-                    return Token(TokenType.identifier, self.s[start:end])
+                value = self._until(self.i - 1, lambda x: not (x.isalnum() or x == '_'))
+                return Token(TokenType.identifier, value)
 
             # tokens with 2 characters
             if self.n_remaining() >= 2:
@@ -135,4 +124,20 @@ class Lexer:
 
         else:
             raise StopIteration
+
+    def _until(self, start, predicate):
+        '''Advance until predicate is true and return token'''
+        end = -1
+        for j in range(start + 1, len(self.s)):
+            sj = self.s[j]
+            if predicate(sj):
+                end = j
+                break
+        if end == -1:
+            self.i = len(self.s)
+            return self.s[start:]
+        else:
+            self.i = end
+            return self.s[start:end]
+        
 
