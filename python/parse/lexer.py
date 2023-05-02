@@ -2,8 +2,8 @@ from enum import Enum
 
 class TokenType(Enum):
     eof = 1
-    identifier = 2
-    string = 3
+    id = 2
+    str = 3
     equal = 4
     colon = 5
     comma = 6
@@ -20,12 +20,14 @@ class Token:
         self.type = ttype
         self.value = value
     def __repr__(self):
-        if self.type == TokenType.identifier:
+        if self.type == TokenType.id:
             return f'id({self.value})'
-        elif self.type == TokenType.string:
+        elif self.type == TokenType.str:
             return f'"{self.value}"'
         else:
             return f'{self.type.name}'
+    def __eq__(self, other):
+        return self.type == other.type and self.value == other.value
 
 class Lexer:
     '''Iterator over tokens in a string'''
@@ -87,21 +89,15 @@ class Lexer:
 
             # string literal
             if s1 == '"':
-                # advance index past the matching quote
-                end = self.s.find('"', self.i)
-                if end == -1:
-                    raise Exception('Unexpected EOF when searching for matching "')
-                else:
-                    start = self.i
-                    self.i = end + 1
-                    return Token(TokenType.string, self.s[start:end])
+                value = self._match(self.i, '"')
+                return Token(TokenType.str, value)
 
             # identifier
             if s1.isalpha():
                 # advance index past next character that is not a valid
                 # identifier character
-                value = self._until(self.i - 1, lambda x: not (x.isalnum() or x == '_'))
-                return Token(TokenType.identifier, value)
+                value = self._until(lambda x: not (x.isalnum() or x == '_'))
+                return Token(TokenType.id, value)
 
             # tokens with 2 characters
             if self.n_remaining() >= 2:
@@ -125,14 +121,26 @@ class Lexer:
         else:
             raise StopIteration
 
-    def _until(self, start, predicate):
-        '''Advance until predicate is true and return token'''
+    def _match(self, start, r):
+        '''Advance until substring r is found and return token.'''
+        end = self.s.find(r, start)
+        if end == -1:
+            raise Exception('Unexpected EOF when searching for "{}"'.format(r))
+        else:
+            # advance index past the matching substring
+            self.i = end + 1
+            return self.s[start:end]
+
+    def _until(self, predicate):
+        '''Advance until predicate is true and return token,
+           assuming cursor i is at the next position.'''
         end = -1
-        for j in range(start + 1, len(self.s)):
+        for j in range(self.i, len(self.s)):
             sj = self.s[j]
             if predicate(sj):
                 end = j
                 break
+        start = self.i - 1
         if end == -1:
             self.i = len(self.s)
             return self.s[start:]
@@ -140,4 +148,22 @@ class Lexer:
             self.i = end
             return self.s[start:end]
         
+
+
+import unittest as ut
+
+class TestLexer(ut.TestCase):
+    
+    def test_assignment(self):
+        lexer = Lexer('name1234 = "James"')
+        self.assertEqual(
+           [x for x in lexer],
+           [Token(TokenType.id, 'name1234'),
+            Token(TokenType.equal),
+            Token(TokenType.str, 'James'),
+            Token(TokenType.eof)]
+        )
+
+if __name__ == '__main__':
+    ut.main()
 
