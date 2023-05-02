@@ -163,8 +163,8 @@ class Lexer:
 
 
     def _jump(self, start, r):
-        '''Advance until substring r is found and return token not including r,
-           returning exception if r is not found.'''
+        '''Advance until substring r is found and return token not including r.
+           Cursor position will be at r.'''
         end = self.s.find(r, start)
         if end == -1:
             # advance index past the end of file
@@ -177,7 +177,8 @@ class Lexer:
 
     def _match(self, start, r):
         '''Advance until substring r is found and return token not including r,
-           returning exception if r is not found.'''
+           returning exception if r is not found.
+           Cursor position will be one past r.'''
         end = self.s.find(r, start)
         if end == -1:
             raise Exception('Unexpected EOF when searching for "{}"'.format(r))
