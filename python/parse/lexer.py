@@ -74,7 +74,6 @@ class Lexer:
                 # assess indentation level
                 if self.new_line:
                     ws = self._until(lambda x: x == '\n' or not x.isspace())
-                    print(len(ws))
                     if self.i < len(self.s) and self.s[self.i] == '\n':
                         # entire line is blank: advance and ignore line
                         self.i += 1
