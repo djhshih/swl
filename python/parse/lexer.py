@@ -7,16 +7,21 @@ class TokenType(Enum):
     equal = 4
     colon = 5
     comma = 6
-    lparen = 7
-    rparen = 8
-    lbrace = 9
-    rbrace = 10
-    function = 11
-    amp = 12
-    dot = 13
-    arrow = 14
-    pipe = 15
+    dot = 7
+    amp = 8
+    lparen = 9
+    rparen = 10
+    lbracket = 11
+    rbracket = 12
+    lbrace = 13
+    rbrace = 14
+    function = 15
+    arrow = 16
+    pipe = 17
+    indent = 18
+    eol = 19
 
+# TODO add line and column number
 class Token:
     def __init__(self, ttype, value=None):
         self.type = ttype
@@ -24,6 +29,8 @@ class Token:
     def __repr__(self):
         if self.type == TokenType.id:
             return f'id({self.value})'
+        elif self.type == TokenType.indent:
+            return f'indent({self.value})'
         elif self.type == TokenType.str:
             return f'"{self.value}"'
         else:
@@ -38,6 +45,7 @@ class Lexer:
         '''Initialize lexer with string s'''
         self.s = s
         self.i = i
+        self.new_line = True
 
     def __iter__(self):
         return self
@@ -52,13 +60,38 @@ class Lexer:
             # self.i now refers to the next character
             self.i += 1
 
-            # TODO parse whitespace for indent
             if s1.isspace():
+
+                # after new line character, set new line flag
+                if s1 == '\n':
+                    if self.new_line:
+                        # ignore blank line
+                        return self.__next__()
+                    else:
+                        self.new_line = True
+                        return Token(TokenType.eol)
+
+                # assess indentation level
+                if self.new_line:
+                    ws = self._until(lambda x: x == '\n' or not x.isspace())
+                    print(len(ws))
+                    if self.i < len(self.s) and self.s[self.i] == '\n':
+                        # entire line is blank: advance and ignore line
+                        self.i += 1
+                        return self.__next__()
+                    else:
+                        # tab is equivalent to 4 spaces
+                        ws = ws.replace('\t', '    ')
+                        return Token(TokenType.indent, len(ws))
+
+                # ignore whitespace in other contexts
                 return self.__next__()
+
+            self.new_line = False
 
             if s1 == '#':
                 # ignore everything until end of line
-                self._find(self.i, '\n')
+                comment = self._jump(self.i, '\n')
                 return self.__next__()
 
             if s1 == '&':
@@ -129,8 +162,8 @@ class Lexer:
             raise StopIteration
 
 
-    def _find(self, start, r):
-        '''Advance until substring r is found and return token,
+    def _jump(self, start, r):
+        '''Advance until substring r is found and return token not including r,
            returning exception if r is not found.'''
         end = self.s.find(r, start)
         if end == -1:
@@ -138,12 +171,12 @@ class Lexer:
             self.i = len(self.s)
             return self.s[start:]
         else:
-            # advance index past the matching substring
-            self.i = end + 1
+            # advance index to the matching substring
+            self.i = end
             return self.s[start:end]
 
     def _match(self, start, r):
-        '''Advance until substring r is found and return token,
+        '''Advance until substring r is found and return token not including r,
            returning exception if r is not found.'''
         end = self.s.find(r, start)
         if end == -1:
@@ -155,7 +188,8 @@ class Lexer:
 
     def _until(self, predicate):
         '''Advance until predicate is true and return token,
-           assuming cursor i is at the next position.'''
+           assuming cursor i is at the next position.
+           Cursor will be at the position where the predicate is true.'''
         end = -1
         for j in range(self.i, len(self.s)):
             sj = self.s[j]
