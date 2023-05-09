@@ -1,25 +1,29 @@
 from enum import Enum
 
-class TokenType(Enum):
-    eof = 1
-    id = 2
-    str = 3
-    equal = 4
-    colon = 5
-    comma = 6
-    dot = 7
-    amp = 8
-    lparen = 9
-    rparen = 10
-    lbracket = 11
-    rbracket = 12
-    lbrace = 13
-    rbrace = 14
-    function = 15
-    arrow = 16
-    pipe = 17
-    indent = 18
-    eol = 19
+TokenType = Enum('TokenType',
+    [
+        'id',
+        'str',
+        'num',
+        'equal',
+        'colon',
+        'comma',
+        'dot',
+        'amp',
+        'lparen',
+        'rparen',
+        'lbracket',
+        'rbracket',
+        'lbrace',
+        'rbrace',
+        'bslash',
+        'arrow',
+        'pipe',
+        'indent',
+        'eol',
+        'eof'
+    ]
+)
 
 # TODO add line and column number
 class Token:
@@ -118,7 +122,7 @@ class Lexer:
                 return Token(TokenType.dot)
 
             if s1 == '\\':
-                return Token(TokenType.function)
+                return Token(TokenType.bslash)
 
             if s1 == '=':
                 return Token(TokenType.equal)
