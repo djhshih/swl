@@ -73,9 +73,6 @@ class Parser:
     # to inner-most parser (highest precedence)
     # pipe, update, apply, get
 
-    def parse_simple_expr(self):
-        return parse_pipe_expr()
-
     def parse_pipe_expr():
         # TODO
         return parse_update_expr()
@@ -91,4 +88,7 @@ class Parser:
     def parse_get_expr():
         # TODO
         return ast.ExprN()
+
+    parse_simple_expr = parse_pipe_expr
+
 
