@@ -1,4 +1,4 @@
-import ast
+import node
 import lexer as lex
 import queue
 
@@ -87,7 +87,7 @@ class Parser:
 
     def parse_get_expr():
         # TODO
-        return ast.ExprN()
+        return node.ExprN()
 
     parse_simple_expr = parse_pipe_expr
 
