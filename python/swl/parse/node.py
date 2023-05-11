@@ -91,9 +91,9 @@ class Update(Expr):
 
 class Function(Expr):
     type = NodeType.fun
-    def __init__(self, param, block):
+    def __init__(self, param, body):
         self.param = param
-        self.body = block
+        self.body = body
 
 class Apply(Expr):
     type = NodeType.apply

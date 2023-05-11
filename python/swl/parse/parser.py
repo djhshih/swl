@@ -140,8 +140,11 @@ class Parser:
         self._eat()  # eat backslash
         param = self._parse_id()
         self._expect(TokenType.arrow)
-        block = self._parse_block(True)
-        return node.Function(iden, block)
+        if self._at().type == TokenType.bstart:
+            body = self._parse_block(True)
+        else:
+            body = self._parse_expr()
+        return node.Function(param, body)
 
     def _parse_binding(self) -> node.Expr:
         iden = self._parse_id()
