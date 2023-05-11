@@ -61,7 +61,8 @@ class Lexer:
     def __iter__(self):
         return self
 
-    def n_remaining(self) -> int:
+    def size(self) -> int:
+        '''Remaining size of input string'''
         return len(self.s) - self.i
 
     def __next__(self):
@@ -160,6 +161,10 @@ class Lexer:
             if s1 == '=':
                 return Token(TokenType.equal)
 
+            if s1 == '|':
+                self.ignore_eol = True
+                return Token(TokenType.pipe)
+
             # string literal
             if s1 == '"':
                 value = self._match(self.i, '"')
@@ -173,7 +178,7 @@ class Lexer:
                 return Token(TokenType.id, value)
 
             # tokens with 2 characters
-            if self.n_remaining() >= 2:
+            if self.size() >= 2:
                 # self.i is already at the next position
                 s2 = self.s[(self.i-1):(self.i + 1)]
                 # preemptively increment the index
@@ -183,10 +188,6 @@ class Lexer:
                     self.ignore_eol = True
                     return Token(TokenType.arrow)
 
-                if s2 == '|>':
-                    self.ignore_eol = True
-                    return Token(TokenType.pipe)
-                
                 # at this point, no 2-character match was found
                 # move the index back to the previous state
                 self.i -= 1
