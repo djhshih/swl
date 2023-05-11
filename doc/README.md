@@ -47,7 +47,7 @@ samtools index ${outbase}.bam ${outbase}.bai
 # run image  = djhshih/seqkit:0.1
 
 bcftools mpileup -Ou -f ${ref} ${bam} | 
-	bcftools call -mv -Ob -o ${bcf}
+    bcftools call -mv -Ob -o ${bcf}
 ```
 
 Tasks output records.
