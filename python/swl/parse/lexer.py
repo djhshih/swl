@@ -61,7 +61,7 @@ class Lexer:
     def __iter__(self):
         return self
 
-    def n_remaining(self):
+    def n_remaining(self) -> int:
         return len(self.s) - self.i
 
     def __next__(self):
@@ -209,8 +209,8 @@ class Lexer:
             raise StopIteration
 
 
-    def _jump(self, start, r):
-        '''Advance until substring r is found and return token not including r.
+    def _jump(self, start: int, r: str) -> str:
+        '''Advance until substring r is found and return substring not including r.
            Cursor position will be at r.'''
         end = self.s.find(r, start)
         if end == -1:
@@ -222,8 +222,8 @@ class Lexer:
             self.i = end
             return self.s[start:end]
 
-    def _match(self, start, r):
-        '''Advance until substring r is found and return token not including r,
+    def _match(self, start: int, r: str) -> str:
+        '''Advance until substring r is found and return substring not including r,
            returning exception if r is not found.
            Cursor position will be one past r.'''
         end = self.s.find(r, start)
@@ -234,8 +234,8 @@ class Lexer:
             self.i = end + 1
             return self.s[start:end]
 
-    def _until(self, predicate):
-        '''Advance until predicate is true and return token,
+    def _until(self, predicate) -> str:
+        '''Advance until predicate is true and return substring,
            assuming cursor i is at the next position.
            Cursor will be at the position where the predicate is true.'''
         end = -1

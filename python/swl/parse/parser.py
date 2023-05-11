@@ -1,21 +1,21 @@
 from swl.parse import node
 from swl.parse import lexer as lex
-from swl.parse.lexer import TokenType
+from swl.parse.lexer import Token, TokenType
 
 class Parser:
 
-    def parse(self, s):
+    def parse(self, s: str) -> node.Expr:
         '''Parse string `s` into an abstract syntax tree.'''
         self.lexer = lex.Lexer(s)
         self.queue = [next(self.lexer)]
-        return self.parse_block()
+        return self._parse_block()
 
-    def eof(self):
+    def eof(self) -> bool:
         '''Return whether parser is at end of file.'''
         if not self.queue: return True
         return self.queue[0].type == TokenType.eof
 
-    def at(self, i = 0):
+    def _at(self, i = 0) -> Token:
         '''Peek token at position `i`.'''
         if i < len(self.queue):
             # return extracted token
@@ -27,7 +27,7 @@ class Parser:
                 self.queue.append(token) 
             return token
     
-    def eat(self):
+    def _eat(self) -> Token:
         '''Advance and return next token.'''
         if self.queue:
             # eat previously extracted token if available
@@ -45,15 +45,15 @@ class Parser:
 
         return token
 
-    def _optional(self, token_type):
+    def _optional(self, token_type: TokenType) -> Token:
         '''Eat token if it has the expected type'''
-        if self.at().type == token_type:
-            return self.eat()
+        if self._at().type == token_type:
+            return self._eat()
         return None
 
-    def _expect(self, token_type):
+    def _expect(self, token_type: TokenType) -> Token:
         '''Eat a token and check that it has the expected type'''
-        token = self.eat()
+        token = self._eat()
         if not token:
             raise ValueError(f'Parsing failed due to undefined token')
         if token.type != token_type:
@@ -62,127 +62,127 @@ class Parser:
             )
         return token
 
-    def _until(self, token_type):
+    def _until(self, token_type: TokenType) -> bool:
         '''Return whether current token is of type `token_type`.'''
         return not self.eof() and self.queue[0].type != token_type
 
-    def _find(self, token_type):
+    def _find(self, token_type: TokenType) -> int:
         '''Find and return index of token with type `token_type`,
            but do not advance.'''
         i = 0
         while not self.eof():
-            token = self.at(i)
+            token = self._at(i)
             if token.type == token_type:
                 return i
             i += 1
         return -1
 
-    def parse_block(self):
+    def _parse_block(self):
         exprs = []
         # TODO or check for dedent
         while True:
-            exprs.append(self.parse_expr())
+            exprs.append(self._parse_expr())
             if self.eof(): break
             self._expect(TokenType.eol)
         # TODO eat the dedent
         return node.Block(exprs)
 
-    def parse_expr(self):
+    def _parse_expr(self):
         t = self.queue[0].type
 
         if t == TokenType.bslash:
-            return self.parse_function()
+            return self._parse_function()
 
-        elif t == TokenType.id and self.at(1).type == TokenType.equal:
-            return self.parse_binding()
+        elif t == TokenType.id and self._at(1).type == TokenType.equal:
+            return self._parse_binding()
 
         else:
-            return self.parse_simple_expr()
+            return self._parse_simple_expr()
 
     # order of precedence for operators
     # from outer-most parser (lowest precedence)
     # to inner-most parser (highest precedence)
     # pipe, update, apply, get
 
-    def parse_id(self):
+    def _parse_id(self):
         iden = self._expect(TokenType.id)
         return node.Identifier(iden.value)
 
-    def parse_record(self):
-        self.eat()  # eat open brace
+    def _parse_record(self):
+        self._eat()  # eat open brace
         d = {}
         while self._until(TokenType.rbrace):
-            iden = self.parse_id()
+            iden = self._parse_id()
             self._expect(TokenType.colon)
-            value = self.parse_expr()
+            value = self._parse_expr()
             # comma is required after each key-value pair
             # unless we just parsed the final key-value pair
-            if self.at().type != TokenType.rbrace:
+            if self._at().type != TokenType.rbrace:
                 self._expect(TokenType.comma)
             d[iden.name] = value
         self._expect(TokenType.rbrace)
         return node.Record(d)
 
-    def parse_group(self):
-        self.eat()  # eat open parenthesis
-        value = self.parse_expr()
+    def _parse_group(self):
+        self._eat()  # eat open parenthesis
+        value = self._parse_expr()
         self._expect(TokenType.rparen)
         return value
 
-    def parse_function(self):
-        self.eat()  # eat backslash
-        param = self.parse_id()
+    def _parse_function(self):
+        self._eat()  # eat backslash
+        param = self._parse_id()
         self._expect(TokenType.arrow)
-        block = self.parse_block()
+        block = self.__parse_block()
         return node.Function(iden, block)
 
-    def parse_binding(self):
-        iden = self.parse_id()
+    def _parse_binding(self):
+        iden = self._parse_id()
         self._expect(TokenType.equal)
-        expr = self.parse_expr()
+        expr = self._parse_expr()
         return node.Binding(iden, expr)
 
-    def parse_pipe_expr(self):
+    def _parse_pipe_expr(self):
         # TODO
-        return self.parse_update_expr()
+        return self._parse_update_expr()
 
-    def parse_update_expr(self):
+    def _parse_update_expr(self):
         # TODO
-        return self.parse_apply_expr()
+        return self._parse_apply_expr()
 
-    def parse_apply_expr(self):
+    def _parse_apply_expr(self):
         # TODO
-        return self.parse_get_expr()
+        return self._parse_get_expr()
 
-    def parse_get_expr(self):
+    def _parse_get_expr(self):
         # TODO
-        return self.parse_term()
+        return self._parse_term()
 
-    def parse_term(self):
+    def _parse_term(self):
         t = self.queue[0].type
 
         if t == TokenType.str:
-            return node.String(self.eat().value)
+            return node.String(self._eat().value)
 
         elif t == TokenType.num:
-            value = self.eat().value
+            value = self._eat().value
             if value.find('.') > 0:
                 return node.Number(float(value))
             else:
                 return node.Number(int(value))
 
         elif t == TokenType.id:
-            return self.parse_id()
+            return self._parse_id()
 
         elif t == TokenType.lbrace:
-            return self.parse_record()
+            return self._parse_record()
 
         elif t == TokenType.lparen:
-            return self.parse_group()
+            return self._parse_group()
 
         else:
             raise ValueError(f'Unrecognized token: {self.queue[0]}')
 
-    parse_simple_expr = parse_pipe_expr
+    _parse_simple_expr = _parse_pipe_expr
 
 
