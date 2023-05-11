@@ -45,7 +45,13 @@ class Parser:
 
         return token
 
-    def expect(self, token_type):
+    def _optional(self, token_type):
+        '''Eat token if it has the expected type'''
+        if self.at().type == token_type:
+            return self.eat()
+        return None
+
+    def _expect(self, token_type):
         '''Eat a token and check that it has the expected type'''
         token = self.eat()
         if not token:
@@ -56,11 +62,11 @@ class Parser:
             )
         return token
 
-    def until(self, token_type):
+    def _until(self, token_type):
         '''Return whether current token is of type `token_type`.'''
-        return not self.eof() and self.qu.type != token_type
+        return not self.eof() and self.queue[0].type != token_type
 
-    def find(self, token_type):
+    def _find(self, token_type):
         '''Find and return index of token with type `token_type`,
            but do not advance.'''
         i = 0
@@ -77,7 +83,7 @@ class Parser:
         while True:
             exprs.append(self.parse_expr())
             if self.eof(): break
-            self.expect(TokenType.eol)
+            self._expect(TokenType.eol)
         # TODO eat the dedent
         return node.Block(exprs)
 
@@ -99,30 +105,40 @@ class Parser:
     # pipe, update, apply, get
 
     def parse_id(self):
-        iden = self.expect(TokenType.id)
+        iden = self._expect(TokenType.id)
         return node.Identifier(iden.value)
 
     def parse_record(self):
-        # TODO
-        return node.Record({})
+        self.eat()  # eat open brace
+        d = {}
+        while self._until(TokenType.rbrace):
+            iden = self.parse_id()
+            self._expect(TokenType.colon)
+            value = self.parse_expr()
+            # comma is required after each key-value pair
+            # unless we just parsed the final key-value pair
+            if self.at().type != TokenType.rbrace:
+                self._expect(TokenType.comma)
+            d[iden.name] = value
+        self._expect(TokenType.rbrace)
+        return node.Record(d)
 
     def parse_group(self):
         self.eat()  # eat open parenthesis
         value = self.parse_expr()
-        self.expect(TokenType.rparen)
+        self._expect(TokenType.rparen)
         return value
 
     def parse_function(self):
         self.eat()  # eat backslash
         param = self.parse_id()
-        self.expect(TokenType.arrow)
+        self._expect(TokenType.arrow)
         block = self.parse_block()
         return node.Function(iden, block)
 
     def parse_binding(self):
-        print('queue:', self.queue)
         iden = self.parse_id()
-        self.expect(TokenType.equal)
+        self._expect(TokenType.equal)
         expr = self.parse_expr()
         return node.Binding(iden, expr)
 

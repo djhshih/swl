@@ -30,7 +30,9 @@ class Expr:
         elif self.type == NodeType.bind:
             return f'(= {self.id} {self.value})'
         elif self.type == NodeType.rec:
-            return ','.join([f'{k}: {v}' for k, v in self.value])
+            return '{' + ', '.join(
+                    [f'{k}: {v}' for k, v in self.value.items()]
+                ) + '}'
         elif self.type == NodeType.get:
             return f'(. {self.rec} {self.member})'
         elif self.type == NodeType.update:
