@@ -77,14 +77,20 @@ class Parser:
             i += 1
         return -1
 
-    def _parse_block(self):
+    def _parse_block(self, inner=False):
+        '''Parse a block of code, which can be outer-level or inner-level.'''
         exprs = []
-        # TODO or check for dedent
+        if inner:
+            # check for block start token
+            self._expect(TokenType.bstart)
         while True:
             exprs.append(self._parse_expr())
             if self.eof(): break
+            # eol right before eof is optional
             self._expect(TokenType.eol)
-        # TODO eat the dedent
+        if inner:
+            # check for block end token
+            self._exepct(TokenType.bend)
         return node.Block(exprs)
 
     def _parse_expr(self):
@@ -133,7 +139,7 @@ class Parser:
         self._eat()  # eat backslash
         param = self._parse_id()
         self._expect(TokenType.arrow)
-        block = self.__parse_block()
+        block = self._parse_block(True)
         return node.Function(iden, block)
 
     def _parse_binding(self):
