@@ -165,7 +165,7 @@ class Parser:
             return self.parse_group()
 
         else:
-            raise ValueError(f'Unexpected token: {self.queue[0]}')
+            raise ValueError(f'Unrecognized token: {self.queue[0]}')
 
     parse_simple_expr = parse_pipe_expr
 
