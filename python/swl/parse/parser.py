@@ -77,7 +77,7 @@ class Parser:
             i += 1
         return -1
 
-    def _parse_block(self, inner=False):
+    def _parse_block(self, inner=False) -> node.Expr:
         '''Parse a block of code, which can be outer-level or inner-level.'''
         exprs = []
         if inner:
@@ -93,7 +93,7 @@ class Parser:
             self._exepct(TokenType.bend)
         return node.Block(exprs)
 
-    def _parse_expr(self):
+    def _parse_expr(self) -> node.Expr:
         t = self.queue[0].type
 
         if t == TokenType.bslash:
@@ -110,11 +110,11 @@ class Parser:
     # to inner-most parser (highest precedence)
     # pipe, update, apply, get
 
-    def _parse_id(self):
+    def _parse_id(self) -> node.Expr:
         iden = self._expect(TokenType.id)
         return node.Identifier(iden.value)
 
-    def _parse_record(self):
+    def _parse_record(self) -> node.Expr:
         self._eat()  # eat open brace
         d = {}
         while self._until(TokenType.rbrace):
@@ -129,42 +129,42 @@ class Parser:
         self._expect(TokenType.rbrace)
         return node.Record(d)
 
-    def _parse_group(self):
+    def _parse_group(self) -> node.Expr:
         self._eat()  # eat open parenthesis
         value = self._parse_expr()
         self._expect(TokenType.rparen)
         return value
 
-    def _parse_function(self):
+    def _parse_function(self) -> node.Expr:
         self._eat()  # eat backslash
         param = self._parse_id()
         self._expect(TokenType.arrow)
         block = self._parse_block(True)
         return node.Function(iden, block)
 
-    def _parse_binding(self):
+    def _parse_binding(self) -> node.Expr:
         iden = self._parse_id()
         self._expect(TokenType.equal)
         expr = self._parse_expr()
         return node.Binding(iden, expr)
 
-    def _parse_pipe_expr(self):
+    def _parse_pipe_expr(self) -> node.Expr:
         # TODO
         return self._parse_update_expr()
 
-    def _parse_update_expr(self):
+    def _parse_update_expr(self) -> node.Expr:
         # TODO
         return self._parse_apply_expr()
 
-    def _parse_apply_expr(self):
+    def _parse_apply_expr(self) -> node.Expr:
         # TODO
         return self._parse_get_expr()
 
-    def _parse_get_expr(self):
+    def _parse_get_expr(self) -> node.Expr:
         # TODO
         return self._parse_term()
 
-    def _parse_term(self):
+    def _parse_term(self) -> node.Expr:
         t = self.queue[0].type
 
         if t == TokenType.str:
