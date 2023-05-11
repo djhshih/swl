@@ -23,6 +23,7 @@ bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.b
 `sort.sh`
 ```{bash}
 #? Sort alignment by coordinates and index
+#
 # in  bam      file                    | input bam
 # in  outbase  str                     | output base name
 # out bam      file  =  ${outbase}.bam | output alignment

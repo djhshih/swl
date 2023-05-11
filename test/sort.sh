@@ -1,4 +1,5 @@
 #? Sort alignment by coordinates and index
+#
 # in  bam      file                    | input bam
 # in  outbase  str                     | output base name
 # out bam      file  =  ${outbase}.bam | output alignment
