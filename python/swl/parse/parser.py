@@ -1,4 +1,5 @@
 from swl.parse import node
+from swl.parse.node import NodeType
 from swl.parse import lexer as lex
 from swl.parse.lexer import Token, TokenType
 
@@ -149,20 +150,77 @@ class Parser:
         return node.Binding(iden, expr)
 
     def _parse_pipe_expr(self) -> node.Expr:
-        # TODO
-        return self._parse_update_expr()
+        left = self._parse_update_expr()
+
+        # only the below node types can potentially have a function
+        if \
+            left.type != NodeType.fun and \
+            left.type != NodeType.id and \
+            left.type != NodeType.get and \
+            left.type != NodeType.apply and \
+            left.type != NodeType.pipe:
+            return left
+
+        # only allow pipe if next token is a permissible operand
+        # (anything that can evaluate to a function)
+        # (a record may have a member function)
+        while self._at().type == TokenType.pipe:
+            self._eat()  # eat pipe token
+            right = self._parse_update_expr()
+            left = node.Pipe(left, right)
+
+        return left
 
     def _parse_update_expr(self) -> node.Expr:
-        # TODO
-        return self._parse_apply_expr()
+        left = self._parse_apply_expr()
+
+        # only record or identifier can use update notation
+        if left.type != NodeType.rec and left.type != NodeType.id:
+            return left
+
+        while self._at().type == TokenType.update:
+            self._eat()  # eat update token
+            right = self.parse_apply_expr()
+            left = node.Update(left, right)
+
+        return left
 
     def _parse_apply_expr(self) -> node.Expr:
-        # TODO
-        return self._parse_get_expr()
+        left = self._parse_get_expr()
+
+        # only the below node types can potentially have a callable function
+        if \
+            left.type != NodeType.fun and \
+            left.type != NodeType.id and \
+            left.type != NodeType.get and \
+            left.type != NodeType.apply and \
+            left.type != NodeType.pipe:
+            return left
+
+        # only apply function if next token is a permissible operand
+        # (anything that can evaluate to a record)
+        while \
+            self._at().type == TokenType.id or \
+            self._at().type == TokenType.lbrace or \
+            self._at().type == TokenType.lparen:
+            right = self._parse_get_expr()
+            left = node.Apply(left, right)
+
+        return left
 
     def _parse_get_expr(self) -> node.Expr:
-        # TODO
-        return self._parse_term()
+        obj = self._parse_term()
+
+        # only record or identifier can use dot notation
+        if obj.type != NodeType.rec and obj.type != NodeType.id:
+            return obj
+
+        while self._at().type == TokenType.dot:
+            self._eat()  # eat dot token
+            member = self._parse_id()
+            obj = node.Get(obj, member)
+
+        return obj
 
     def _parse_term(self) -> node.Expr:
         t = self.queue[0].type

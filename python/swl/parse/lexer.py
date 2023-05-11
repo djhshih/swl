@@ -10,7 +10,7 @@ TokenType = Enum('TokenType',
         'colon',
         'comma',
         'dot',
-        'amp',
+        'update',
         'lparen',
         'rparen',
         'lbracket',
@@ -130,7 +130,7 @@ class Lexer:
             self.ignore_eol = False
 
             if s1 == '&':
-                return Token(TokenType.amp)
+                return Token(TokenType.update)
             
             if s1 == '(':
                 return Token(TokenType.lparen)
@@ -291,7 +291,7 @@ class TestLexer(ut.TestCase):
             Token(TokenType.id, 'x'),
             Token(TokenType.eol),
             Token(TokenType.id, 'x'),
-            Token(TokenType.amp),
+            Token(TokenType.update),
             Token(TokenType.id, 'y'),
             Token(TokenType.bend),
             Token(TokenType.eof)]

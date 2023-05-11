@@ -42,7 +42,7 @@ class Expr:
         elif self.type == NodeType.apply:
             return f'($ {self.fun} {self.arg})'
         elif self.type == NodeType.pipe:
-            return f'(|> {self.left} {self.right})'
+            return f'(| {self.left} {self.right})'
         else:
             return f'{self.type}'
 
