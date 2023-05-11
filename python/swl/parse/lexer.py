@@ -1,4 +1,5 @@
 from enum import Enum
+import queue
 
 TokenType = Enum('TokenType',
     [
@@ -19,7 +20,8 @@ TokenType = Enum('TokenType',
         'bslash',
         'arrow',
         'pipe',
-        'indent',
+        'bstart',
+        'bend',
         'eol',
         'eof'
     ]
@@ -33,9 +35,7 @@ class Token:
     def __repr__(self):
         if self.type == TokenType.id:
             return f'id({self.value})'
-        elif self.type == TokenType.indent:
-            return f'indent({self.value})'
-        elif self.type == TokenType.str:
+        elif self.type == TokenType.str or self.type == TokenType.num:
             return f'"{self.value}"'
         else:
             return f'{self.type.name}'
@@ -49,7 +49,14 @@ class Lexer:
         '''Initialize lexer with string s'''
         self.s = s
         self.i = i
+        # indicate whether we are at a new line
         self.new_line = True
+        # whether to ignore the next eol before a non-whitespace character
+        self.ignore_eol = False
+        # stack for keeping track of indentation level
+        self.indent_stack = [0]
+        # extra tokens
+        self.tokens = queue.Queue()
 
     def __iter__(self):
         return self
@@ -59,6 +66,11 @@ class Lexer:
 
     def __next__(self):
         '''Obtain next token'''
+
+        # return queued tokens, if any
+        if not self.tokens.empty():
+            return self.tokens.get()
+
         if self.i < len(self.s):
             s1 = self.s[self.i]
             # self.i now refers to the next character
@@ -73,7 +85,11 @@ class Lexer:
                         return self.__next__()
                     else:
                         self.new_line = True
-                        return Token(TokenType.eol)
+                        if self.ignore_eol:
+                            self.ignore_eol = False
+                            return self.__next__()
+                        else:
+                            return Token(TokenType.eol)
 
                 # assess indentation level
                 if self.new_line:
@@ -84,18 +100,33 @@ class Lexer:
                         return self.__next__()
                     else:
                         # tab is equivalent to 4 spaces
-                        ws = ws.replace('\t', '    ')
-                        return Token(TokenType.indent, len(ws))
+                        indent = len(ws.replace('\t', '    '))
+                        if indent > self.indent_stack[-1]:
+                            # add indent token since indentation level increased
+                            self.indent_stack.append(indent)
+                            return Token(TokenType.bstart)
+                        elif indent < self.indent_stack[-1]:
+                            # add dedent token since indentation level decreased
+                            while indent < self.indent_stack[-1]:
+                                self.indent_stack.pop()
+                                self.tokens.put(TokenType.bend)
+                            return self.tokens.get()
+                        else:
+                            # indentation level remained the same
+                            # advance to next token
+                            return self.__next__()
 
                 # ignore whitespace in other contexts
                 return self.__next__()
-
-            self.new_line = False
 
             if s1 == '#':
                 # ignore everything until end of line
                 comment = self._jump(self.i, '\n')
                 return self.__next__()
+
+            # current character is not whitespace
+            self.new_line = False
+            self.ignore_eol = False
 
             if s1 == '&':
                 return Token(TokenType.amp)
@@ -107,6 +138,7 @@ class Lexer:
                 return Token(TokenType.rparen)
             
             if s1 == '{':
+                self.ignore_eol = True
                 return Token(TokenType.lbrace)
 
             if s1 == '}':
@@ -116,6 +148,7 @@ class Lexer:
                 return Token(TokenType.colon)
 
             if s1 == ',':
+                self.ignore_eol = True
                 return Token(TokenType.comma)
 
             if s1 == '.':
@@ -141,14 +174,17 @@ class Lexer:
 
             # tokens with 2 characters
             if self.n_remaining() >= 2:
-                s2 = self.s[self.i:(self.i + 2)]
+                # self.i is already at the next position
+                s2 = self.s[(self.i-1):(self.i + 1)]
                 # preemptively increment the index
                 self.i += 1
 
                 if s2 == '->':
+                    self.ignore_eol = True
                     return Token(TokenType.arrow)
 
                 if s2 == '|>':
+                    self.ignore_eol = True
                     return Token(TokenType.pipe)
                 
                 # at this point, no 2-character match was found
@@ -158,8 +194,16 @@ class Lexer:
             raise Exception("Unrecognized character: '{}'".format(s1))
 
         elif self.i == len(self.s):
+            # we are at end of file, but we need to tear down before ending
+            # add dedent tokens to bring indentation level to 0
+            while 0 < self.indent_stack[-1]:
+                self.indent_stack.pop()
+                self.tokens.put(Token(TokenType.bend))
+            # add end of file token
+            self.tokens.put(Token(TokenType.eof))
+            # increment so that we do not repeat the tear down
             self.i += 1
-            return Token(TokenType.eof)
+            return self.tokens.get()
 
         else:
             raise StopIteration
@@ -217,8 +261,8 @@ class TestLexer(ut.TestCase):
     def test_assignment(self):
         lexer = Lexer('name1234 = "James"')
         self.assertEqual(
-           [x for x in lexer],
-           [Token(TokenType.id, 'name1234'),
+            [x for x in lexer],
+            [Token(TokenType.id, 'name1234'),
             Token(TokenType.equal),
             Token(TokenType.str, 'James'),
             Token(TokenType.eof)]
@@ -227,16 +271,36 @@ class TestLexer(ut.TestCase):
     def test_comment(self):
         lexer = Lexer('name  # ignored comment')
         self.assertEqual(
-           [x for x in lexer],
-           [Token(TokenType.id, 'name'),
+            [x for x in lexer],
+            [Token(TokenType.id, 'name'),
+            Token(TokenType.eof)]
+        )
+
+    def test_function(self):
+        lexer = Lexer('\\x ->\n    y = f x\n    x & y')
+        self.assertEqual(
+            [x for x in lexer],
+            [Token(TokenType.bslash),
+            Token(TokenType.id, 'x'),
+            Token(TokenType.arrow),
+            Token(TokenType.bstart),
+            Token(TokenType.id, 'y'),
+            Token(TokenType.equal),
+            Token(TokenType.id, 'f'),
+            Token(TokenType.id, 'x'),
+            Token(TokenType.eol),
+            Token(TokenType.id, 'x'),
+            Token(TokenType.amp),
+            Token(TokenType.id, 'y'),
+            Token(TokenType.bend),
             Token(TokenType.eof)]
         )
 
     def test_record(self):
         lexer = Lexer('{ align: { fastq1: "1.fq", fastq2: "2.fq" } }')
         self.assertEqual(
-           [x for x in lexer],
-           [Token(TokenType.lbrace),
+            [x for x in lexer],
+            [Token(TokenType.lbrace),
             Token(TokenType.id, 'align'),
             Token(TokenType.colon),
             Token(TokenType.lbrace),
