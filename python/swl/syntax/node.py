@@ -26,7 +26,7 @@ class Expr:
         elif self.type == NodeType.num:
             return f'{self.value}'
         elif self.type == NodeType.block:
-            return '[' + ';\n'.join([str(x) for x in self.body]) + ']'
+            return '[' + '; '.join([f'{x}' for x in self.body]) + ']'
         elif self.type == NodeType.bind:
             return f'(= {self.id} {self.value})'
         elif self.type == NodeType.rec:

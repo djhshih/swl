@@ -1,7 +1,7 @@
-from swl.parse import node
-from swl.parse.node import NodeType
-from swl.parse import lexer as lex
-from swl.parse.lexer import Token, TokenType
+from swl.syntax import node
+from swl.syntax.node import NodeType
+from swl.syntax import lexer as lex
+from swl.syntax.lexer import Token, TokenType
 
 class Parser:
 
@@ -89,9 +89,10 @@ class Parser:
             if self.eof(): break
             # eol right before eof is optional
             self._expect(TokenType.eol)
-        if inner:
             # check for block end token
-            self._exepct(TokenType.bend)
+            if inner and self._at().type == TokenType.bend:
+                self._eat()
+                break
         return node.Block(exprs)
 
     def _parse_expr(self) -> node.Expr:
@@ -183,7 +184,7 @@ class Parser:
 
         while self._at().type == TokenType.update:
             self._eat()  # eat update token
-            right = self.parse_apply_expr()
+            right = self._parse_apply_expr()
             left = node.Update(left, right)
 
         return left
@@ -205,6 +206,7 @@ class Parser:
         while \
             self._at().type == TokenType.id or \
             self._at().type == TokenType.lbrace or \
+            self._at().type == TokenType.str or \
             self._at().type == TokenType.lparen:
             right = self._parse_get_expr()
             left = node.Apply(left, right)
