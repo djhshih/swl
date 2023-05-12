@@ -84,10 +84,11 @@ class Parser:
         if inner:
             # check for block start token
             self._expect(TokenType.bstart)
-        while True:
+        while not self.eof():
             exprs.append(self._parse_expr())
+            # check for early break because 
+            # below tokens are optional right before eof
             if self.eof(): break
-            # eol right before eof is optional
             self._expect(TokenType.eol)
             # check for block end token
             if inner and self._at().type == TokenType.bend:
