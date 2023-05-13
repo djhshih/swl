@@ -134,15 +134,17 @@ class Parser:
         self._eat()  # eat open brace
         self._optional(TokenType.bstart)
         d = {}
-        while self._until_any([TokenType.rbrace, TokenType.bend]):
+        while self._until_any([TokenType.rbrace, TokenType.bend, TokenType.eol]):
             iden = self._parse_id()
             self._expect(TokenType.colon)
             value = self._parse_expr()
             # comma is required after each key-value pair
             # unless we just parsed the final key-value pair
-            if self._at().type != TokenType.rbrace:
+            if self._at().type != TokenType.rbrace and \
+                self._at().type != TokenType.eol:
                 self._expect(TokenType.comma)
             d[iden.name] = value
+        self._optional(TokenType.eol)
         self._optional(TokenType.bend)
         self._expect(TokenType.rbrace)
         return node.Record(d)
@@ -250,11 +252,7 @@ class Parser:
             return node.String(self._eat().value)
 
         elif t == TokenType.num:
-            value = self._eat().value
-            if value.find('.') > 0:
-                return node.Number(float(value))
-            else:
-                return node.Number(int(value))
+            return node.Number(self._eat().value)
 
         elif t == TokenType.id:
             return self._parse_id()

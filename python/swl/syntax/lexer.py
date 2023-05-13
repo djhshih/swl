@@ -139,6 +139,41 @@ class Lexer:
             self.new_line = False
             self.ignore_eol = False
 
+            # string literal
+            if s1 == '"':
+                value = self._match(self.i, '"')
+                return Token(TokenType.str, value)
+
+            # identifier
+            if s1.isalpha() or s1 == '_':
+                # advance index past next character that is not a valid
+                # identifier character
+                value = self._until(lambda x: not (x.isalnum() or x == '_'))
+                return Token(TokenType.id, value)
+
+            # number
+            if s1.isdigit() or s1 == '-':
+                value = self._until(lambda x: not x.isdigit())
+                # '-' by itself is not a number
+                if value != '-':
+                    c = self.s[self.i]
+                    fractional = ''
+                    if c == '.':
+                        # capture fractional part
+                        self.i += 1
+                        fractional = self._until(lambda x: not x.isdigit())
+                        value += fractional
+                    if c == 'e' or c == 'E':
+                        # capture exponent part
+                        self.i += 1
+                        exponent = self._until(lambda x: not x.isdigit())
+                        value += exponent
+                    if fractional:
+                        numeric = float(value)
+                    else:
+                        numeric = int(value)
+                    return Token(TokenType.num, numeric)
+
             if s1 == '&':
                 return Token(TokenType.update)
             
@@ -175,17 +210,6 @@ class Lexer:
                 self.ignore_eol = True
                 return Token(TokenType.pipe)
 
-            # string literal
-            if s1 == '"':
-                value = self._match(self.i, '"')
-                return Token(TokenType.str, value)
-
-            # identifier
-            if s1.isalpha() or s1 == '_':
-                # advance index past next character that is not a valid
-                # identifier character
-                value = self._until(lambda x: not (x.isalnum() or x == '_'))
-                return Token(TokenType.id, value)
 
             # tokens with 2 characters
             if self.size() >= 2:

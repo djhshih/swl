@@ -6,6 +6,7 @@ align_hg38 = align {
   ref_bwt: "hg38.fa.bwt",
   ref_pac: "hg38.fa.pac",
   ref_sa: "hg38.fa.sa",
+  cpu: 2
 }
 
 align_hg38 { fastq1: "sample1.r1.fq", fastq2: "sample.r2.fq" }
