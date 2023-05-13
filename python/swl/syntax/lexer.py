@@ -181,7 +181,7 @@ class Lexer:
                 return Token(TokenType.str, value)
 
             # identifier
-            if s1.isalpha():
+            if s1.isalpha() or s1 == '_':
                 # advance index past next character that is not a valid
                 # identifier character
                 value = self._until(lambda x: not (x.isalnum() or x == '_'))
