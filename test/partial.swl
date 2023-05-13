@@ -1,0 +1,11 @@
+align = import "align.sh"
+
+align_hg38 = align {
+  ref: "hg38.fa",
+  ref_ann: "hg38.fa.ann",
+  ref_bwt: "hg38.fa.bwt",
+  ref_pac: "hg38.fa.pac",
+  ref_sa: "hg38.fa.sa",
+}
+
+align_hg38 { fastq1: "sample1.r1.fq", fastq2: "sample.r2.fq" }
