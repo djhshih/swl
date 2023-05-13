@@ -7,8 +7,7 @@ evaluate() {
 }
 
 if (( $# > 0 )); then
-	swl=$1
-	evaluate $swl
+	evaluate $1
 else
 	for swl in *.swl; do
 		evaluate $swl
