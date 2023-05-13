@@ -1,0 +1,3 @@
+- doc parsing
+- ast interpretation
+- transpile to cwl
