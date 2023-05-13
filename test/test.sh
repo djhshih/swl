@@ -1,12 +1,17 @@
 #!/bin/bash
 
 evaluate() {
+	echo "file: $1"
 	PYTHONPATH=../python python -m swl.eval $1
+	printf "return: $?\n\n"
 }
 
-for swl in *.swl; do
-	echo "file: $swl"
+if (( $# > 0 )); then
+	swl=$1
 	evaluate $swl
-	printf "return: $?\n\n"
-done
+else
+	for swl in *.swl; do
+		evaluate $swl
+	done
+fi
 
