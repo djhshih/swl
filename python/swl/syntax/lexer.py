@@ -35,8 +35,10 @@ class Token:
     def __repr__(self):
         if self.type == TokenType.id:
             return f'id({self.value})'
-        elif self.type == TokenType.str or self.type == TokenType.num:
+        elif self.type == TokenType.str:
             return f'"{self.value}"'
+        elif self.type == TokenType.num:
+            return f'{self.value}'
         else:
             return f'{self.type.name}'
     def __eq__(self, other):
@@ -156,19 +158,24 @@ class Lexer:
                 value = self._until(lambda x: not x.isdigit())
                 # '-' by itself is not a number
                 if value != '-':
-                    c = self.s[self.i]
-                    fractional = ''
-                    if c == '.':
-                        # capture fractional part
-                        self.i += 1
-                        fractional = self._until(lambda x: not x.isdigit())
-                        value += fractional
-                    if c == 'e' or c == 'E':
-                        # capture exponent part
-                        self.i += 1
-                        exponent = self._until(lambda x: not x.isdigit())
-                        value += exponent
-                    if fractional:
+                    is_float = False
+                    if self.i < len(self.s):
+                        c = self.s[self.i]
+                        if c == '.':
+                            # capture fractional part
+                            self.i += 1
+                            fractional = self._until(lambda x: not x.isdigit())
+                            value += fractional
+                            is_float = True
+                        if self.i < len(self.s):
+                            c = self.s[self.i]
+                            if c == 'e' or c == 'E':
+                                # capture exponent part
+                                self.i += 1
+                                exp = self._until(lambda x: not x.isdigit())
+                                value += exp
+                                is_float = True
+                    if is_float:
                         numeric = float(value)
                     else:
                         numeric = int(value)
