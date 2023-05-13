@@ -16,6 +16,6 @@
 #
 # run:
 #   cpu int = 2
-#   image size = djhshih/seqkit:0.1
+#   image str = djhshih/seqkit:0.1
 
 bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam

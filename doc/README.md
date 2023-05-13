@@ -15,7 +15,7 @@ Tasks are annotated bash scripts.
 # in  outbase  str                     | output base name
 # out bam      file  =  ${outbase}.bam | output alignment
 # run cpu      int   = 2
-# run image    size  = djhshih/seqkit:0.1
+# run image    str   = djhshih/seqkit:0.1
 
 bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam
 ```
