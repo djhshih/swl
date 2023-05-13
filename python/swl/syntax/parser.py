@@ -3,6 +3,8 @@ from swl.syntax.node import NodeType
 from swl.syntax import lexer as lex
 from swl.syntax.lexer import Token, TokenType
 
+from typing import List
+
 class Parser:
 
     def parse(self, s: str) -> node.Expr:
@@ -59,13 +61,24 @@ class Parser:
             raise ValueError(f'Parsing failed due to undefined token')
         if token.type != token_type:
             raise ValueError(
-                f'Parsing failed due to unexpected token: expected token type {token_type.name}, but got token {token}'
+                f'Parsing failed due to unexpected token: \
+                  expected token type {token_type.name}, but got token {token}'
             )
         return token
 
     def _until(self, token_type: TokenType) -> bool:
-        '''Return whether current token is of type `token_type`.'''
+        '''Return True until eof or current token is of type `token_type`.'''
         return not self.eof() and self.queue[0].type != token_type
+
+    def _until_any(self, token_types: List[TokenType]) -> bool:
+        '''Return True until eof or current token type matches any type
+           in `token_types`.'''
+        if self.eof(): return False
+        t = self.queue[0].type
+        for token_type in token_types:
+            if t == token_type:
+                return False
+        return True
 
     def _find(self, token_type: TokenType) -> int:
         '''Find and return index of token with type `token_type`,
@@ -119,8 +132,9 @@ class Parser:
 
     def _parse_record(self) -> node.Expr:
         self._eat()  # eat open brace
+        self._optional(TokenType.bstart)
         d = {}
-        while self._until(TokenType.rbrace):
+        while self._until_any([TokenType.rbrace, TokenType.bend]):
             iden = self._parse_id()
             self._expect(TokenType.colon)
             value = self._parse_expr()
@@ -129,6 +143,7 @@ class Parser:
             if self._at().type != TokenType.rbrace:
                 self._expect(TokenType.comma)
             d[iden.name] = value
+        self._optional(TokenType.bend)
         self._expect(TokenType.rbrace)
         return node.Record(d)
 
