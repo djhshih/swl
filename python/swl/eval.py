@@ -32,7 +32,7 @@ def eval(fname):
     
 
 if __name__ == '__main__':
-    import argparse
+    import sys, os, argparse
 
     ap = argparse.ArgumentParser('Parse simple workflow language')
     ap.add_argument('input', help='input file')
@@ -43,4 +43,5 @@ if __name__ == '__main__':
         eval(args.input)
     except:
         traceback.print_exc()
+        sys.exit(os.EX_DATAERR)
 

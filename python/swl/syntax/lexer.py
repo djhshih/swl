@@ -100,6 +100,7 @@ class Lexer:
                         self.i += 1
                         return self.__next__()
                     else:
+                        self.new_line = False
                         # tab is equivalent to 4 spaces
                         indent = len(ws.replace('\t', '    '))
                         if indent > self.indent_stack[-1]:
@@ -110,7 +111,7 @@ class Lexer:
                             # add dedent token since indentation level decreased
                             while indent < self.indent_stack[-1]:
                                 self.indent_stack.pop()
-                                self.tokens.put(TokenType.bend)
+                                self.tokens.put(Token(TokenType.bend))
                             return self.tokens.get()
                         else:
                             # indentation level remained the same
@@ -124,6 +125,15 @@ class Lexer:
                 # ignore everything until end of line
                 comment = self._jump(self.i, '\n')
                 return self.__next__()
+
+            # consider the situation where dedentation occured and the
+            # first character of the new line is not a whitespace
+            if self.new_line and self.indent_stack[-1] > 0:
+                while 0 < self.indent_stack[-1]:
+                    self.indent_stack.pop()
+                    self.tokens.put(Token(TokenType.bend))
+                self.i -= 1
+                return self.tokens.get()
 
             # current character is not whitespace
             self.new_line = False
