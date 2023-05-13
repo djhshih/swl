@@ -67,7 +67,7 @@ call  = import "call.sh"
 
 We can then write the workflow in `mutation.wf` simply with
 ```
-align |> sort |> call
+align | sort | call
 ```
 which is syntactic sugar for
 ```
