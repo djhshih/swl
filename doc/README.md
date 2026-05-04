@@ -108,6 +108,9 @@ Alternatively, we can also write the workflow with explicit passing of arguments
     { bam: s.bam, bai: s.bai, bcf: c.bcf }
 ```
 
+Argument do not need to explicitly passed if they can be inferred from their names, so the arguments in
+the tasks should be named carefully.
+
 A workflow can be imported into another workflow similarly as above:
 ```
 mutation = import "mutation.wf"
