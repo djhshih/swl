@@ -6,4 +6,6 @@ Python:
 Rust:
 - lexer
 - parser
+- doc parsing
+- ast interpretation
 - transpile to cwl
