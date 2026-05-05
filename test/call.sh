@@ -1,4 +1,4 @@
-#?  Call mutations on read alignment
+#@  Call mutations on read alignment
 # in
 #   bam      file                    | input bam
 #   ref      file                    | reference sequence

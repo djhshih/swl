@@ -1,4 +1,4 @@
-#?  Align paired-end sequencing reads
+#@  Align paired-end sequencing reads
 #
 # in
 #   fastq1, fastq2 file | paired-end reads

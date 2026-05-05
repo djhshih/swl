@@ -1,4 +1,4 @@
-#?  Sort alignment by coordinates and index
+#@  Sort alignment by coordinates and index
 # in
 #   bam      file                    | input bam
 #   outbase  str                     | output base name

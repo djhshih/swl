@@ -2,7 +2,7 @@ Tasks are annotated bash scripts.
 
 `align.sh`
 ```{bash}
-#?  Align paired-end sequencing reads
+#@  Align paired-end sequencing reads
 # in
 #   fastq1   file                    | read 1
 #   fastq2   file                    | read 2
@@ -24,7 +24,7 @@ bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.b
 
 `sort.sh`
 ```{bash}
-#?  Sort alignment by coordinates and index
+#@  Sort alignment by coordinates and index
 # in
 #   bam      file                    | input bam
 #   outbase  str                     | output base name
@@ -42,7 +42,7 @@ samtools index ${outbase}.bam ${outbase}.bai
 
 `call.sh`
 ```{bash}
-#? Call mutations on read alignment
+#@ Call mutations on read alignment
 # in
 #   bam      file                    | input bam
 #   ref      file                    | reference sequence
