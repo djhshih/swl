@@ -1,3 +1,9 @@
+Python:
 - doc parsing
 - ast interpretation
+- transpile to cwl
+
+Rust:
+- lexer
+- parser
 - transpile to cwl
