@@ -32,7 +32,7 @@ bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.b
 # run memory = 8G
 # run image  = djhshih/seqkit:0.1
 
-samtools sort -@ ${cpu} -m ${memory / cpu} aligned.bam ${outbase}.bam
+samtools sort -@ ${cpu} -m ${memory / cpu} ${bam} ${outbase}.bam
 samtools index ${outbase}.bam ${outbase}.bai
 ```
 
