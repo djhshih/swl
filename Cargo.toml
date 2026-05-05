@@ -1,0 +1,15 @@
+[package]
+name = "swl"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "swl"
+path = "src/lib.rs"
+
+[[bin]]
+name = "swl"
+path = "src/main.rs"
+
+[dependencies]
+nom = "7"
