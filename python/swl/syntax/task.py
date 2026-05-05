@@ -54,7 +54,7 @@ class ShellTask:
 
         try:
             # parse title
-            line = _next_line('##')
+            line = _next_line('#@')
             self.title = line[2:].strip()
             
             # parse description,
