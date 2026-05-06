@@ -317,13 +317,17 @@ class TestLexer(ut.TestCase):
         )
 
     def test_function(self):
-        lexer = Lexer('\\x ->\n    x // y')
+        lexer = Lexer('\\x ->\n    y = f x    x // y')
         self.assertEqual(
             [x for x in lexer],
             [Token(TokenType.bslash),
             Token(TokenType.id, 'x'),
             Token(TokenType.arrow),
             Token(TokenType.bstart),
+            Token(TokenType.id, 'y'),
+            Token(TokenType.equal),
+            Token(TokenType.id, 'f'),
+            Token(TokenType.id, 'x'),
             Token(TokenType.id, 'x'),
             Token(TokenType.update),
             Token(TokenType.id, 'y'),
