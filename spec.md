@@ -59,11 +59,12 @@ ws             ::= [ \t\n]+
 
 #### Precedence (highest to lowest)
 
-1. Function application (`ws`)
-2. Record update (`//`)
-3. Lambda arrow (`->`)
-4. Function chain (`|`)
-5. Let binding (`=`)
+1. Record get (`.`)
+2. Function application (`ws`)
+3. Record update (`//`)
+4. Lambda arrow (`->`)
+5. Function chain (`|`)
+6. Let binding (`=`)
 
 ---
 

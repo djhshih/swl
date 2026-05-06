@@ -1,20 +1,18 @@
-from enum import Enum
+from enum import Enum, auto
 
-NodeType = Enum('NodeType',
-    [
-        'id',
-        'str',
-        'num',
-        'block',
-        'bind',
-        'rec',
-        'get',
-        'update',
-        'fun',
-        'apply',
-        'pipe',
-    ]
-)
+NodeType = Enum('NodeType', [
+    'id',
+    'str',
+    'num',
+    'block',
+    'bind',
+    'rec',
+    'get',
+    'update',
+    'fun',
+    'apply',
+    'chain',
+])
 
 class Expr:
     type = None
@@ -36,12 +34,12 @@ class Expr:
         elif self.type == NodeType.get:
             return f'(. {self.rec} {self.member})'
         elif self.type == NodeType.update:
-            return f'(& {self.left} {self.right})'
+            return f'(// {self.left} {self.right})'
         elif self.type == NodeType.fun:
-            return f'(\ {self.param} {self.body})'
+            return f'(\\ {self.param} {self.body})'
         elif self.type == NodeType.apply:
             return f'($ {self.fun} {self.arg})'
-        elif self.type == NodeType.pipe:
+        elif self.type == NodeType.chain:
             return f'(| {self.left} {self.right})'
         else:
             return f'{self.type}'
@@ -74,8 +72,8 @@ class Binding(Expr):
 
 class Record(Expr):
     type = NodeType.rec
-    def __init__(self, dict):
-        self.value = dict
+    def __init__(self, d):
+        self.value = d
 
 class Get(Expr):
     type = NodeType.get
@@ -101,8 +99,8 @@ class Apply(Expr):
         self.fun = fun
         self.arg = arg
 
-class Pipe(Expr):
-    type = NodeType.pipe
+class Chain(Expr):
+    type = NodeType.chain
     def __init__(self, left, right):
         self.left = left
         self.right = right

@@ -124,7 +124,7 @@ class Parser:
     # order of precedence for operators
     # from outer-most parser (lowest precedence)
     # to inner-most parser (highest precedence)
-    # pipe, update, apply, get
+    # chain, update, apply, get
 
     def _parse_id(self) -> node.Expr:
         iden = self._expect(TokenType.id)
@@ -171,7 +171,7 @@ class Parser:
         expr = self._parse_expr()
         return node.Binding(iden, expr)
 
-    def _parse_pipe_expr(self) -> node.Expr:
+    def _parse_chain_expr(self) -> node.Expr:
         left = self._parse_update_expr()
 
         # only the below node types can potentially have a function
@@ -180,16 +180,16 @@ class Parser:
             left.type != NodeType.id and \
             left.type != NodeType.get and \
             left.type != NodeType.apply and \
-            left.type != NodeType.pipe:
+            left.type != NodeType.chain:
             return left
 
-        # only allow pipe if next token is a permissible operand
+        # only allow chain if next token is a permissible operand
         # (anything that can evaluate to a function)
         # (a record may have a member function)
-        while self._at().type == TokenType.pipe:
-            self._eat()  # eat pipe token
+        while self._at().type == TokenType.chain:
+            self._eat()  # eat chain token
             right = self._parse_update_expr()
-            left = node.Pipe(left, right)
+            left = node.Chain(left, right)
 
         return left
 
@@ -216,7 +216,7 @@ class Parser:
             left.type != NodeType.id and \
             left.type != NodeType.get and \
             left.type != NodeType.apply and \
-            left.type != NodeType.pipe:
+            left.type != NodeType.chain:
             return left
 
         # only apply function if next token is a permissible operand
@@ -266,6 +266,6 @@ class Parser:
         else:
             raise ValueError(f'Unrecognized token: {self.queue[0]}')
 
-    _parse_simple_expr = _parse_pipe_expr
+    _parse_simple_expr = _parse_chain_expr
 
 

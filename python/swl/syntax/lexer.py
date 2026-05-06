@@ -11,6 +11,7 @@ TokenType = Enum('TokenType',
         'comma',
         'dot',
         'update',
+        'chain',
         'lparen',
         'rparen',
         'lbracket',
@@ -19,7 +20,6 @@ TokenType = Enum('TokenType',
         'rbrace',
         'bslash',
         'arrow',
-        'pipe',
         'bstart',
         'bend',
         'eol',
@@ -27,7 +27,6 @@ TokenType = Enum('TokenType',
     ]
 )
 
-# TODO add line and column number
 class Token:
     def __init__(self, ttype, value=None):
         self.type = ttype
@@ -181,9 +180,6 @@ class Lexer:
                         numeric = int(value)
                     return Token(TokenType.num, numeric)
 
-            if s1 == '&':
-                return Token(TokenType.update)
-            
             if s1 == '(':
                 return Token(TokenType.lparen)
 
@@ -215,8 +211,7 @@ class Lexer:
 
             if s1 == '|':
                 self.ignore_eol = True
-                return Token(TokenType.pipe)
-
+                return Token(TokenType.chain)
 
             # tokens with 2 characters
             if self.size() >= 2:
@@ -228,6 +223,10 @@ class Lexer:
                 if s2 == '->':
                     self.ignore_eol = True
                     return Token(TokenType.arrow)
+
+                if s2 == '//':
+                    self.ignore_eol = True
+                    return Token(TokenType.update)
 
                 # at this point, no 2-character match was found
                 # move the index back to the previous state
@@ -295,7 +294,6 @@ class Lexer:
             return self.s[start:end]
         
 
-
 import unittest as ut
 
 class TestLexer(ut.TestCase):
@@ -319,22 +317,29 @@ class TestLexer(ut.TestCase):
         )
 
     def test_function(self):
-        lexer = Lexer('\\x ->\n    y = f x\n    x & y')
+        lexer = Lexer('\\x ->\n    x // y')
         self.assertEqual(
             [x for x in lexer],
             [Token(TokenType.bslash),
             Token(TokenType.id, 'x'),
             Token(TokenType.arrow),
             Token(TokenType.bstart),
-            Token(TokenType.id, 'y'),
-            Token(TokenType.equal),
-            Token(TokenType.id, 'f'),
-            Token(TokenType.id, 'x'),
-            Token(TokenType.eol),
             Token(TokenType.id, 'x'),
             Token(TokenType.update),
             Token(TokenType.id, 'y'),
             Token(TokenType.bend),
+            Token(TokenType.eof)]
+        )
+
+    def test_chain(self):
+        lexer = Lexer('a | b | c')
+        self.assertEqual(
+            [x for x in lexer],
+            [Token(TokenType.id, 'a'),
+            Token(TokenType.chain),
+            Token(TokenType.id, 'b'),
+            Token(TokenType.chain),
+            Token(TokenType.id, 'c'),
             Token(TokenType.eof)]
         )
 
@@ -360,4 +365,3 @@ class TestLexer(ut.TestCase):
 
 if __name__ == '__main__':
     ut.main()
-
