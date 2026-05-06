@@ -1,7 +1,7 @@
 import traceback
 
-import swl.syntax.parser as pr
-import swl.syntax.lexer as lr
+import swl.syntax.wf.parser as pr
+import swl.syntax.wf.lexer as lr
 
 def repl():
     p = pr.Parser()

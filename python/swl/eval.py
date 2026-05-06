@@ -1,8 +1,8 @@
 import traceback
 
-import swl.syntax.parser as pr
-import swl.syntax.lexer as lr
-from swl.syntax.node import NodeType
+import swl.syntax.wf.parser as pr
+import swl.syntax.wf.lexer as lr
+from swl.syntax.wf.node import NodeType
 
 def print_ast(node, depth=0):
     # fun and block nodes need to be indented

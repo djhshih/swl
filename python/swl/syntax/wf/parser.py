@@ -1,7 +1,7 @@
-from swl.syntax import node
-from swl.syntax.node import NodeType
-from swl.syntax import lexer as lex
-from swl.syntax.lexer import Token, TokenType
+from swl.syntax.wf import node
+from swl.syntax.wf.node import NodeType
+from swl.syntax.wf import lexer as lex
+from swl.syntax.wf.lexer import Token, TokenType
 
 from typing import List
 
