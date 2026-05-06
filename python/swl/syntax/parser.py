@@ -94,20 +94,31 @@ class Parser:
     def _parse_block(self, inner=False) -> node.Expr:
         '''Parse a block of code, which can be outer-level or inner-level.'''
         exprs = []
+        last = None
         if inner:
             # check for block start token
             self._expect(TokenType.bstart)
         while not self.eof():
-            exprs.append(self._parse_expr())
+            last = self._parse_expr()
+            exprs.append(last)
+            if inner and self._end_block():
+                break
             # check for early break because 
             # below tokens are optional right before eof
             if self.eof(): break
             self._expect(TokenType.eol)
-            # check for block end token
-            if inner and self._at().type == TokenType.bend:
-                self._eat()
+            if inner and self._end_block():
                 break
+        if last and last.type == NodeType.bind:
+            raise ValueError('Final line in a block must be an expr')
         return node.Block(exprs)
+
+    def _end_block(self) -> bool:
+        '''End an inner block if currently at bend token.'''
+        if self._at().type != TokenType.bend:
+            return False
+        self._eat()
+        return True
 
     def _parse_expr(self) -> node.Expr:
         t = self.queue[0].type
@@ -275,7 +286,7 @@ class TestParser(ut.TestCase):
 
     def test_final_expr_in_block(self):
         """Test that final line in a block can be an expr."""
-        src = "\\x ->\n    a = 1\n    { a: 1 }"
+        src = "\\x ->\n    a = 1\n    { a: 1 }\n"
         p = Parser()
         result = p.parse(src)
         self.assertIsNotNone(result)
@@ -289,31 +300,23 @@ class TestParser(ut.TestCase):
 
     def test_simple_binding(self):
         """Test parsing a simple binding"""
-        src = "x = 1"
+        src = "x = 1\ny"
         p = Parser()
         result = p.parse(src)
         self.assertIsNotNone(result)
 
     def test_final_binding_in_block_fails(self):
         """Test that final line being a binding fails."""
-        # This should fail because after binding we expect eol but get bend
-        src = "\\x ->\n    a = 1\n    b = 2"
+        src = "\\x ->\n    a = 1\n    b = 2\n"
         p = Parser()
         with self.assertRaises(ValueError):
             p.parse(src)
 
-    def test_simple_chain(self):
-        """Test parsing a simple chain"""
-        src = "align | sort"
-        p = Parser()
-        result = p.parse(src)
-        self.assertIsNotNone(result)
-
-    def test_simple_binding(self):
-        """Test parsing a simple binding"""
+    def test_final_binding_in_outer_block_fails(self):
+        """Test that final line in outer block cannot be a binding."""
         src = "x = 1"
         p = Parser()
-        result = p.parse(src)
-        self.assertIsNotNone(result)
+        with self.assertRaises(ValueError):
+            p.parse(src)
 
 
