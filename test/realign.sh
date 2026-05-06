@@ -9,8 +9,8 @@
 #   bai      file  =  ${outbase}.bai | output alignment index
 # run
 #   cpu        = 2
-#   run memory = 8G
-#   run image  = djhshih/seqkit:0.1
+#   memory = 8G
+#   image  = djhshih/seqkit:0.1
 
 bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > aligned.bam
 
