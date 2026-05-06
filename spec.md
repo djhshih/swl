@@ -23,21 +23,21 @@ operation      ::= apply | parens | get | update | chain
 
 parens         ::= "(" ws? expr ws? ")"
 
-apply          ::= name ws operation
+apply          ::= name ws expr
 
 get            ::= name ("." name)+
 
-update         ::= record (ws? "//" ws? record)+
+update         ::= expr (ws? "//" ws? expr)+
 
-chain          ::= name (ws? "|" ws? name)+
+chain          ::= expr (ws? "|" ws? expr)+
 
-record         ::= name | "{" ws? pairs ws? ","? ws? "}"
+record         ::= "{" ws? pairs ws? ","? ws? "}"
 
 value          ::= number | string | record
 
 pairs          ::= pair?  |  pair (ws? "," ws? pair)+
 
-pair           ::= name ws? ":" ws? operation
+pair           ::= name ws? ":" ws? expr
 
 name           ::= [a-zA-Z_][a-zA-Z0-9_]*
 
