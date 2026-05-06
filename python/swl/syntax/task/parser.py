@@ -1,118 +1,151 @@
-import os
+from swl.syntax.task import node
+from swl.syntax.task import interpolation
 
-keywords = ['fun', 'in', 'out', 'run']
-keyword_phase_start = 10
 
-def match_keyword(s):
-    '''Return the matched keyword or None if no match.'''
-    for i in range(len(keywords)):
-        keyword = keywords[i]
-        if s.strip() == keyword + ':'
-            return keyword
-    return None
+_VALID_TYPES = {
+    'file', 'str', 'int', 'float',
+    'file?', 'str?', 'int?', 'float?',
+    '[file]', '[str]', '[int]', '[float]',
+}
 
-class EndOfAnnotation(Exception):
-    '''Raised when end of annotation is encountered'''
-    pass
+_SECTION_TYPES = {
+    'in': node.SectionType.IN,
+    'out': node.SectionType.OUT,
+    'run': node.SectionType.RUN,
+}
 
-class Parameter:
-    '''Parameter for a task.'''
-    def __init__(self, name, _type = 'file', doc = ''):
-        self.name = name
-        self.type = _type
-        self.doc = doc
 
-class ShellTask:
+class Parser:
+    def parse(self, script: str) -> node.Task:
+        annotation_lines, body = self._split_script(script)
+        annotation = self._parse_annotation(annotation_lines)
+        return node.Task(annotation, body)
 
-    def __init__(self, f: io.TextIOBase):
-        '''Create a callable function from an annotated shell script.'''
-        self.iter = iter(f)
+    def _split_script(self, script: str):
+        lines = script.splitlines()
+        annotation = []
+        body_start = len(lines)
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                annotation.append(self._strip_comment(line))
+                continue
+            if stripped == '':
+                if annotation:
+                    annotation.append('')
+                continue
+            body_start = i
+            break
+
+        body = '\n'.join(lines[body_start:])
+        if script.endswith('\n') and body_start < len(lines):
+            body += '\n'
+        return annotation, body
+
+    def _strip_comment(self, line: str) -> str:
+        stripped = line.lstrip()
+        stripped = stripped[1:]
+        if stripped.startswith(' '):
+            stripped = stripped[1:]
+        return stripped.rstrip()
+
+    def _parse_annotation(self, lines):
+        self.lines = lines
         self.i = 0
-        self._parse()
 
-    def _size(self) -> int:
-        '''Remaining size of input string'''
-        return len(self.lines) - self.i
+        doc = self._parse_doc()
+        sections = []
+        while self._skip_blank_lines():
+            sections.append(self._parse_section())
 
-    def _next_line(self, prefix=None) -> str:
-        while True:
-            self.i += 1
-            line = next(self.iter)
-            if prefix:
-                if line.startswith(prefix):
-                    s = line[1:].strip()
-                    if len(s) > 0:
-                        return s
+        if not sections:
+            raise ValueError('Task annotation must contain at least one section')
+
+        return node.Annotation(doc, sections)
+
+    def _parse_doc(self):
+        self._skip_leading_blanks()
+        if self._eof() or not self._at().startswith('@'):
+            raise ValueError('Task annotation must start with a doc line')
+        doc = self._eat()[1:].strip()
+        return doc
+
+    def _parse_section(self):
+        header = self._eat().strip()
+        if header not in _SECTION_TYPES:
+            raise ValueError(f'Unrecognized section header: {header}')
+
+        params = []
+        while not self._eof():
+            line = self._at().strip()
+            if not line:
+                self._eat()
+                continue
+            if line in _SECTION_TYPES:
+                break
+            if line.startswith('|'):
+                if not params:
+                    raise ValueError('Description continuation without parameter')
+                extra = line[1:].strip()
+                if params[-1].desc:
+                    params[-1].desc += '\n' + extra
                 else:
-                    raise EndAnnotation
-            else:
-                if len(line) > 0:
-                    return line
+                    params[-1].desc = extra
+                self._eat()
+                continue
+            params.append(self._parse_param(self._eat()))
 
-    def _parse(self):
-        '''Parse an annotated shell script.''' 
+        return node.Section(_SECTION_TYPES[header], params)
 
-        try:
-            # parse title
-            line = _next_line('#@')
-            self.title = line[2:].strip()
-            
-            # parse description,
-            # which includes all lines until the next section
-            self.description = ''
-            k = 0
-            while True:
-                line = _next_line('#')
-                section = match_keyword(line)
-                if section:
-                    break
-                else:
-                    self.description += line
+    def _parse_param(self, line: str) -> node.Param:
+        desc = None
+        if '|' in line:
+            line, desc = line.split('|', 1)
+            desc = desc.strip()
 
-            # parse each section
-            while True:
-                self._parse_section(keywords[k])
-                line = _next_line('#')
-                section = match_keyword(line)
-                if not section:
-                    raise ValueError(
-                        f"Expecting keyword but none found on line {self.i}."
-                    )
+        default = None
+        if '=' in line:
+            line, default_text = line.split('=', 1)
+            default_text = default_text.strip()
+            if default_text:
+                default = interpolation.parse_word(default_text)
 
-        except EndAnnotation:
-            pass
+        parts = line.split()
+        if not parts:
+            raise ValueError('Parameter line is empty')
 
-        except StopIteration:
-            pass
+        param_type = None
+        if parts[-1] in _VALID_TYPES:
+            param_type = parts.pop()
 
-        # unpack the remaining lines
-        self.body = [*self.iter]
-    
-    def _parse_section(self, section):
-        line = _next_line('#')
+        names_text = ' '.join(parts).strip()
+        names = [x.strip() for x in names_text.split(',') if x.strip()]
+        if not names:
+            raise ValueError('Parameter line must contain at least one name')
 
-        next_section = match_keyword(line)
-        if next_section:
-            self._parse_section(next_section)
-            return
+        return node.Param(names, param_type, default, desc)
 
-        if section == 'fun':
-            try:
-                line = line.strip()
-                parts = line.split('->')
-                self.inputs  = [Parameter(x.strip()) for x in parts[0].split(',')]
-                self.outputs = [Parameter(x.strip()) for x in parts[1].split(',')]
-            except:
-                raise ValueError(f"fun section is malformed:\n{line}")
-        elif section == 'in':
-            # TODO
-            pass
-        elif section == 'out':
-            # TODO
-            pass
-        elif section == 'run':
-            # TODO
-            pass
-        else:
-            raise ValueError(f"Unrecognized section: {section}")
+    def _skip_leading_blanks(self):
+        while not self._eof() and not self._at().strip():
+            self._eat()
 
+    def _skip_blank_lines(self):
+        self._skip_leading_blanks()
+        return not self._eof()
+
+    def _eof(self):
+        return self.i >= len(self.lines)
+
+    def _at(self):
+        return self.lines[self.i]
+
+    def _eat(self):
+        line = self.lines[self.i]
+        self.i += 1
+        return line
+
+
+def parse_file(path: str) -> node.Task:
+    with open(path, 'r') as f:
+        return Parser().parse(f.read())
