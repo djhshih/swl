@@ -1,11 +1,10 @@
 Python:
-- doc parsing
 - ast interpretation
 - transpile to cwl
 
 Rust:
-- lexer
-- parser
-- doc parsing
+- worflow lexer
+- worflow parser
+- task parser
 - ast interpretation
 - transpile to cwl
