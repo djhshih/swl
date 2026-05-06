@@ -4,6 +4,6 @@ call  = import "call.sh"
 
 \x ->
     a = align x
-    s = sort ( x & a )
-    c = call ( x & a & s )
-    a & s & c
+    s = sort ( x // a )
+    c = call ( x // a // s )
+    a // s // c

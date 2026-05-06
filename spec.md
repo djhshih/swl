@@ -4,101 +4,126 @@
 
 ### GBNF Grammar (Workflow Language)
 
+#### Pre-condition
+- Any "\r\n" is replaced with "\n". Any "\r" is removed.
+- "\n" is preserved.
+
 ```bnf
-root           ::= block  |  block "\n" root
+root           ::= block | block root
 
-block          ::= expr   |  binding "\n" expr
+block          ::= expr nl+ | binding nl+ block
 
-binding        ::= name "=" expr
+binding        ::= name ws? "=" ws? expr
 
 expr           ::= value | operation | lambda
 
-lambda         ::= "\" name "->" block
+lambda         ::= "\" ws? name ws? "->" ws? block
 
-operation      ::= app | parens | get | union | pipeline
+operation      ::= apply | parens | get | update | chain
 
-parens         ::= "(" operation ")"
+parens         ::= "(" ws? operation ws? ")"
 
-app            ::= name value
+apply          ::= name ws expr
 
-get            ::= name "." name
+get            ::= name ("." name)+
 
-union          ::= record ("|" record)+
+update         ::= record (ws? "//" ws? record)+
 
-pipeline       ::= name ("|>" "\n"? pipeline)+
+chain          ::= name (ws? "|" ws? chain)+
+
+record         ::= name | "{" ws? pairs ws? ","? ws? "}"
 
 value          ::= number | string | record
 
-record         ::= "{" "\n"? pairs ","? "\n"? "}" | name
+pairs          ::= pair?  |  pair (ws? "," ws? pair)+
 
-pairs          ::= pair?  |  pair ("," "\n"? pair)+
-
-pair           ::= name ":" value
+pair           ::= name ws? ":" ws? operation
 
 name           ::= [a-zA-Z_][a-zA-Z0-9_]*
 
 number         ::= [0-9]+  "."?  [0-9]*
 
-string         ::= "\"" ([^"]*) "\""
+string         ::= "\"" [^"\n]* "\""
+
+nl            ::= "\n"
+
+ws            ::= [ \t\n]+
 ```
 
-### Precedence (highest to lowest)
+#### Features
+- Final line in a block must be an `expr`
 
-1. Function application (whitespace)
-2. Record merge (`|`)
-3. Pipeline (`|>`)
-4. Lambda arrows (`->`)
-5. Let bindings (`=`)
+#### Built-in functions
+- `import` imports a task or workflow as a function
+
+
+#### Precedence (highest to lowest)
+
+1. Function application (`ws`)
+2. Record update (`//`)
+3. Function chain (`|`)
+4. Lambda arrow (`->`)
+5. Let binding (`=`)
 
 ---
 
-### BNF Grammar (Annotation Language)
+### GBNF Grammar (Annotation Language)
 
-Annotation comments appear in bash scripts as comment lines starting with `#`.
+Annotations are comment block in bash scripts, starting with `#`.
+
+#### Assumptions
+- The prefix `#` with an optional " " is removed.
+- Any "\r\n" is replaced with "\n". Any "\r" is removed.
+- "\n" is preserved
 
 ```bnf
-annotation    ::= task_doc
-                | section
+annotation    ::= task-doc section+
 
-task_doc       ::= "#@" STRING
+task-doc      ::= "@" phrase nl+
 
-section        ::= "#" "in" newline param_list
-                | "#" "out" newline param_list
-                | "#" "run" newline param_list
+section       ::= "in"  ws param-list
+                | "out" ws param-list
+                | "run" ws param-list
 
-param_list     ::= param
-                | param param_list
+param-block   ::= param | param param-block
 
-param          ::= "#" NAME_LIST TYPE default_opt DESC
+param         ::= names sp? type? sp? default? sp? desc* nl+
 
-NAME_LIST     ::= NAME
-                | NAME "," NAME_LIST
+names         ::= name ("," sp? name)*
 
-default_opt   ::= EMPTY
-                | "=" VALUE
+type          ::= (simple-type | array-type) "?"?
 
-DESC          ::= EMPTY
-                | "|" LITERAL
-                | newline "|" LITERAL
+simple-type   ::= "file" | "str" | "int" | "float"
 
-NAME          ::= [a-zA-Z_][a-zA-Z0-9_]*
-TYPE          ::= "file" | "file" "?"
-              | "str" | "str" "?"
-              | "int" | "int" "?"
-              | "float" | "float" "?"
-VALUE         ::= ${ NAME } | LITERAL
+array-type    ::= "[file]" | "[str]" | "[int]" | "[float]"
+
+default       ::= "=" value
+
+value         ::= word | string
+
+desc          ::= nl? "|" phrase
+
+phrase        ::= [^\n]+
+
+word          ::= [^\n\t |]+
+
+string        ::= "\"" [^"\n]* "\""
+
+name          ::= [a-zA-Z_][a-zA-Z0-9_]*
+
+nl            ::= "\n"
+
+sp            ::= [ \t]+
+
+ws            ::= [ \t\n]+
 ```
 
-| Token      | Pattern                    |
-|------------|----------------------------|
-| EMPTY      |                            |
-| NAME       | `[a-zA-Z_][a-zA-Z0-9_]*`   |
-| NEWLINE    | `\n`                       |
-| LITERAL    | `[^\n]+`                   |
+#### Features
 
-
-Note: The annotation language is embedded in bash scripts as comments.
-The lexer extracts comment lines and parses the annotation directives.
+- Multiple names per line: `fastq1, fastq2 file`
+- Default value binding: `= 2`
+- String interpolation: `${outbase}.bam`
+- Descriptions: prefixed by `|` can occur on the same line or on continuation lines
 
 ---
 
@@ -106,9 +131,9 @@ The lexer extracts comment lines and parses the annotation directives.
 
 ### Types
 
-| Type    | Description       |
-|---------|------------------|
-| `file`  | File path        |
+| Type    | Description     |
+|---------|-----------------|
+| `file`  | File path       |
 | `str`   | String          |
 | `int`   | Integer         |
 | `float` | Floating point  |
@@ -118,41 +143,41 @@ The lexer extracts comment lines and parses the annotation directives.
 In task scripts:
 
 ```
-# in  fastq1   file    | description
-# out bam      file   = ${outbase}.bam | description
-# run cpu      int    = 2
+# in  fastq1 file                  | description
+# out bam    file = ${outbase}.bam | description
+# run cpu         = 2
 ```
 
-- `# in`  - input parameter
-- `# out` - output parameter
+- `# in`  - input parameter (required)
+- `# out` - output parameter (required)
 - `# run` - runtime resource
 - `?` postfix marks optional input parameter: `file?`
 
 ---
 
-## Compile-Time Checks
+## Compile-time Checks
+
+Upon compilation of the workflow ...
 
 ### 1. Import Verification
-- Imported file must exist at compile time
+
+- Imported files must exist at compile time
+- Import paths are relative to the location of the workflow file
 - Circular imports are a compile error
 
-### 2. Required Inputs
-- Every required input (`type` without `?`) must be satisfied by:
-  - Workflow input (`argv`)
-  - Output from upstream task in pipeline
+### 2. Type Compatibility
 
-### 3. Type Compatibility
+**Pipeline (`a | b`):**
+- For each output of `a` with the same name as an input of `b`,
+  the types must match, and the input of `b` may be optional
 
-**Pipeline (`a |> b`):**
-- Output type → any input type (required or optional) ✓
-
-**Record Merge (`r1 | r2`):**
+**Record Union (`r1 // r2`):**
 - Same field name: types must match exactly
 - Right record overrides left (feature)
 
 **Type Matrix:**
 
-If functions `a` and `b` are pipelined together,
+If functions `a` and `b` are chained together,
 any record fields with the same name must have compatible types:
 
 | a.out  | b.in     | Allowed? |
@@ -166,11 +191,43 @@ any record fields with the same name must have compatible types:
 
 All other combinations are not allowed.
 
-### 4. Workflow Input Inference
+### 3. Workflow function and DAG
 
-- Workflow input type is inferred from the unmet inputs of all tasks
-- An input for a task is met if there is an upstream task with an output by the
-  same name
+- Workflow must return a function
+- DAG graph will be constructed and checked for circularity
+
+### 4. Inference of Workflow Input
+
+- Workflow input type is inferred from the unsatisfied inputs of all tasks
+- A task input is satisfied if there is an upstream task output with the same
+  name
+
+
+## Pre-run-time Checks
+
+Upon providing inputs to a workflow ...
+
+### 5. Workflow Input Requirements
+
+- Provided inputs will be type-checked against the workflow inputs
+- Every required input (`type` without `?`) must be satisfied by
+  an workflow input or be satisfiable by an output from an upstream task
+
+
+## Run-time Checks
+
+### 6. Dependency
+
+- Return code of each task will be checked
+- Downstream task will only be run if all of its dependent tasks succeed
+
+
+## Post-run-time Checks
+
+### 7. Completion Status
+
+- Return code of final task
+- Existence of each workflow output
 
 ---
 
@@ -178,21 +235,25 @@ All other combinations are not allowed.
 
 ### Records
 - Collection of key-value pairs
-- Keys are field names (NAME)
-- Values are strings or references
+- Keys are field names
+- Values are numbers, strings, or records
+
+### Functions
+- Importing a task or a workflow returns a function
+- Functions can defined using a lambda
 
 ### Function Application
-- `task record` applies task to record
-- Partial application returns new function
+- `f record` applies function `f` to `record`
+- Partial application returns a new function
 
 ### Pipeline
-- `A |> B |> C` desugars to:
+- `A | B | C` desugars to:
 ```
 \x ->
     a = A x
-    b = B (x | a)
-    c = C (x | a | b)
-    a | b | c
+    b = B (x // a)
+    c = C (x // a // b)
+    a // b // c
 ```
 
 ### Record Merge
@@ -203,34 +264,5 @@ All other combinations are not allowed.
 
 ## Examples
 
-### Minimal Workflow
-```swl
-align = import "align.sh"
-sort  = import "sort.sh"
-call  = import "call.sh"
-
-align |> sort |> call
-```
-
-### With Partial Application
-```swl
-align = import "align.sh"
-
-align_hg38 = align {
-    ref: "hg38.fa",
-    ref_ann: "hg38.fa.ann",
-}
-
-align_hg38 { fastq1: "sample1.r1.fq", fastq2: "sample.r2.fq" }
-```
-
-### Explicit Arguments
-```swl
-\x ->
-    a = align x
-    s = sort { bam: a.bam, outbase: x.outbase }
-    c = call { bam: s.bam, ref: x.ref, outbase: x.outbase }
-
-    { bam: s.bam, bai: s.bai, bcf: c.bcf }
-```
+See `test/` directory.
 

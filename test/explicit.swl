@@ -1,0 +1,10 @@
+align = import "align.sh"
+sort  = import "sort.sh"
+call  = import "call.sh"
+
+\x ->
+  a = align x
+	s = sort { bam: a.bam, outbase: x.outbase }
+	c = call { bam: s.bam, ref: x.ref, outbase: x.outbase }
+
+	{ bam: s.bam, bai: s.bai, bcf: c.bcf }
