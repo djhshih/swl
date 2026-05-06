@@ -61,8 +61,8 @@ ws             ::= [ \t\n]+
 
 1. Function application (`ws`)
 2. Record update (`//`)
-3. Function chain (`|`)
-4. Lambda arrow (`->`)
+3. Lambda arrow (`->`)
+4. Function chain (`|`)
 5. Let binding (`=`)
 
 ---
