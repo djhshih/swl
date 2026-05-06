@@ -21,15 +21,15 @@ lambda         ::= "\" ws? name ws? "->" ws? block
 
 operation      ::= apply | parens | get | update | chain
 
-parens         ::= "(" ws? operation ws? ")"
+parens         ::= "(" ws? expr ws? ")"
 
-apply          ::= name ws expr
+apply          ::= name ws operation
 
 get            ::= name ("." name)+
 
 update         ::= record (ws? "//" ws? record)+
 
-chain          ::= name (ws? "|" ws? chain)+
+chain          ::= name (ws? "|" ws? name)+
 
 record         ::= name | "{" ws? pairs ws? ","? ws? "}"
 
