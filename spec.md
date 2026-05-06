@@ -29,7 +29,7 @@ get            ::= name ("." name)+
 
 update         ::= record (ws? "//" ws? record)+
 
-chain          ::= name (ws? "|" ws? chain)+
+chain          ::= name (ws? "|" ws? name)+
 
 record         ::= name | "{" ws? pairs ws? ","? ws? "}"
 
