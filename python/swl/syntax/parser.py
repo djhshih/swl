@@ -286,7 +286,7 @@ class TestParser(ut.TestCase):
 
     def test_final_expr_in_block(self):
         """Test that final line in a block can be an expr."""
-        src = "\\x ->\n    a = 1\n    { a: 1 }\n"
+        src = "\\x ->\n    a = 1\n    { a: 1 }"
         p = Parser()
         result = p.parse(src)
         self.assertIsNotNone(result)
@@ -306,8 +306,8 @@ class TestParser(ut.TestCase):
         self.assertIsNotNone(result)
 
     def test_final_binding_in_block_fails(self):
-        """Test that final line being a binding fails."""
-        src = "\\x ->\n    a = 1\n    b = 2\n"
+        """Test that final line in a block being a binding fails."""
+        src = "\\x ->\n    a = 1\n    b = 2"
         p = Parser()
         with self.assertRaises(ValueError):
             p.parse(src)
