@@ -9,31 +9,31 @@
 - "\n" is preserved.
 
 ```bnf
-root           ::= block | block root
+root           ::= block (eol block)*
 
-block          ::= expr eol+ | binding eol+ block
+block          ::= (binding eol)* expr
 
-binding        ::= name ws? "=" ws? expr
+binding        ::= name "=" expr
 
 expr           ::= value | operation | lambda
 
-lambda         ::= "\" ws? name ws? "->" ws? block
+lambda         ::= "\" name "->" block
 
 operation      ::= apply | parens | get | update | chain
 
-parens         ::= "(" ws? expr ws? ")"
+parens         ::= "(" expr ")"
 
 apply          ::= name ws expr
 
 get            ::= name ("." name)+
 
-update         ::= expr (ws? "//" ws? expr)+
+update         ::= expr ( "//" expr)+
 
-chain          ::= expr (ws? "|" ws? expr)+
+chain          ::= expr ( "|" expr)+
 
-record         ::= "{" ws? pairs ws? ","? ws? "}"
+record         ::= "{" pairs ","? ws? "}"
 
-value          ::= number | string | record
+value          ::= name | number | string | record
 
 pairs          ::= pair?  |  pair (ws? "," ws? pair)+
 
@@ -50,8 +50,19 @@ eol             ::= "\n"
 ws             ::= [ \t\n]+
 ```
 
-#### Features
-- Final line in a block must be an `expr`
+#### Block Syntax (described in words)
+
+A block is one or more statements, each ending with `\n` (newline).
+
+- A **lambda body** is either:
+  - An **indented block**: multiple lines where all lines after the first are indented more than the `->` line
+  - A **single expr**: on the same line as `->`
+
+- An **indented block** ends when:
+  - A line is encountered with indentation less than or equal to the `->` line, OR
+  - End of file is reached
+
+- The **final line in a block must be an `expr`** (not a binding).
 
 #### Built-in functions
 - `import` imports a task or workflow as a function
