@@ -11,7 +11,7 @@
 ```bnf
 root           ::= block | block root
 
-block          ::= expr nl+ | binding nl+ block
+block          ::= expr eol+ | binding eol+ block
 
 binding        ::= name ws? "=" ws? expr
 
@@ -45,7 +45,7 @@ number         ::= [0-9]+  "."?  [0-9]*
 
 string         ::= "\"" ([^"\] | "\\" . )* "\""
 
-nl             ::= "\n"
+eol             ::= "\n"
 
 ws             ::= [ \t\n]+
 ```
@@ -79,7 +79,7 @@ Annotations are comment block in bash scripts, starting with `#`.
 ```bnf
 annotation    ::= task-doc section+
 
-task-doc      ::= "@" phrase nl+
+task-doc      ::= "@" phrase eol+
 
 section       ::= "in"  ws param-list
                 | "out" ws param-list
@@ -87,7 +87,7 @@ section       ::= "in"  ws param-list
 
 param-block   ::= param | param param-block
 
-param         ::= names sp? type? sp? default? sp? desc* nl+
+param         ::= names sp? type? sp? default? sp? desc* eol+
 
 names         ::= name ("," sp? name)*
 
@@ -101,7 +101,7 @@ default       ::= "=" value
 
 value         ::= word | string
 
-desc          ::= nl? "|" phrase
+desc          ::= eol? "|" phrase
 
 phrase        ::= [^\n]+
 
@@ -111,7 +111,7 @@ string        ::= "\"" [^"\n]* "\""
 
 name          ::= [a-zA-Z_][a-zA-Z0-9_]*
 
-nl            ::= "\n"
+eol            ::= "\n"
 
 sp            ::= [ \t]+
 
@@ -264,5 +264,5 @@ Upon providing inputs to a workflow ...
 
 ## Examples
 
-See `test/` directory.
+See `tests/` directory.
 
