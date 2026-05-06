@@ -14,8 +14,8 @@ call  = import "call.sh"
 align | sort | call
 ```
 
-Here, `|` is a new pipe operator that merges all upstream parameters and
-passes them to the downstream function.
+Here, `|` is the function chain operator that passes records between functions,
+and `//` is the record update operator that merges records (right overrides left).
 See `doc/README.md` for more details.
 
 This is a work in progress (see `TODO`).

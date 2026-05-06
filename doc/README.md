@@ -4,14 +4,10 @@ Tasks are annotated bash scripts.
 ```{bash}
 #@  Align paired-end sequencing reads
 # in
-#   fastq1   file                    | read 1
-#   fastq2   file                    | read 2
+#   fastq1, fastq2 file                    | read 1, read 2
 #   ref      file                    | reference sequence
-#   ref_amb  file                    | reference bwa index file
-#   ref_ann  file                    | reference bwa index file
-#   ref_bwt  file                    | reference bwa index file
-#   ref_pac  file                    | reference bwa index file
-#   ref_sa   file                    | reference bwa index file
+#   ref_amb, ref_ann, ref_bwt, ref_pac, ref_sa file
+#                                    | reference bwa index files
 #   outbase  str                     | output base name
 # out
 #   bam      file  =  ${outbase}.bam | output alignment
@@ -79,9 +75,9 @@ which is syntactic sugar for
 ```
 \x ->
     a = align x
-    s = sort ( x & a )
-    c = call ( x & a & s )
-    a & s & c
+    s = sort ( x // a )
+    c = call ( x // a // s )
+    a // s // c
 ```
 where `x` is a record of the workflow input, and `\x -> block` is a function.
 The result of a block of code is simply given by the final line.
@@ -95,7 +91,7 @@ Comparing this two blocks of code, we also note that
 
 As seen above, we merge records by
 ```
-s & c
+s // c
 ```
 The record on the right is always right (i.e. it takes precedence when both records have the same attribute).
 
