@@ -7,6 +7,9 @@
 #### Pre-condition
 - Any "\r\n" is replaced with "\n". Any "\r" is removed.
 - "\n" is preserved.
+- each block of indents (4 spaces) has been replaced with `bstart` and `bend`
+  tokens that represent start (indent) and end (de-indent) of an indented block
+- all other non-newline whitespace has been removed
 
 ```bnf
 root           ::= block (eol block)*
