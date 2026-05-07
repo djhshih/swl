@@ -7,11 +7,24 @@ def eval(fname):
     result = ck.Checker().load(fname)
     print('imports:')
     for name, imported in result.imports.items():
-        print(f'  {name}: {imported.path}')
+        print(f'  {name}: kind={imported.kind} path={imported.path}')
     print('chain errors:')
     print(result.chain_errors)
     print('inferred inputs:')
     print(sorted(result.inferred_inputs))
+    print('signature:')
+    if result.signature is None:
+        print('  None')
+    else:
+        print('  inputs:')
+        for name, param in result.signature.inputs.items():
+            print(f'    {name}: type={param.type} default={param.default!r} desc={param.desc!r}')
+        print('  outputs:')
+        for name, param in result.signature.outputs.items():
+            print(f'    {name}: type={param.type} default={param.default!r} desc={param.desc!r}')
+        print('  run:')
+        for name, param in result.signature.run.items():
+            print(f'    {name}: type={param.type} default={param.default!r} desc={param.desc!r}')
 
 
 if __name__ == '__main__':

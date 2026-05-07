@@ -86,6 +86,66 @@ _IMPORT_PARTIAL = '''partial = import "partial.swl"
 partial
 '''
 
+_RECORD_WORKFLOW = '''\\x ->
+    { foo: x.foo, bar: x.bar }
+'''
+
+_IMPORT_RECORD = '''recorder = import "record.swl"
+recorder
+'''
+
+_TASK_RESULT_WORKFLOW = '''align = import "align.sh"
+\\x ->
+    align x
+'''
+
+_IMPORT_TASK_RESULT = '''w = import "task_result.swl"
+w
+'''
+
+_INPUT_PROP_WORKFLOW = '''align = import "align.sh"
+\\x ->
+    a = align x
+    { bam: a.bam }
+'''
+
+_IMPORT_INPUT_PROP = '''w = import "input_prop.swl"
+w
+'''
+
+_CYCLE_A = '''b = import "b.swl"
+b
+'''
+
+_CYCLE_B = '''a = import "a.swl"
+a
+'''
+
+_CHAINABLE = '''# @ Chainable
+# in
+#   bam file
+# out
+#   bcf file = out.bcf
+echo chainable
+'''
+
+_WORKFLOW_CHAIN = '''w = import "task_result.swl"
+call = import "chainable.sh"
+w | call
+'''
+
+_WORKFLOW_APPLY = '''w = import "task_result.swl"
+\\x ->
+    y = w x
+    { bam: y.bam }
+'''
+
+_SCALAR_APPLY = '''align = import "align.sh"
+\\x ->
+    result = align "reads_1.fq"
+    { bam: result.bam }
+'''
+
 _BAD_PIPE = '''align = import "bad_outbase.sh"
 sort = import "sort.sh"
 align | sort
@@ -150,6 +210,94 @@ class TestWorkflowCheck(ut.TestCase):
         self.assertIn('partial', result.imports)
         self.assertEqual(result.imports['partial'].kind, 'workflow')
         self.assertIn('bam', result.imports['partial'].signature.outputs)
+
+    def test_partial_application_returns_a_function_signature(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'partial.swl', _PARTIAL)
+        result = Checker().load(path)
+        self.assertEqual(result.chain_errors, [])
+        self.assertIn('fastq1', result.signature.inputs)
+        self.assertIn('fastq2', result.signature.inputs)
+        self.assertIn('outbase', result.signature.inputs)
+        self.assertNotIn('ref', result.signature.inputs)
+        self.assertNotIn('ref_fai', result.signature.inputs)
+        self.assertIn('bam', result.signature.outputs)
+
+    def test_import_workflow_record_signature(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'record.swl', _RECORD_WORKFLOW)
+        path = self._write(root, 'import_record.swl', _IMPORT_RECORD)
+        result = Checker().load(path)
+        self.assertIn('recorder', result.imports)
+        self.assertIn('foo', result.imports['recorder'].signature.inputs)
+        self.assertIn('bar', result.imports['recorder'].signature.inputs)
+        self.assertIn('foo', result.imports['recorder'].signature.outputs)
+        self.assertIn('bar', result.imports['recorder'].signature.outputs)
+
+    def test_import_workflow_task_result_signature(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'task_result.swl', _TASK_RESULT_WORKFLOW)
+        path = self._write(root, 'import_task_result.swl', _IMPORT_TASK_RESULT)
+        result = Checker().load(path)
+        self.assertIn('w', result.imports)
+        self.assertIn('bam', result.imports['w'].signature.outputs)
+        self.assertIn('fastq1', result.imports['w'].signature.inputs)
+        self.assertIn('outbase', result.imports['w'].signature.inputs)
+
+    def test_import_workflow_input_propagation(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'input_prop.swl', _INPUT_PROP_WORKFLOW)
+        path = self._write(root, 'import_input_prop.swl', _IMPORT_INPUT_PROP)
+        result = Checker().load(path)
+        self.assertIn('w', result.imports)
+        self.assertIn('fastq1', result.imports['w'].signature.inputs)
+        self.assertIn('fastq2', result.imports['w'].signature.inputs)
+        self.assertIn('ref', result.imports['w'].signature.inputs)
+        self.assertIn('ref_fai', result.imports['w'].signature.inputs)
+        self.assertIn('outbase', result.imports['w'].signature.inputs)
+
+    def test_circular_workflow_import_fails(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'a.swl', _CYCLE_A)
+        self._write(root, 'b.swl', _CYCLE_B)
+        with self.assertRaises(ValueError):
+            Checker().load(path)
+
+    def test_direct_workflow_import_in_chain(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'chainable.sh', _CHAINABLE)
+        self._write(root, 'task_result.swl', _TASK_RESULT_WORKFLOW)
+        path = self._write(root, 'workflow_chain.swl', _WORKFLOW_CHAIN)
+        result = Checker().load(path)
+        self.assertEqual(result.chain_errors, [])
+        self.assertIn('call', result.imports)
+        self.assertEqual(result.imports['w'].kind, 'workflow')
+
+    def test_direct_workflow_import_in_application(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'task_result.swl', _TASK_RESULT_WORKFLOW)
+        path = self._write(root, 'workflow_apply.swl', _WORKFLOW_APPLY)
+        result = Checker().load(path)
+        self.assertEqual(result.chain_errors, [])
+        self.assertIn('fastq1', result.inferred_inputs)
+        self.assertIn('fastq2', result.inferred_inputs)
+        self.assertIn('ref', result.inferred_inputs)
+        self.assertIn('ref_fai', result.inferred_inputs)
+        self.assertIn('outbase', result.inferred_inputs)
+        self.assertIn('bam', result.signature.outputs)
+
+    def test_scalar_task_application_lifts_to_first_input(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'scalar_apply.swl', _SCALAR_APPLY)
+        result = Checker().load(path)
+        self.assertEqual(result.chain_errors, [])
+        self.assertIsNotNone(result.signature)
+        self.assertIn('fastq2', result.inferred_inputs)
+        self.assertIn('ref', result.inferred_inputs)
+        self.assertIn('ref_fai', result.inferred_inputs)
+        self.assertIn('outbase', result.inferred_inputs)
+        self.assertNotIn('fastq1', result.inferred_inputs)
+        self.assertIn('bam', result.signature.outputs)
 
     def test_bad_pipe_reports_chain_error(self):
         root = self._make_fixture_dir()

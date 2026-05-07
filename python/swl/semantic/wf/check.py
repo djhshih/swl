@@ -24,10 +24,41 @@ class ClosedRecord:
         self.fields = set(fields or [])
 
 
-class TaskResult:
-    def __init__(self, task_name: str, signature: TaskSignature):
-        self.task_name = task_name
+class FunctionValue:
+    def __init__(self, name: str, signature: TaskSignature, kind: str, first_input: str = None):
+        self.name = name
         self.signature = signature
+        self.kind = kind
+        self.first_input = first_input or self._first_input_name()
+
+    def _first_input_name(self):
+        for name in self.signature.inputs.keys():
+            return name
+        return None
+
+
+class ClosureValue:
+    def __init__(self, function: FunctionValue, bound_fields=None):
+        self.function = function
+        self.bound_fields = set(bound_fields or [])
+
+    @property
+    def signature(self):
+        remaining = {}
+        for name, param in self.function.signature.inputs.items():
+            if name not in self.bound_fields:
+                remaining[name] = param
+        return TaskSignature(remaining, dict(self.function.signature.outputs), {})
+
+
+class ComputationValue:
+    def __init__(self, function: FunctionValue, available_fields=None):
+        self.function = function
+        self.available_fields = set(available_fields or [])
+
+    @property
+    def signature(self):
+        return self.function.signature
 
 
 class UnknownValue:
@@ -35,12 +66,13 @@ class UnknownValue:
 
 
 class WorkflowCheck:
-    def __init__(self, tree, imports, chain_errors, inferred_inputs, issues, signature=None):
+    def __init__(self, tree, imports, errors, inferred_inputs, signature=None):
         self.tree = tree
         self.imports = imports
-        self.chain_errors = chain_errors
+        self.chain_errors = errors
+        self.errors = errors
         self.inferred_inputs = inferred_inputs
-        self.issues = issues
+        self.issues = errors
         self.signature = signature
 
 
@@ -61,10 +93,13 @@ class Checker:
             checker = TypeChecker()
             for imported in imports.values():
                 checker.add_task(imported.name, imported.signature)
-            chain_errors = self._check_chains(tree, checker)
-            inferred_inputs, issues = self._infer_inputs(tree, imports)
-            signature = self._build_workflow_signature(tree, imports, inferred_inputs, issues)
-            return WorkflowCheck(tree, imports, chain_errors, inferred_inputs, issues, signature)
+            errors = self._check_chains(tree, checker)
+            inferred_inputs, infer_errors = self._infer_inputs(tree, imports)
+            errors.extend(infer_errors)
+            signature = self._build_workflow_signature(tree, imports, inferred_inputs, errors)
+            if signature is None:
+                errors.append('Workflow must evaluate to a function')
+            return WorkflowCheck(tree, imports, errors, inferred_inputs, signature)
         finally:
             self._loading.pop()
 
@@ -133,8 +168,12 @@ class Checker:
         env = {}
         for expr in tree.body[:-1]:
             if expr.type == wf_node.NodeType.bind:
+                if self._match_import(expr.value) is not None:
+                    continue
                 env[expr.id.name] = self._eval_expr(expr.value, imports, env, demanded, issues)
-        self._eval_expr(final, imports, env, demanded, issues)
+        value = self._eval_expr(final, imports, env, demanded, issues)
+        if not self._is_function_value(value):
+            issues.append('Workflow must evaluate to a function')
         return demanded, issues
 
     def _build_workflow_signature(self, tree, imports, inferred_inputs, issues):
@@ -145,22 +184,32 @@ class Checker:
         if final.type == wf_node.NodeType.fun:
             env = {final.param.name: OpenRecord(inferred_inputs)}
             result = self._eval_function_body(final, imports, env, set(), issues)
-        else:
-            env = {}
-            for expr in tree.body[:-1]:
-                if expr.type == wf_node.NodeType.bind:
-                    env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
-            result = self._eval_expr(final, imports, env, set(), issues)
+            inputs = {
+                name: Param(name, None)
+                for name in sorted(inferred_inputs)
+            }
+            outputs = self._signature_outputs(result)
+            return TaskSignature(inputs, outputs, {})
 
-        inputs = {
-            name: Param(name, None)
-            for name in sorted(inferred_inputs)
-        }
-        outputs = self._signature_outputs(result)
-        return TaskSignature(inputs, outputs, {})
+        env = {}
+        for expr in tree.body[:-1]:
+            if expr.type == wf_node.NodeType.bind:
+                if self._match_import(expr.value) is not None:
+                    continue
+                env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
+        result = self._eval_expr(final, imports, env, set(), issues)
+        if isinstance(result, FunctionValue):
+            return result.signature
+        if isinstance(result, ClosureValue):
+            return result.signature
+        return None
 
     def _signature_outputs(self, value):
-        if isinstance(value, TaskResult):
+        if isinstance(value, ComputationValue):
+            return dict(value.signature.outputs)
+        if isinstance(value, ClosureValue):
+            return dict(value.signature.outputs)
+        if isinstance(value, FunctionValue):
             return dict(value.signature.outputs)
         if isinstance(value, ClosedRecord):
             return {name: Param(name, None) for name in sorted(value.fields)}
@@ -185,7 +234,12 @@ class Checker:
 
     def _eval_expr(self, expr, imports, env, demanded, issues):
         if expr.type == wf_node.NodeType.id:
-            return env.get(expr.name, UnknownValue())
+            if expr.name in env:
+                return env[expr.name]
+            if expr.name in imports:
+                imported = imports[expr.name]
+                return FunctionValue(expr.name, imported.signature, imported.kind)
+            return UnknownValue()
 
         if expr.type == wf_node.NodeType.rec:
             fields = set(expr.value.keys())
@@ -202,7 +256,10 @@ class Checker:
                 return UnknownValue()
             if isinstance(rec, ClosedRecord):
                 return UnknownValue()
-            if isinstance(rec, TaskResult):
+            if isinstance(rec, ComputationValue):
+                if field in rec.signature.outputs:
+                    return UnknownValue()
+            if isinstance(rec, ClosureValue):
                 if field in rec.signature.outputs:
                     return UnknownValue()
             issues.append(f'Cannot resolve field access: {expr}')
@@ -214,12 +271,12 @@ class Checker:
             return self._merge_records(left, right)
 
         if expr.type == wf_node.NodeType.apply:
-            fun_name = self._task_name(expr.fun)
+            path = self._match_import(expr)
+            if path is not None:
+                return UnknownValue()
+            fun = self._eval_expr(expr.fun, imports, env, demanded, issues)
             arg = self._eval_expr(expr.arg, imports, env, demanded, issues)
-            if fun_name in imports:
-                self._demand_task_inputs(fun_name, arg, imports, demanded)
-                return TaskResult(fun_name, imports[fun_name].signature)
-            return UnknownValue()
+            return self._apply(fun, arg, demanded, issues)
 
         if expr.type == wf_node.NodeType.block:
             local_env = dict(env)
@@ -234,16 +291,84 @@ class Checker:
             return result
 
         if expr.type == wf_node.NodeType.fun:
-            return self._eval_function_body(expr, imports, env, demanded, issues)
-
-        if expr.type == wf_node.NodeType.chain:
-            left_name = self._task_name(expr.left)
-            right_name = self._task_name(expr.right)
-            if left_name in imports and right_name in imports:
-                return TaskResult(right_name, imports[right_name].signature)
             return UnknownValue()
 
+        if expr.type == wf_node.NodeType.chain:
+            return self._eval_chain(expr, imports)
+
         return UnknownValue()
+
+    def _apply(self, fun, arg, demanded, issues):
+        if isinstance(fun, ClosureValue):
+            return self._apply_closure(fun, arg, demanded)
+        if isinstance(fun, FunctionValue):
+            return self._apply_function(fun, arg, demanded)
+        issues.append(f'Cannot apply non-function value: {fun}')
+        return UnknownValue()
+
+    def _apply_closure(self, closure, arg, demanded):
+        available = set(closure.bound_fields)
+        available.update(self._available_fields_for_apply(closure.function, arg))
+        return self._application_result(closure.function, available, demanded)
+
+    def _apply_function(self, fun, arg, demanded):
+        available = self._available_fields_for_apply(fun, arg)
+        return self._application_result(fun, available, demanded)
+
+    def _application_result(self, fun, available, demanded):
+        if isinstance(available, OpenRecord):
+            for name, param in fun.signature.inputs.items():
+                if name in available.fields:
+                    continue
+                if param.type is not None and str(param.type.value).endswith('?'):
+                    continue
+                demanded.add(name)
+                available.fields.add(name)
+            return ComputationValue(fun, available.fields)
+
+        missing = self._required_missing(fun.signature, available)
+        for name in missing:
+            demanded.add(name)
+        if missing:
+            return ClosureValue(fun, available)
+        return ComputationValue(fun, available)
+
+    def _required_missing(self, signature, available):
+        missing = set()
+        for name, param in signature.inputs.items():
+            if name in available:
+                continue
+            if param.type is not None and str(param.type.value).endswith('?'):
+                continue
+            missing.add(name)
+        return missing
+
+    def _available_fields_for_apply(self, fun, arg):
+        if isinstance(arg, OpenRecord):
+            return arg
+        if isinstance(arg, (ClosedRecord, ComputationValue, ClosureValue, FunctionValue)):
+            return self._available_fields(arg)
+        if fun.first_input is not None:
+            return {fun.first_input}
+        return set()
+
+    def _eval_chain(self, expr, imports):
+        names = self._chain_names(expr)
+        if not names:
+            return UnknownValue()
+        missing = [name for name in names if name not in imports]
+        if missing:
+            return UnknownValue()
+
+        first = imports[names[0]].signature
+        outputs = dict(first.outputs)
+        for name in names[1:]:
+            outputs.update(imports[name].signature.outputs)
+        kind = imports[names[-1]].kind
+        return FunctionValue(names[-1], TaskSignature(first.inputs, outputs, {}), kind)
+
+    def _is_function_value(self, value):
+        return isinstance(value, (FunctionValue, ClosureValue))
 
     def _merge_records(self, left, right):
         if isinstance(left, OpenRecord) and isinstance(right, OpenRecord):
@@ -254,15 +379,15 @@ class Checker:
             return OpenRecord(left.fields.union(right.fields))
         if isinstance(left, ClosedRecord) and isinstance(right, ClosedRecord):
             return ClosedRecord(left.fields.union(right.fields))
-        if isinstance(left, TaskResult) and isinstance(right, ClosedRecord):
+        if isinstance(left, ComputationValue) and isinstance(right, ClosedRecord):
             return ClosedRecord(set(left.signature.outputs.keys()).union(right.fields))
-        if isinstance(left, ClosedRecord) and isinstance(right, TaskResult):
+        if isinstance(left, ClosedRecord) and isinstance(right, ComputationValue):
             return ClosedRecord(left.fields.union(set(right.signature.outputs.keys())))
-        if isinstance(left, OpenRecord) and isinstance(right, TaskResult):
+        if isinstance(left, OpenRecord) and isinstance(right, ComputationValue):
             return OpenRecord(left.fields.union(set(right.signature.outputs.keys())))
-        if isinstance(left, TaskResult) and isinstance(right, OpenRecord):
+        if isinstance(left, ComputationValue) and isinstance(right, OpenRecord):
             return OpenRecord(set(left.signature.outputs.keys()).union(right.fields))
-        if isinstance(left, TaskResult) and isinstance(right, TaskResult):
+        if isinstance(left, ComputationValue) and isinstance(right, ComputationValue):
             return ClosedRecord(
                 set(left.signature.outputs.keys()).union(
                     set(right.signature.outputs.keys())
@@ -270,30 +395,33 @@ class Checker:
             )
         return UnknownValue()
 
-    def _demand_task_inputs(self, task_name, arg, imports, demanded):
-        signature = imports[task_name].signature
-        available = self._available_fields(arg)
-        for name, param in signature.inputs.items():
-            if name in available:
-                continue
-            if param.type is not None and str(param.type.value).endswith('?'):
-                continue
-            demanded.add(name)
-
     def _available_fields(self, value):
         if isinstance(value, OpenRecord):
             return set(value.fields)
         if isinstance(value, ClosedRecord):
             return set(value.fields)
-        if isinstance(value, TaskResult):
+        if isinstance(value, FunctionValue):
+            return set(value.signature.outputs.keys())
+        if isinstance(value, ClosureValue):
+            return set(value.signature.outputs.keys())
+        if isinstance(value, ComputationValue):
             return set(value.signature.outputs.keys())
         return set()
+
+    def _chain_names(self, expr):
+        if expr.type == wf_node.NodeType.id:
+            return [expr.name]
+        if expr.type == wf_node.NodeType.chain:
+            return self._chain_names(expr.left) + self._chain_names(expr.right)
+        return []
 
     def _task_name(self, expr):
         if expr.type == wf_node.NodeType.id:
             return expr.name
         if expr.type == wf_node.NodeType.chain:
-            return self._task_name(expr.right)
+            names = self._chain_names(expr)
+            if names:
+                return names[-1]
         return None
 
     def _children(self, expr):

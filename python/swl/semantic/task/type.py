@@ -191,6 +191,8 @@ def signature_from_task(task: task_node.Task) -> TaskSignature:
                 if section.kind == task_node.SectionType.IN:
                     _add_param(inputs, param, 'input')
                 elif section.kind == task_node.SectionType.OUT:
+                    if param.default is None:
+                        raise ValueError(f'Output parameter must have a default: {param.name}')
                     _add_param(outputs, param, 'output')
                 elif section.kind == task_node.SectionType.RUN:
                     _add_param(run, param, 'run')
