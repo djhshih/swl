@@ -41,6 +41,10 @@ evaluate_wf() {
 	printf "return: $?\n"
 	echo "force:"
 	PYTHONPATH=python python -m swl.eval_force $1
+	printf "return: $?\n"
+	echo "compile:"
+	mkdir -p tests/dag
+	PYTHONPATH=python python -m swl.compile $1 -o tests/dag/$(basename ${1%.swl}).json
 	printf "return: $?\n\n"
 }
 
