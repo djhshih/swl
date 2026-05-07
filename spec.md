@@ -1,5 +1,11 @@
 # SWL Specification
 
+## Principles
+
+- Minimalistic design specialized for building workflows
+- Catch as many issues as possible during static time
+- Lazy evaluation during run time
+
 ## Syntax
 
 ### GBNF Grammar (Workflow Language)
