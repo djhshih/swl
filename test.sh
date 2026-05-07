@@ -9,19 +9,29 @@ run_unit_tests() {
 		swl.syntax.parser \
 		swl.syntax.task.test_parser \
 		swl.syntax.task.test_interpolation \
-		swl.syntax.task.test_bash
+		swl.syntax.task.test_bash \
+		swl.semantic.task.test_type \
+		swl.semantic.wf.test_check
 	printf "unit tests passed\n\n"
 }
 
 evaluate_task() {
 	echo "file: $1"
+	echo "syntax:"
 	PYTHONPATH=python python -m swl.eval_task $1
+	printf "return: $?\n"
+	echo "semantic:"
+	PYTHONPATH=python python -m swl.eval_task_semantic $1
 	printf "return: $?\n\n"
 }
 
 evaluate_wf() {
 	echo "file: $1"
+	echo "syntax:"
 	PYTHONPATH=python python -m swl.eval $1
+	printf "return: $?\n"
+	echo "semantic:"
+	PYTHONPATH=python python -m swl.eval_wf_semantic $1
 	printf "return: $?\n\n"
 }
 

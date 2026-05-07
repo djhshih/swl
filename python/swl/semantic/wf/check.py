@@ -1,16 +1,17 @@
 import os
 
-from swl.semantic.task.type import TaskSignature, TypeChecker, signature_from_task
+from swl.semantic.task.type import Param, TaskSignature, TypeChecker, signature_from_task
 from swl.syntax.task.parser import Parser as TaskParser
 from swl.syntax.wf import node as wf_node
 from swl.syntax.wf.parser import Parser as WfParser
 
 
 class Import:
-    def __init__(self, name: str, path: str, signature: TaskSignature):
+    def __init__(self, name: str, path: str, signature: TaskSignature, kind: str):
         self.name = name
         self.path = path
         self.signature = signature
+        self.kind = kind
 
 
 class OpenRecord:
@@ -34,26 +35,38 @@ class UnknownValue:
 
 
 class WorkflowCheck:
-    def __init__(self, tree, imports, chain_errors, inferred_inputs, issues):
+    def __init__(self, tree, imports, chain_errors, inferred_inputs, issues, signature=None):
         self.tree = tree
         self.imports = imports
         self.chain_errors = chain_errors
         self.inferred_inputs = inferred_inputs
         self.issues = issues
+        self.signature = signature
 
 
 class Checker:
+    def __init__(self):
+        self._loading = []
+
     def load(self, path: str) -> WorkflowCheck:
-        with open(path, 'r') as f:
-            src = f.read()
-        tree = WfParser().parse(src)
-        imports = self._load_imports(tree, os.path.dirname(path))
-        checker = TypeChecker()
-        for imported in imports.values():
-            checker.add_task(imported.name, imported.signature)
-        chain_errors = self._check_chains(tree, checker)
-        inferred_inputs, issues = self._infer_inputs(tree, imports)
-        return WorkflowCheck(tree, imports, chain_errors, inferred_inputs, issues)
+        full_path = os.path.abspath(path)
+        if full_path in self._loading:
+            raise ValueError(f'Circular workflow import: {full_path}')
+        self._loading.append(full_path)
+        try:
+            with open(full_path, 'r') as f:
+                src = f.read()
+            tree = WfParser().parse(src)
+            imports = self._load_imports(tree, os.path.dirname(full_path))
+            checker = TypeChecker()
+            for imported in imports.values():
+                checker.add_task(imported.name, imported.signature)
+            chain_errors = self._check_chains(tree, checker)
+            inferred_inputs, issues = self._infer_inputs(tree, imports)
+            signature = self._build_workflow_signature(tree, imports, inferred_inputs, issues)
+            return WorkflowCheck(tree, imports, chain_errors, inferred_inputs, issues, signature)
+        finally:
+            self._loading.pop()
 
     def _load_imports(self, tree, base_dir: str):
         imports = {}
@@ -66,14 +79,20 @@ class Checker:
             if path is None:
                 continue
             full_path = os.path.join(base_dir, path)
-            with open(full_path) as f:
-                task = TaskParser().parse(f.read())
-            imports[expr.id.name] = Import(
-                expr.id.name,
-                full_path,
-                signature_from_task(task),
-            )
+            imports[expr.id.name] = self._load_import(expr.id.name, full_path)
         return imports
+
+    def _load_import(self, name: str, path: str) -> Import:
+        if path.endswith('.sh'):
+            with open(path) as f:
+                task = TaskParser().parse(f.read())
+            return Import(name, path, signature_from_task(task), 'task')
+        if path.endswith('.swl'):
+            check = self.load(path)
+            if check.signature is None:
+                raise ValueError(f'Imported workflow does not produce a signature: {path}')
+            return Import(name, path, check.signature, 'workflow')
+        raise ValueError(f'Unrecognized import path: {path}')
 
     def _match_import(self, expr):
         if expr.type != wf_node.NodeType.apply:
@@ -102,15 +121,52 @@ class Checker:
         if tree.type != wf_node.NodeType.block or not tree.body:
             return set(), []
 
-        fn = tree.body[-1]
-        if fn.type != wf_node.NodeType.fun:
-            return set(), []
-
+        final = tree.body[-1]
         issues = []
         demanded = set()
-        env = {fn.param.name: OpenRecord()}
-        self._eval_function_body(fn, imports, env, demanded, issues)
+
+        if final.type == wf_node.NodeType.fun:
+            env = {final.param.name: OpenRecord()}
+            self._eval_function_body(final, imports, env, demanded, issues)
+            return demanded, issues
+
+        env = {}
+        for expr in tree.body[:-1]:
+            if expr.type == wf_node.NodeType.bind:
+                env[expr.id.name] = self._eval_expr(expr.value, imports, env, demanded, issues)
+        self._eval_expr(final, imports, env, demanded, issues)
         return demanded, issues
+
+    def _build_workflow_signature(self, tree, imports, inferred_inputs, issues):
+        if tree.type != wf_node.NodeType.block or not tree.body:
+            return None
+
+        final = tree.body[-1]
+        if final.type == wf_node.NodeType.fun:
+            env = {final.param.name: OpenRecord(inferred_inputs)}
+            result = self._eval_function_body(final, imports, env, set(), issues)
+        else:
+            env = {}
+            for expr in tree.body[:-1]:
+                if expr.type == wf_node.NodeType.bind:
+                    env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
+            result = self._eval_expr(final, imports, env, set(), issues)
+
+        inputs = {
+            name: Param(name, None)
+            for name in sorted(inferred_inputs)
+        }
+        outputs = self._signature_outputs(result)
+        return TaskSignature(inputs, outputs, {})
+
+    def _signature_outputs(self, value):
+        if isinstance(value, TaskResult):
+            return dict(value.signature.outputs)
+        if isinstance(value, ClosedRecord):
+            return {name: Param(name, None) for name in sorted(value.fields)}
+        if isinstance(value, OpenRecord):
+            return {name: Param(name, None) for name in sorted(value.fields)}
+        return {}
 
     def _eval_function_body(self, fn, imports, env, demanded, issues):
         local_env = dict(env)
@@ -158,11 +214,11 @@ class Checker:
             return self._merge_records(left, right)
 
         if expr.type == wf_node.NodeType.apply:
-            task_name = self._task_name(expr.fun)
+            fun_name = self._task_name(expr.fun)
             arg = self._eval_expr(expr.arg, imports, env, demanded, issues)
-            if task_name in imports:
-                self._demand_task_inputs(task_name, arg, imports, demanded)
-                return TaskResult(task_name, imports[task_name].signature)
+            if fun_name in imports:
+                self._demand_task_inputs(fun_name, arg, imports, demanded)
+                return TaskResult(fun_name, imports[fun_name].signature)
             return UnknownValue()
 
         if expr.type == wf_node.NodeType.block:

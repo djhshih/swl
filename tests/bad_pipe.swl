@@ -1,0 +1,4 @@
+align = import "bad_outbase.sh"
+sort  = import "sort.sh"
+
+align | sort
