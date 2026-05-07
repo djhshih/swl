@@ -76,10 +76,16 @@ A block is one or more statements, each ending with `\n` (newline).
 #### Built-in functions
 - `import` imports a task or workflow as a function
 
+#### Workflow well-formedness
+- A workflow must evaluate to a function.
+- A workflow whose final value is a scalar, record, or saturated computation is invalid.
+
 #### Name binding rules
-- Variable names are unique within their scope.
+- Variable names are unique within their immediate scope.
 - A variable name cannot be bound twice in the same scope.
-- Import bindings follow the same rule; an imported name cannot be rebound later in the same scope.
+- Import bindings follow the same rule; duplicate import names in the same scope are errors.
+- Any nested scope may shadow names from outer scopes.
+- This shadowing rule applies uniformly to lambda parameters and bindings inside nested blocks.
 
 
 #### Precedence (highest to lowest)
@@ -126,6 +132,13 @@ array-type    ::= "[file]" | "[str]" | "[int]" | "[float]"
 default       ::= "=" value
 
 value         ::= word | string
+
+#### Task parameter scope rules
+- Input parameters form one scope.
+- Output parameters form one scope.
+- Run parameters form one scope.
+- Duplicate names within a single section scope are errors.
+- It is legal for an input parameter to have the same name as an output parameter.
 
 desc          ::= eol? "|" phrase
 

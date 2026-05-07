@@ -10,13 +10,12 @@
 - The workflow semantic layer now supports importing `.swl` workflows in addition to `.sh` tasks, but its workflow signatures are still approximate.
 - The workflow semantic layer still has major limitations: it does not yet track precise value provenance or full record-flow semantics for arbitrary workflow expressions.
 - The current checker does not yet implement the newly-settled lazy partial-application model. It still approximates some partial applications as if they were immediate applications during inference.
-- The current checker does not yet implement scalar-to-record lifting for task application, where a scalar argument should be lifted into a record field named after the first declared task input.
-- IR representation strategy has been discussed but not implemented yet. Current recommendation: semantic IR should be tree-shaped, while forced execution IR should be graph-shaped / DAG-like.
+- IR representation strategy is now partially implemented: semantic IR is tree-shaped, but forced execution IR / DAG construction is still missing.
 - We should keep a note of the tradeoff against a decorated-AST approach: a decorated AST is simpler initially, but imports, chain normalization, closures, lazy application, and later forcing introduce semantic objects that differ enough from raw syntax to justify a small lowering/normalization step.
-- We should continue to validate whether a single semantic `IRImport(kind=...)` node is sufficient, or whether task/workflow imports eventually need separate IR node classes. Current recommendation is to use a single import node in semantic IR and branch on kind only during forcing.
-- The current checker does not yet enforce that a workflow must evaluate to a function.
+- The semantic IR no longer uses an import-specific node; imports are reduced eagerly to cached `Function` values. Remaining question: whether `Closure` should also be folded into a more unified function-like representation.
 - Workflow output inference does not yet implement the newly-specified chain-output rule: when a workflow evaluates to a chain, outputs should be the union of the output variables from left to right.
-- Task semantics do not yet enforce that all task output params must have defaults.
 - Task output defaults may include glob patterns, but glob-aware validation/representation is not yet implemented explicitly.
 - `bash.py` is intended to support pre-runtime and runtime bash validation after interpolation, but this two-stage validation model is not yet implemented.
-- All issues are intended to be errors unless explicitly specified otherwise, but the current code still distinguishes some categories operationally (`chain_errors` vs `issues`).
+- All issues are intended to be errors unless explicitly specified otherwise, but the current code still distinguishes some categories operationally (`chain_errors` vs `issues` / `errors`).
+- Scope validation is now done semantically. The language rule is that nested scopes may shadow outer scopes, while duplicate bindings in the same immediate scope are errors.
+- The current checker's lazy partial-application model is still too field-set/signature oriented: closures remember mostly bound field names rather than bound values/provenance, and saturated applications become approximate computation summaries rather than structured lazy application values.

@@ -137,6 +137,9 @@ Current behavior:
 - performs conservative workflow input inference
 - performs approximate workflow output/signature inference
 - detects circular workflow imports
+- enforces duplicate-binding scope rules semantically
+- permits shadowing from any nested scope into outer scopes
+- enforces that a workflow must evaluate to a function
 
 ### 3.3 Semantic diagnostics
 Implemented in:
@@ -148,18 +151,24 @@ Current behavior:
 - workflow semantic diagnostics print:
   - imports
   - import kinds
-  - chain errors
+  - chain errors / semantic errors
   - inferred inputs
   - inferred workflow signature
 
 ### 3.4 Current semantic model
-The current semantic checker already uses a very small symbolic value model:
+The current semantic checker already uses a small symbolic value model:
 - open records
 - closed records
-- task/workflow results
+- function values
+- closure values
+- computation values
 - unknown values
 
 This has been useful for inference, but it is still only an approximation layer.
+Task semantic scope rules are also now enforced at signature-building time:
+- inputs, outputs, and run parameters each have their own scope
+- duplicates are rejected within a scope
+- input/output name overlap is allowed
 
 ## Phase 4: Settle evaluation model before IR - DONE
 
@@ -200,7 +209,7 @@ The current workflow checker does not yet fully implement this lazy partial-appl
 It still approximates such expressions using immediate-demand reasoning.
 That is acceptable temporarily, but IR work should replace that approximation with a first-class lazy function model.
 
-## Phase 5: IR design - NEXT
+## Phase 5: IR design - IN PROGRESS
 
 The next major phase is to build a proper intermediate representation that matches the lazy semantics above.
 
@@ -212,8 +221,8 @@ The IR should:
 - preserve enough structure for type/input/output checking
 - lower naturally into an execution DAG when computation is forced
 
-### 5.2 Proposed runtime/IR value kinds
-Suggested value categories:
+### 5.2 Runtime/IR value kinds
+Current intended value categories:
 
 #### Primitive / literal values
 - strings
@@ -246,18 +255,34 @@ A lazy application result representing:
 
 This is the key value kind missing today.
 
-### 5.3 Proposed IR nodes
-At minimum, introduce explicit IR nodes roughly like:
-- `IRLiteral`
-- `IRRecord`
-- `IRField`
-- `IRUpdate`
-- `IRImport`
-- `IRLambda`
-- `IRClosure`
-- `IRApply`
-- `IRBind`
-- `IRBlock`
+### 5.3 Current semantic IR nodes
+Current semantic IR is implemented under:
+- `python/swl/ir/node.py`
+- `python/swl/ir/lower.py`
+- `python/swl/eval_ir.py`
+
+Current nodes include:
+- `Literal`
+- `Unknown`
+- `Name`
+- `Record`
+- `Field`
+- `Update`
+- `Function`
+- `Lambda`
+- `Closure`
+- `Apply`
+- `Chain`
+- `Bind`
+- `Block`
+
+Current lowering decisions:
+- import bindings are reduced at compile time into `Function` values
+- import-only binds are not emitted as IR `Bind`s
+- empty top-level import-only blocks reduce directly to their result
+- imported workflow functions carry cached lowered bodies
+- imported task/workflow functions are cached by function name in the lowerer
+- `eval_ir.py` prints the function cache first, then the lowered tree
 - `IRChain`
 - `IRName`
 
@@ -654,3 +679,28 @@ Implement the first semantic IR with the lazy function model:
 - task outputs require defaults and may include glob patterns
 
 That is the cleanest bridge from the current checker to a real execution model.
+
+## Next implementation steps
+
+1. Tighten workflow semantic checking around function-valued workflows further:
+   - reduce remaining approximation gaps between lambda inference and top-level workflow signature inference
+   - make lazy partial-application modeling less field-set-oriented and more value/provenance-oriented
+   - decide how closures should carry bound values/provenance, not just bound field names
+
+2. Normalize semantic error reporting:
+   - move toward a single `errors` surface instead of legacy `chain_errors` naming
+   - keep diagnostics output aligned with that simplification
+
+3. Continue semantic IR cleanup:
+   - decide whether `Closure` remains its own node or is folded into a function-like representation later
+   - consider whether repeated `Apply(Function, arg)` structure should be shared more aggressively before forcing
+
+4. Implement `python/swl/ir/force.py`:
+   - lower semantic IR into an execution DAG / graph form
+   - instantiate cached workflow bodies only when forced
+   - realize task applications as execution leaves
+
+5. Add more semantic tests around scope and function-ness:
+   - nested block duplicate-binding errors
+   - uniform shadowing behavior across nested scopes
+   - imported workflow final-value failures
