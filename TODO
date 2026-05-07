@@ -1,4 +1,5 @@
 Python:
+- semantic checker
 - ast interpretation
 - transpile to cwl
 
@@ -6,5 +7,6 @@ Rust:
 - worflow lexer
 - worflow parser
 - task parser
+- semantic checker
 - ast interpretation
 - transpile to cwl
