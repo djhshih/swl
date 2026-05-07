@@ -151,6 +151,22 @@ sort = import "sort.sh"
 align | sort
 '''
 
+_NON_FUNCTION_RECORD = '''{ foo: 1 }
+'''
+
+_NON_FUNCTION_SCALAR = '''1
+'''
+
+_NON_FUNCTION_APPLY = '''align = import "align.sh"
+align {
+  fastq1: "r1.fq",
+  fastq2: "r2.fq",
+  ref: "hg38.fa",
+  ref_fai: "hg38.fa.fai",
+  outbase: "sample"
+}
+'''
+
 
 class TestWorkflowCheck(ut.TestCase):
     def _write(self, root, name, content):
@@ -305,6 +321,27 @@ class TestWorkflowCheck(ut.TestCase):
         result = Checker().load(path)
         self.assertEqual(len(result.chain_errors), 1)
         self.assertIn('outbase', result.chain_errors[0])
+
+    def test_workflow_record_final_value_reports_not_a_function(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'record_final.swl', _NON_FUNCTION_RECORD)
+        result = Checker().load(path)
+        self.assertIsNone(result.signature)
+        self.assertIn('Workflow must evaluate to a function', result.errors)
+
+    def test_workflow_scalar_final_value_reports_not_a_function(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'scalar_final.swl', _NON_FUNCTION_SCALAR)
+        result = Checker().load(path)
+        self.assertIsNone(result.signature)
+        self.assertIn('Workflow must evaluate to a function', result.errors)
+
+    def test_workflow_saturated_task_application_reports_not_a_function(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'apply_final.swl', _NON_FUNCTION_APPLY)
+        result = Checker().load(path)
+        self.assertIsNone(result.signature)
+        self.assertIn('Workflow must evaluate to a function', result.errors)
 
 
 if __name__ == '__main__':

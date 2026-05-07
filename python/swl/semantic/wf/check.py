@@ -308,7 +308,18 @@ class Checker:
             return result
 
         if expr.type == wf_node.NodeType.fun:
-            return UnknownValue()
+            fn_issues = []
+            fn_demanded = set()
+            local_env = dict(env)
+            local_env[expr.param.name] = OpenRecord()
+            body_value = self._eval_function_body(expr, imports, local_env, fn_demanded, fn_issues)
+            body_outputs = self._signature_outputs(body_value)
+            inputs = {
+                name: Param(name, None)
+                for name in sorted(fn_demanded)
+            }
+            signature = TaskSignature(inputs, body_outputs, {})
+            return FunctionValue(expr.param.name, signature, 'lambda')
 
         if expr.type == wf_node.NodeType.chain:
             return self._eval_chain(expr, imports)
