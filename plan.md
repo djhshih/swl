@@ -2,437 +2,368 @@
 
 ## Phase 1: Workflow parser - COMPLETE
 
-The workflow parser is already structured well as three modules:
+The workflow parser is structured as:
 - `python/swl/syntax/wf/lexer.py`
 - `python/swl/syntax/wf/node.py`
 - `python/swl/syntax/wf/parser.py`
 
-That structure should be the model for task parsing as well, with one important difference:
-- workflow syntax needs a lexer because it is expression-oriented
-- task annotation syntax is primarily line-oriented
+This remains the model for workflow syntax.
 
-## Phase 2: Task parser refactor
+## Phase 2: Task syntax refactor - MOSTLY COMPLETE
 
-### Current state
+### Current implemented structure
 
-Task parsing is currently split across:
-- `python/swl/syntax/task/annotation.py`
-- `python/swl/syntax/task/parser.py`
-- `python/swl/syntax/task/type.py`
-
-But the implementation is incomplete and inconsistent:
-- `annotation.py` mixes parsing logic with ad-hoc data structures
-- `parser.py` is an older incomplete parser sketch and currently contains syntax/runtime issues
-- `type.py` contains semantic/type-checking concepts, not syntax nodes
-- there is no clean separation between:
-  - extracting annotation text from shell comments
-  - parsing annotation syntax
-  - parsing interpolation syntax
-  - representing parsed task metadata as structured nodes
-  - semantic typing/checking
-
-### Target structure
-
-Refactor task handling into separate syntax and semantic layers.
-
-Recommended syntax-side files:
+Task syntax is now organized as:
 - `python/swl/syntax/task/node.py`
 - `python/swl/syntax/task/parser.py`
 - `python/swl/syntax/task/interpolation.py`
+- `python/swl/syntax/task/bash.py`
+- `python/swl/eval_task.py`
 
-Recommended semantic-side file:
+Semantic task typing is now separated as:
 - `python/swl/semantic/task/type.py`
 
-This separates:
-- task annotation syntax
-- interpolation syntax
+This is a major improvement over the old state because we now have clear boundaries between:
+- task annotation parsing
+- interpolation parsing
+- optional bash-body analysis
 - semantic typing/checking
 
-## Phase 2.1: Define task AST/data nodes in `task/node.py`
+### What is complete
 
-`task/node.py` should represent parsed task syntax, not type-checker logic.
+#### Task annotation parser
+Implemented in:
+- `python/swl/syntax/task/parser.py`
 
-Recommended nodes:
+Current behavior:
+- splits task file into annotation region and raw body
+- parses task doc line
+- parses sections: `in`, `out`, `run`
+- parses parameter names, optional type, default, and description
+- supports multiline description continuations beginning with `|`
+- parses defaults through `task/interpolation.py`
+- returns `Task(annotation, body)`
 
+#### Task syntax/data nodes
+Implemented in:
+- `python/swl/syntax/task/node.py`
+
+Current nodes:
 - `Task`
-  - `annotation: Annotation`
-  - `body: str`
-
 - `Annotation`
-  - `doc: str | None`
-  - `sections: list[Section]`
-  - or, if simpler for downstream use:
-  - `inputs: list[Param]`
-  - `outputs: list[Param]`
-  - `run: list[Param]`
-
 - `Section`
-  - `kind: SectionType`
-  - `params: list[Param]`
-
 - `Param`
-  - `names: list[str]`
-  - `type: str | None`
-  - `default: Interpolation | None`
-  - `desc: str | None`
+- `SectionType`
 
-Suggested enum:
-- `SectionType = Enum('SectionType', ['in_', 'out', 'run'])`
+#### Shared interpolation parser
+Implemented in:
+- `python/swl/syntax/task/interpolation.py`
+
+Current behavior:
+- parses plain literals
+- parses `$x`
+- parses `${x}`
+- parses mixed forms like `${outbase}.bam`
+- parses conservative expression forms like `${memory / cpu}`
+
+This parser is shared across:
+- annotation defaults now
+- bash-body analysis later or optionally now
+
+#### Optional bash-body analyzer
+Implemented in:
+- `python/swl/syntax/task/bash.py`
+
+Current behavior:
+- keeps bash analysis separate from task annotation parsing
+- parses simple assignments conservatively
+- parses command lines conservatively
+- extracts interpolation-bearing shell words using the shared interpolation parser
 
 Important design choice:
-- keep these nodes declarative
-- do not mix type compatibility or workflow inference logic into `task/node.py`
-- interpolation values can be stored as parsed interpolation objects from `task/interpolation.py`
+- `Task` still stores raw body text only
+- `bash.py` remains a separate analysis step
+- this is intentional and keeps the task parser simpler
 
-## Phase 2.2: Where should `type.py` live?
+#### Diagnostic parser entrypoint
+Implemented in:
+- `python/swl/eval_task.py`
 
-You renamed `node.py` to `type.py`, which is an improvement because that file is not a node module.
+This mirrors `python/swl/eval.py` and prints:
+- annotation doc
+- sections
+- params
+- defaults
+- body
 
-Recommendation:
-- yes, move it to `python/swl/semantic/task/type.py`
+#### Test integration
+Implemented in:
+- `test.sh`
 
-Reason:
-- the contents are semantic/type-system logic, not syntax
-- `TypeKind`, `TaskSignature`, `TypeChecker`, and compatibility checks belong to semantic analysis
-- keeping them under `syntax/` blurs the boundary between parsing and semantic validation
+Current behavior:
+- runs unit tests
+- runs task parser diagnostics on all `tests/*.sh`
+- runs workflow diagnostics/evaluation on all `tests/*.swl`
 
-So the better long-term ownership is:
-- `python/swl/syntax/task/node.py` -> parsed task syntax structures
-- `python/swl/syntax/task/parser.py` -> task annotation parser
-- `python/swl/syntax/task/interpolation.py` -> interpolation parser + interpolation nodes
-- `python/swl/semantic/task/type.py` -> type definitions and type checking
+#### Unit tests added
+- `python/swl/syntax/task/test_parser.py`
+- `python/swl/syntax/task/test_interpolation.py`
+- `python/swl/syntax/task/test_bash.py`
 
-If you want a minimal migration path:
-1. leave `python/swl/syntax/task/type.py` temporarily in place
-2. add a new `python/swl/semantic/task/type.py`
-3. move imports gradually
-4. eventually delete or shim the old location
+These cover the basic parsing surface and current shell examples.
 
-## Phase 2.3: Implement `task/parser.py` as the annotation parser
+## Phase 3: Syntax cleanup before semantics - RECOMMENDED
 
-`annotation.py` should be split so that:
-- parsing lives in `task/parser.py`
-- parsed data structures live in `task/node.py`
+Before working deeply on semantics and interpretation, there are a few worthwhile cleanup steps.
 
-Recommended responsibility split:
+These are not architectural rewrites, just polishing the syntax layer so the semantic layer has stable inputs.
 
-- `task/parser.py`
-  - public entry point: `Parser.parse(script_content: str) -> node.Task`
-  - split shell script into annotation region and body region
-  - normalize comment prefixes (`#` and optional following space)
-  - parse task doc line (`@ ...`)
-  - parse sections: `in`, `out`, `run`
-  - parse parameter lines, including:
-    - multiple names: `a, b file`
-    - optional type: `file?`
-    - defaults: `= 2`, `= "x"`, `= ${outbase}.bam`
-    - descriptions: `| text`
-    - continuation description lines beginning with `|`
-  - call `interpolation.py` to parse default values where needed
-  - return both parsed annotation and raw body
+### 3.1 Normalize task annotation shape for downstream use
 
-- `task/node.py`
-  - data classes / node classes only
+Right now `Annotation` stores `sections`, and downstream code will probably repeatedly search them.
 
-Then `annotation.py` can either:
-- be removed entirely, or
-- become a thin compatibility wrapper during transition
+Possible improvement:
+- keep `sections` for preserving source structure
+- also add convenient accessors or normalized views:
+  - `annotation.inputs`
+  - `annotation.outputs`
+  - `annotation.run`
 
-## Phase 2.4: Parsing strategy for annotation syntax
+This is optional, but likely useful before semantic work.
 
-Unlike workflow syntax, task annotations are line-oriented.
+### 3.2 Decide how strict the task parser should be
 
-A simple modular parser can work in two layers:
-
-### Layer 1: comment extraction / normalization
-
-Input is full shell script text.
-
-Produce:
-- normalized annotation lines
-- raw body text
-
-By:
-- reading top-of-file comment lines that form the annotation block
-- removing leading `#`
-- removing one optional following space
-- preserving line order
-- preserving blank lines where meaningful
-- stopping annotation capture when shell code begins
-
-This layer is separate from syntax parsing.
-
-### Layer 2: line-based annotation parser
-
-Consume normalized annotation lines with a small cursor-based parser.
-
-Suggested helpers in `task/parser.py`:
-- `_at(i=0)` -> current normalized line
-- `_eat()` -> consume line
-- `_eof()` -> no more lines
-- `_parse_doc()`
-- `_parse_section()`
-- `_parse_param()`
-- `_parse_names()`
-- `_parse_type()`
-- `_parse_default()`
-- `_parse_desc()`
-
-This keeps the structure similar in spirit to `wf/parser.py`, even though it operates on lines rather than tokens.
-
-## Phase 2.5: Do we need a lexer like in `wf/`?
-
-For annotation parsing: probably not at first.
-
-Why a lexer is not strictly needed for annotations:
-- annotation syntax is mostly line-oriented, not expression-oriented
-- section boundaries are line-based (`in`, `out`, `run`)
-- parameter syntax is shallow enough to parse directly from each line
-- defaults can be handed off to `interpolation.py` rather than fully tokenized by the annotation parser
-
-Recommendation for annotations:
-- do not build a full lexer yet
-- first implement a clean line-based `task/parser.py`
-- if parameter parsing becomes messy, introduce a very small param-line lexer later
-
-So for task annotations the likely end state is:
-- definitely `task/node.py`
-- definitely `task/parser.py`
-- probably no separate annotation lexer yet
-
-## Phase 2.6: Bash interpolation should be a separate shared parser module
-
-The task file contains at least two syntaxes:
-- annotation comments at the top
-- interpolation syntax used in defaults and shell body text
-
-These should not be handled by one parser.
-
-Reason:
-- annotation parsing is metadata parsing
-- interpolation parsing is shell-like expression parsing
-- combining them will make the task parser harder to reason about and harder to test
-
-Examples from `tests/*.sh`:
-- `${outbase}.bam`
-- `${outbase}.bai`
-- `${cpu}`
-- `${memory / cpu}`
-
-These appear in both:
-- annotation defaults, e.g. `#   bam file = ${outbase}.bam`
-- shell body commands, e.g. `> ${outbase}.bam`
+Open questions to settle before semantics:
+- should duplicate names in one section be a parse error or semantic error?
+- should duplicate names across `in/out/run` be allowed syntactically?
+- should empty sections be allowed?
+- should task files require exactly one doc line?
+- should body-less tasks be allowed?
 
 Recommendation:
-- keep interpolation in one shared file for now:
-  - `python/swl/syntax/task/interpolation.py`
+- keep parser responsible only for surface syntax
+- move most name-validation and consistency checks into semantics
+- but explicitly document these boundaries now
 
-Responsibilities of `interpolation.py`:
-- define interpolation nodes
-- parse interpolation fragments/words
-- parse variable references: `$x`, `${x}`
-- parse concatenated interpolated words like `${outbase}.bam`
-- conservatively represent braced expressions like `${memory / cpu}`
-- be reusable from both:
-  - `task/parser.py` when parsing annotation defaults
-  - future bash-body analysis when scanning shell code
+### 3.3 Add a few missing parser tests
 
-Important:
-- this does not need to be a full bash parser initially
-- it should parse only the subset needed by current task files and tests
-- interpolation logic should be implemented once here and reused everywhere else
+Useful remaining tests:
+- optional types like `file?`
+- array types like `[file]`
+- default values with quotes
+- duplicate section headers
+- empty sections
+- malformed default text in annotations
+- `$x` form in interpolation, not just `${x}`
+- interpolation with multiple literals and vars combined
 
-## Phase 2.7: Keep `interpolation.py` as one file for now
+### 3.4 Decide whether `bash.py` is actually needed
 
-To keep the refactor manageable, `interpolation.py` should contain both:
-- interpolation node definitions
-- interpolation parsing logic
+Current status:
+- it exists
+- it is separate
+- it is intentionally conservative
 
-That means no separate `interpolation_node.py` for now.
+Recommendation:
+- keep it, but treat it as provisional
+- do not let it drive semantic design yet
+- if semantics can proceed from annotation metadata alone, do that first
+- only deepen bash analysis when interpretation actually needs it
 
-Suggested shapes in `python/swl/syntax/task/interpolation.py`:
-- `Word(parts)`
-- `Literal(text)`
-- `Var(name)`
-- `Expr(text)`
+This matches the current preference:
+- raw body remains in `Task`
+- bash analysis remains optional and separate
+
+## Phase 4: Semantic layer design - NEXT
+
+The next major phase should be semantics, built on top of the stabilized syntax layer.
+
+### 4.1 Task signature construction
+
+Use parsed task annotations to construct semantic task signatures.
+
+Likely input:
+- `syntax.task.node.Task`
+
+Likely output:
+- `semantic.task.type.TaskSignature`
+
+Responsibilities:
+- convert annotation parameter types into `TypeKind`
+- convert `in/out/run` sections into normalized maps
+- preserve defaults for later evaluation/substitution
+
+Suggested API:
+- `signature_from_task(task) -> TaskSignature`
+
+This is the bridge between syntax and semantics.
+
+### 4.2 Validation of task signatures
+
+Semantic validation should likely include:
+- duplicate parameter names within a section
+- duplicate parameter names across sections if disallowed
+- output params should probably have types
+- required vs optional input interpretation
+- consistency of runtime params if any constraints exist
+
+These are better handled in semantics than parsing.
+
+### 4.3 Workflow semantic checking
+
+Then build workflow semantics on top of:
+- parsed workflow AST
+- imported task signatures
+
+This phase should handle:
+- import resolution
+- type compatibility in chains
+- compatibility in record update / merge where relevant
+- workflow input inference
+- workflow output inference if needed
+- circular import checks
+- DAG construction and cycle detection
+
+### 4.4 Interpretation / evaluation
+
+Only after task signatures and workflow semantics are stable should we move into interpretation.
+
+Likely steps:
+- `import "task.sh"` returns a callable task value/signature
+- `import "workflow.swl"` returns a callable workflow value
+- evaluate workflow AST into an executable DAG or intermediate form
+- perform partial application and chaining semantics
+- resolve task defaults and input propagation
+
+## Phase 5: What still may be needed before interpretation
+
+Strictly speaking, we can start semantics now.
+
+But a few small things may still be helpful first.
+
+### 5.1 Add syntax-to-semantic bridge functions
+
+This is probably the single most useful next step before broader interpretation.
 
 Examples:
-- `${outbase}.bam` -> `Word([Var('outbase'), Literal('.bam')])`
-- `${cpu}` -> `Word([Var('cpu')])`
-- `${memory / cpu}` -> `Word([Expr('memory / cpu')])`
+- parse task file -> `Task`
+- build task signature -> `TaskSignature`
+- parse workflow file -> workflow AST
 
-This is a good compromise:
-- modular enough to keep interpolation separate from annotation parsing
-- simple enough to avoid too many tiny files right now
+This avoids mixing parsing with semantic logic.
 
-## Phase 2.8: Suggested parser layering for task files
+### 5.2 Decide how interpolation should be represented semantically
 
-Recommended flow:
+Question:
+- should defaults remain syntax nodes (`Word`, `Var`, `Expr`) until execution?
+- or should some be normalized earlier?
 
-1. `task/parser.py`
-   - split file into annotation region and body region
-   - parse annotation region into `Annotation`
-   - keep body as raw text
-   - parse annotation defaults through `interpolation.py`
-   - return `Task(annotation, body)`
+Recommendation:
+- keep interpolation as syntax objects for now
+- only resolve them during later evaluation when a value environment exists
 
-2. `task/interpolation.py`
-   - parse interpolation values from annotation defaults
-   - also serve as the shared interpolation parser for shell body analysis
-   - later, a bash-body analyzer can call into this module rather than reimplement interpolation parsing
+That keeps semantics simpler.
 
-3. optional future `task/bash.py`
-   - scan/analyze shell body
-   - reuse `interpolation.py` for `${...}` and `$x` parsing
+### 5.3 Clarify how much shell semantics we need
 
-4. `semantic/task/type.py`
-   - build task signatures
-   - perform type validation
-   - handle compatibility checks for workflows/tasks
+Important question before interpretation:
+- do workflow/task semantics depend only on annotations?
+- or do we need to understand the bash body to determine outputs or dependencies?
 
-This keeps concerns separated and allows tests for each layer independently.
+Given current examples, annotations already declare inputs/outputs/run.
 
-## Phase 2.9: Concrete recommendation on parser boundaries
+Recommendation:
+- treat annotation metadata as authoritative for semantics
+- treat bash body as opaque execution text for now
+- only use `bash.py` later for optional validation or interpolation support if needed
 
-Yes, interpolation should be a different parser/module from the annotation parser.
+This means we probably do not need deeper shell parsing before starting semantics.
 
-We should have:
-- one parser for task annotations
-- one shared parser for interpolation syntax
-- one semantic module for task typing/checking
+## Recommended next steps
 
-Not necessarily a full bash parser, but definitely a separate interpolation parser from the annotation parser.
+### Immediate next step
+Implement a syntax-to-semantic bridge for tasks:
+- `Task` -> `TaskSignature`
 
-The key rule is:
-- parse interpolation once in `task/interpolation.py`
-- reuse it from both annotation parsing and later bash-body analysis
+That will make the task parser immediately useful to the semantic layer.
 
-## Phase 2.10: Proposed concrete APIs
+### Then
+Implement semantic import handling and workflow checking:
+- resolve imported `.sh` and `.swl` files
+- construct signatures for imported tasks
+- check type compatibility in workflow chains
+- infer workflow inputs
 
-### Annotation/task parser API
+### Then
+Implement interpretation:
+- evaluate imports into callable values
+- evaluate workflow expressions
+- build DAG/intermediate execution representation
 
-- `Parser.parse(script: str) -> node.Task`
-- optionally `parse_file(path: str) -> node.Task`
+## Phase 6: Concrete next implementation steps - IN PROGRESS
 
-Behavior:
-- returns parsed task annotation plus raw body
-- raises `ValueError` on malformed annotation syntax
-- parses annotation defaults into interpolation nodes
+### 6.1 Build task signature bridge
+- add `signature_from_task(task)` in `python/swl/semantic/task/type.py`
+- map parsed task annotation params into:
+  - `inputs`
+  - `outputs`
+  - `run`
+- parse param type strings with `parse_type()`
+- preserve defaults as syntax/interpolation objects for later evaluation
+- detect duplicate parameter names at semantic boundary
 
-### Interpolation parser API
+### 6.2 Add semantic tests for task signatures
+- valid task -> `TaskSignature`
+- duplicate input/output names fail
+- missing required types where disallowed fail
+- run params are preserved
+- outputs with interpolation defaults are preserved
 
-In `python/swl/syntax/task/interpolation.py`:
-- `parse_word(s: str) -> Word`
-- maybe `parse_braced(s: str) -> Var | Expr`
+### 6.3 Add diagnostic entrypoint for semantic task signature
+- add something like `python/swl/eval_task_semantic.py`
+- print parsed task plus constructed `TaskSignature`
+- use this from `test.sh` if helpful
 
-Behavior:
-- parses interpolation fragments used in defaults and shell words
-- raises `ValueError` on malformed interpolation syntax
+### 6.4 Start workflow semantic import layer - DONE (first pass)
+- parse workflow
+- find imported task paths
+- load imported task files
+- build task signatures for imported tasks
+- perform first-pass chain checking and workflow input inference
 
-### Semantic type API
+### 6.5 Build workflow semantic IR - IN PROGRESS
+- introduce symbolic workflow values for:
+  - records
+  - task results
+  - unknown values
+- evaluate workflow bodies conservatively
+- support update/record/function workflows better than simple chain-only analysis
+- replace ad-hoc input inference with proper demand-driven record-field inference
+- build approximate workflow signatures from workflow bodies
+- support importing `.swl` workflows semantically, not just `.sh` tasks
 
-In `python/swl/semantic/task/type.py`:
-- `parse_type(type_str: str) -> TypeKind`
-- `types_compatible(output_type, input_type) -> bool`
-- `TaskSignature`
-- `TypeChecker`
+### 6.6 Record issues during implementation
+- document mismatches between current code, spec, and desired semantics in `issues.md`
+- especially note unresolved questions around:
+  - interpolation resolution timing
+  - whether outputs must always have defaults
+  - how much shell analysis is needed for execution
 
-## Phase 2.11: Validation boundaries
+## Summary answer: is there anything else to do before semantics and interpretation?
 
-Validation to include in `task/parser.py`:
-- task doc line must begin with `@`
-- at least one section must exist
-- only `in`, `out`, `run` are valid section names
-- parameter lines must contain at least one name
-- malformed annotation defaults should raise `ValueError`
+Not much.
 
-Validation to include in `interpolation.py`:
-- malformed `${...` expressions
-- malformed variable references
+The main parser architecture is now in a good place.
 
-Validation to defer to semantic/type phase:
-- duplicate parameter names across sections
-- compatibility with workflow chaining
-- required/optional semantics beyond surface syntax
-- interpretation of arithmetic-like shell expressions inside `${...}`
+Before semantics, the only really worthwhile remaining syntax-side work is:
+- a few more focused parser tests
+- possibly small convenience accessors on `Annotation`
+- a clear bridge from parsed `Task` to semantic `TaskSignature`
 
-## Phase 2.12: Suggested migration steps
+We do **not** need to fully parse bash before starting semantics.
 
-1. Keep `wf/` untouched
-2. Add `python/swl/syntax/task/node.py` for actual task syntax/data nodes
-3. Rewrite `python/swl/syntax/task/parser.py` from scratch as a clean line-based parser
-4. Add `python/swl/syntax/task/interpolation.py` as a single file containing interpolation nodes + parser
-5. Move current `python/swl/syntax/task/type.py` to `python/swl/semantic/task/type.py`
-6. Update imports gradually or leave a temporary compatibility shim
-7. Turn `task/annotation.py` into either:
-   - a compatibility shim, or
-   - remove it after imports are updated
-8. Add focused unit tests for annotation parsing and interpolation parsing
-
-## Phase 2.13: Unit tests needed for annotation parsing
-
-Create parser tests analogous to `wf/parser.py` tests.
-
-At minimum cover:
-- task doc only + one section
-- `in`, `out`, `run` sections
-- multiple params in one section
-- multiple names on one line
-- optional types (`file?`)
-- array types (`[file]`)
-- defaults with bare words
-- defaults with quoted strings
-- defaults with interpolation `${outbase}.bam`
-- inline descriptions with `|`
-- continuation description lines
-- malformed section header
-- malformed parameter line
-- missing task doc or missing section, depending on desired strictness
-
-## Phase 2.14: Unit tests needed for interpolation parsing
-
-Add tests for:
-- `${outbase}.bam`
-- `${outbase}.bai`
-- `${cpu}`
-- `${ref}`
-- `${memory / cpu}`
-- plain literals with no interpolation
-- mixed literal + variable parts
-- malformed `${...` expressions
-- quoted strings if we decide to support them immediately
-
-## Phase 2.15: Recommended file ownership after refactor
-
-### Syntax layer
-- `python/swl/syntax/wf/lexer.py`
-  - workflow tokenization only
-- `python/swl/syntax/wf/node.py`
-  - workflow AST only
-- `python/swl/syntax/wf/parser.py`
-  - workflow parser only
-
-- `python/swl/syntax/task/node.py`
-  - task syntax/data nodes only
-- `python/swl/syntax/task/parser.py`
-  - task annotation parser only
-- `python/swl/syntax/task/interpolation.py`
-  - interpolation nodes + interpolation parser
-- `python/swl/syntax/task/annotation.py`
-  - temporary compatibility wrapper or remove
-
-### Semantic layer
-- `python/swl/semantic/task/type.py`
-  - `TypeKind`, `TaskSignature`, `TypeChecker`, compatibility helpers
-
-## Immediate recommendation
-
-Implement the task parser in a modular way without introducing a lexer for annotations.
-
-Specifically:
-- add `task/node.py` for parsed task syntax/data
-- rewrite `task/parser.py` as a line-oriented annotation parser
-- keep `task/interpolation.py` as a single shared file for interpolation nodes + parser
-- use `task/interpolation.py` from annotation defaults now and from bash-body analysis later
-- move type-checking logic to `swl/semantic/task/type.py`
-- treat annotation parsing, interpolation parsing, bash-body analysis, and semantic typing as separate concerns
+Recommended principle going forward:
+- annotations drive semantics
+- workflow AST drives composition
+- interpolation stays as syntax until evaluation
+- raw bash body remains opaque unless execution support later requires deeper analysis
