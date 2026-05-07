@@ -2,9 +2,10 @@
 
 ## Principles
 
-- Minimalistic design specialized for building workflows
-- Catch as many issues as possible during static time
-- Lazy evaluation during run time
+- Minimalistic design: Specialized for building workflows
+- Incremental build: Users can build workflows piece by piece
+- Fail fast: Catch as many issues as possible during static time
+- Efficient execution: Lazy evaluation and caching during run time
 
 ## Syntax
 
