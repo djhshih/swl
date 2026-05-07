@@ -42,11 +42,12 @@ class Update(Node):
 
 
 @dataclass(frozen=True)
-class Import(Node):
+class Function(Node):
     name: str
     kind: str
-    path: str
     signature: TaskSignature
+    path: Optional[str] = None
+    body: Optional[Node] = None
 
 
 @dataclass(frozen=True)

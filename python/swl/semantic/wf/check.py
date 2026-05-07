@@ -77,8 +77,9 @@ class WorkflowCheck:
 
 
 class Checker:
-    def __init__(self):
+    def __init__(self, files=None):
         self._loading = []
+        self.files = files or {}
 
     def load(self, path: str) -> WorkflowCheck:
         full_path = os.path.abspath(path)
@@ -86,8 +87,7 @@ class Checker:
             raise ValueError(f'Circular workflow import: {full_path}')
         self._loading.append(full_path)
         try:
-            with open(full_path, 'r') as f:
-                src = f.read()
+            src = self._read_file(full_path)
             tree = WfParser().parse(src)
             imports = self._load_imports(tree, os.path.dirname(full_path))
             checker = TypeChecker()
@@ -102,6 +102,24 @@ class Checker:
             return WorkflowCheck(tree, imports, errors, inferred_inputs, signature)
         finally:
             self._loading.pop()
+
+    def load_content(self, content: str, path: str = '<memory>.swl') -> WorkflowCheck:
+        full_path = os.path.abspath(path)
+        old = self.files.get(full_path)
+        self.files[full_path] = content
+        try:
+            return self.load(full_path)
+        finally:
+            if old is None:
+                del self.files[full_path]
+            else:
+                self.files[full_path] = old
+
+    def _read_file(self, path: str) -> str:
+        if path in self.files:
+            return self.files[path]
+        with open(path, 'r') as f:
+            return f.read()
 
     def _load_imports(self, tree, base_dir: str):
         imports = {}
@@ -119,8 +137,7 @@ class Checker:
 
     def _load_import(self, name: str, path: str) -> Import:
         if path.endswith('.sh'):
-            with open(path) as f:
-                task = TaskParser().parse(f.read())
+            task = TaskParser().parse(self._read_file(path))
             return Import(name, path, signature_from_task(task), 'task')
         if path.endswith('.swl'):
             check = self.load(path)

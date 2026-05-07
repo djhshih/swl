@@ -7,8 +7,9 @@ from swl.syntax.wf.parser import Parser as WfParser
 
 
 class Lowerer:
-    def __init__(self):
-        self.checker = Checker()
+    def __init__(self, files=None):
+        self.checker = Checker(files=files)
+        self.workflow_cache = {}
 
     def lower_file(self, path: str):
         result = self.checker.load(path)
@@ -30,13 +31,18 @@ class Lowerer:
         result = self.lower_expr(exprs[-1], env, imports)
         return ir.Block(bindings, result)
 
+    def lower_binding(self, expr, env, imports):
+        if expr.type == wf_node.NodeType.bind and expr.id.name in imports:
+            imported = imports[expr.id.name]
+            return self._function_from_import(expr.id.name, imported)
+        return self.lower_expr(expr.value, env, imports)
+
     def lower_expr(self, expr, env, imports):
         if expr.type == wf_node.NodeType.id:
             if expr.name in env:
                 return env[expr.name]
             if expr.name in imports:
-                imported = imports[expr.name]
-                return ir.Import(expr.name, imported.kind, imported.path, imported.signature)
+                return self._function_from_import(expr.name, imports[expr.name])
             return ir.Name(expr.name)
 
         if expr.type == wf_node.NodeType.num:
@@ -90,15 +96,23 @@ class Lowerer:
             return ir.Chain(self._lower_chain_items(expr, env, imports))
 
         if expr.type == wf_node.NodeType.bind:
-            return ir.Bind(expr.id.name, self.lower_expr(expr.value, env, imports))
+            return ir.Bind(expr.id.name, self.lower_binding(expr, env, imports))
 
         return ir.Unknown()
 
-    def lower_binding(self, expr, env, imports):
-        if expr.type == wf_node.NodeType.bind and expr.id.name in imports:
-            imported = imports[expr.id.name]
-            return ir.Import(expr.id.name, imported.kind, imported.path, imported.signature)
-        return self.lower_expr(expr.value, env, imports)
+    def _function_from_import(self, name, imported):
+        if imported.kind == 'workflow':
+            body = self._cached_workflow_body(imported.path)
+            return ir.Function(name, imported.kind, imported.signature, imported.path, body)
+        return ir.Function(name, imported.kind, imported.signature, imported.path, None)
+
+    def _cached_workflow_body(self, path):
+        if path in self.workflow_cache:
+            return self.workflow_cache[path]
+        result = self.checker.load(path)
+        body = self.lower_tree(result.tree, result.imports, result.signature)
+        self.workflow_cache[path] = body
+        return body
 
     def _lower_chain_items(self, expr, env, imports):
         if expr.type == wf_node.NodeType.chain:
@@ -106,13 +120,12 @@ class Lowerer:
         return [self.lower_expr(expr, env, imports)]
 
 
-def lower_file(path: str):
-    return Lowerer().lower_file(path)
+def lower_file(path: str, files=None):
+    return Lowerer(files=files).lower_file(path)
 
 
-def parse_and_lower(src: str, base_dir: str = '.'):
-    tree = WfParser().parse(src)
-    checker = Checker()
-    fake_path = os.path.join(base_dir, '__input__.swl')
-    imports = checker._load_imports(tree, os.path.dirname(fake_path))
-    return Lowerer().lower_tree(tree, imports)
+def parse_and_lower(src: str, base_dir: str = '.', files=None):
+    fake_path = os.path.abspath(os.path.join(base_dir, '__input__.swl'))
+    checker = Checker(files=files)
+    result = checker.load_content(src, fake_path)
+    return Lowerer(files=files).lower_tree(result.tree, result.imports, result.signature)
