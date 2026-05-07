@@ -12,7 +12,9 @@ run_unit_tests() {
 		swl.syntax.task.test_bash \
 		swl.semantic.task.test_type \
 		swl.semantic.wf.test_check \
-		swl.ir.test_lower
+		swl.ir.test_lower \
+		swl.ir.test_force \
+		swl.ir.test_force_codec
 	printf "unit tests passed\n\n"
 }
 
@@ -36,6 +38,9 @@ evaluate_wf() {
 	printf "return: $?\n"
 	echo "ir:"
 	PYTHONPATH=python python -m swl.eval_ir $1
+	printf "return: $?\n"
+	echo "force:"
+	PYTHONPATH=python python -m swl.eval_force $1
 	printf "return: $?\n\n"
 }
 

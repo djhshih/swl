@@ -699,6 +699,192 @@ That is the cleanest bridge from the current checker to a real execution model.
    - lower semantic IR into an execution DAG / graph form
    - instantiate cached workflow bodies only when forced
    - realize task applications as execution leaves
+   - preserve lexical environment and lazy application provenance while forcing
+
+### Planned design for `python/swl/ir/force.py`
+
+#### Purpose
+`force.py` should be the boundary between:
+- semantic IR as a lazy tree of values/functions/applications
+- execution IR as a realized graph of concrete computations and data dependencies
+
+It should not redo parsing or semantic validation.
+Its job is to:
+- force a chosen semantic IR root
+- instantiate lazy workflow/task applications only when needed
+- build a graph/DAG with sharing and explicit dependencies
+
+#### Inputs and outputs
+Suggested input:
+- a semantic IR node from `python/swl/ir/lower.py`
+- optionally an initial environment of bound values
+- optionally a cache/registry of already-forced subcomputations
+
+Suggested output:
+- a forced execution graph rooted at one or more output value nodes
+- enough metadata to print/debug the graph
+- stable node identities for repeated/shared subcomputations
+- a self-contained expanded DAG template with imported tasks/workflows fully resolved
+- explicit external input placeholders for user-supplied runtime data
+
+#### Core forcing rule
+Forcing should be demand-driven.
+It should only realize nodes needed to obtain the demanded result.
+
+High-level cases:
+- `Literal`, `Record`, `Field`, `Update`: force structurally / recursively as values
+- `Function`, `Lambda`: remain values until applied and forced
+- `Apply`: do not execute immediately; inspect callee and saturation state first
+- `Chain`: realize as composed applications/connections between callable values
+- `Block`: evaluate bindings lazily in lexical environment, then force the final result
+
+#### Environment model during forcing
+Use an explicit lexical environment separate from IR nodes.
+Recommended shape:
+- `ForceEnv(parent=None, values={})`
+
+Responsibilities:
+- lexical name lookup for `Name`
+- lazy binding of `Bind` values
+- shadowing according to semantic scope rules
+- allow workflow body instantiation with captured/bound values
+
+#### Execution graph node families
+A first-pass execution IR can stay small.
+Suggested node families:
+
+- `ExecLiteral(value)`
+- `ExecRecord(fields)`
+- `ExecField(source, name)`
+- `ExecMerge(left, right)`
+- `ExecTaskCall(function, arg, outputs)`
+- `ExecValueRef(node, field=None)`
+
+Possible later additions:
+- `ExecWorkflowInstance(...)`
+- `ExecClosure(...)`
+- explicit dependency edge objects if a purely node-based structure becomes awkward
+
+The important property is graph identity and sharing, not exact class names yet.
+
+#### Forcing task applications
+When forcing an `Apply(Function(kind='task'), arg)`:
+1. normalize the argument to the task input model
+2. perform scalar-to-record lifting if needed
+3. merge with any already-bound partial inputs
+4. if still unsaturated, keep a function/closure-like forced value rather than emitting execution
+5. if saturated, emit one fully-resolved `ExecTaskCall` planning node
+6. expose task outputs as graph values/refs rather than executing bash immediately
+
+For the compiled DAG artifact:
+- task imports should no longer remain as unresolved imports
+- each task call node should carry the task identity and enough task metadata for later execution without consulting source files again
+
+This is where task interpolation defaults and runtime parameter defaults will later become relevant.
+
+#### Forcing workflow applications
+When forcing an `Apply(Function(kind='workflow'), arg)`:
+1. normalize and merge the argument with any bound inputs
+2. if unsaturated, return a closure/function-like value
+3. if saturated, instantiate the cached workflow body in a fresh lexical environment
+4. bind the workflow parameter to the merged argument value
+5. force the instantiated body result
+6. memoize by workflow function identity + bound input identity when possible
+
+Key point:
+- forcing a workflow should inline/instantiate its body only at force time, not earlier
+- the final compiled DAG should be self-contained, so imported workflow boundaries should not remain as unresolved references in the serialized result
+
+#### Forcing lambda applications
+When forcing an `Apply(Lambda(...), arg)`:
+- create a fresh lexical environment
+- bind the lambda parameter to the argument value
+- force the lambda body in that environment
+
+This should follow the same mechanics as forcing an imported workflow body, except the body is already present locally.
+
+#### Partial application representation during forcing
+Forcing still needs a runtime-level representation for unsaturated callables.
+A first implementation can use a small helper value like:
+- `ForcedFunction(function, bound_arg=None)`
+
+Responsibilities:
+- remember original callable
+- remember already-bound argument structure/value
+- support another round of application before any execution node is emitted
+
+This keeps forcing faithful to lazy partial application.
+
+#### Sharing and memoization
+`force.py` should introduce graph sharing aggressively where safe.
+At minimum, memoize:
+- forced imported workflow bodies by function identity
+- saturated task calls by function identity + normalized bound argument identity
+- projections from the same produced record when practical
+
+This avoids DAG blow-up and is one of the main reasons `force.py` should exist separately from semantic lowering.
+Sharing/memoization is an internal compilation optimization only; the final serialized DAG should still be self-contained and not depend on source-file reloading.
+
+#### Chain forcing
+`Chain(items)` should force as composition, not as immediate execution of every item in isolation.
+A practical first rule:
+- treat a chain as left-to-right composition of callables
+- forcing a chain as a value yields a callable/composed callable
+- forcing a saturated application of that chain realizes the underlying task/workflow calls in order
+
+If easier initially, `force.py` may first desugar `Chain` into nested workflow-style application/composition before graph construction.
+
+#### Field projection and record updates
+`Field` and `Update` should remain lazy/value-level until they depend on concrete forced computations.
+Examples:
+- projecting `bam` from a saturated task call should produce a reference to that output of the `ExecTaskCall`
+- updating two forced records should produce a merged value view, not duplicate execution
+
+#### Serialization / compiled artifact
+The forced DAG should be suitable for writing to disk as a compiled artifact.
+Requirements:
+- self-contained: all imported workflows expanded and all task references resolved into concrete task-planning nodes
+- explicit external input placeholders for user-supplied runtime data
+- no dependency on source-file lookup at execution time
+- deterministic node/edge structure suitable for stable serialization
+
+Recommended first format:
+- JSON, for readability and testability
+
+Possible later formats:
+- msgpack
+- protobuf
+- custom binary / bytecode-like encoding
+
+#### Proposed module structure
+Initial contents of `python/swl/ir/force.py` should likely include:
+- small forced-value helper classes
+- small execution-node dataclasses
+- `Forcer` class with caches and lexical environment helpers
+- `force(node)` / `force_file(path)` entrypoints
+- helpers to produce a serializable DAG form
+- optional pretty-printer or separate `eval_force.py` later
+
+#### Suggested implementation order
+1. Define tiny execution-node dataclasses.
+2. Force literals/records/fields/updates/names/blocks.
+3. Add callable forcing for `Function` and `Lambda` as non-executing values.
+4. Add partial-application handling.
+5. Add saturated task-call forcing to graph nodes.
+6. Add saturated workflow/lambda instantiation.
+7. Add chain forcing/composition.
+8. Add memoization and graph-printing.
+
+#### Initial tests for `force.py`
+Add focused unit tests covering:
+- forcing a saturated imported task application produces one task-call node
+- forcing a partial task application does not produce a task-call node yet
+- forcing a saturated imported workflow application instantiates its cached body
+- forcing repeated use of the same imported function shares cached graph/function objects where intended
+- forcing field access on task outputs produces output references, not duplicated task calls
+- forcing a chain realizes underlying calls in left-to-right dependency order
+- serialized compiled DAG contains no unresolved workflow/task import references
+- serialized compiled DAG can be loaded without reading original source files again
 
 5. Add more semantic tests around scope and function-ness:
    - nested block duplicate-binding errors

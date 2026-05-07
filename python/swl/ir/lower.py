@@ -32,6 +32,8 @@ class Lowerer:
                     continue
                 bindings.append(ir.Bind(expr.id.name, value))
         result = self.lower_expr(exprs[-1], env, imports)
+        if isinstance(result, ir.Lambda) and signature is not None:
+            result = ir.Lambda(result.param, result.body, signature)
         if not bindings:
             return result
         return ir.Block(bindings, result)
