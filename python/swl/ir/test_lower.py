@@ -69,6 +69,8 @@ class TestLower(ut.TestCase):
         self.assertIsInstance(body.bindings[1].value.function.body, ir.Lambda)
         self.assertEqual(body.bindings[0].value.function.name, 'align')
         self.assertEqual(body.bindings[1].value.function.name, 'sub')
+        self.assertIs(body.bindings[0].value.function, body.result.fields['bam'].record.function)
+        self.assertIs(body.bindings[1].value.function, body.result.fields['sbam'].record.function)
 
     def test_lower_chain_flattens(self):
         files, root = self._files()

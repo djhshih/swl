@@ -10,6 +10,7 @@ class Lowerer:
     def __init__(self, files=None):
         self.checker = Checker(files=files)
         self.workflow_cache = {}
+        self.function_cache = {}
 
     def lower_file(self, path: str):
         result = self.checker.load(path)
@@ -109,10 +110,15 @@ class Lowerer:
         return ir.Unknown()
 
     def _function_from_import(self, name, imported):
+        if name in self.function_cache:
+            return self.function_cache[name]
         if imported.kind == 'workflow':
             body = self._cached_workflow_body(imported.path)
-            return ir.Function(name, imported.kind, imported.signature, imported.path, body)
-        return ir.Function(name, imported.kind, imported.signature, imported.path, None)
+            function = ir.Function(name, imported.kind, imported.signature, imported.path, body)
+        else:
+            function = ir.Function(name, imported.kind, imported.signature, imported.path, None)
+        self.function_cache[name] = function
+        return function
 
     def _cached_workflow_body(self, path):
         if path in self.workflow_cache:
