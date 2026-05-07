@@ -1,11 +1,5 @@
 # Issues
 
-## Open semantic questions
-
-- Interpolation values are currently preserved as syntax nodes (`Word`, `Var`, `Expr`) in task defaults. This seems correct, but the exact resolution phase still needs to be defined clearly.
-- It is not yet fully settled whether task output params must always have defaults or whether they may be derived only from body/runtime behavior.
-- `bash.py` exists as an optional analyzer, but current semantics should probably treat annotation metadata as authoritative and body text as opaque.
-
 ## Current implementation limits
 
 - `semantic/task/type.py` now has a `Task -> TaskSignature` bridge, but the semantic model is still task-centric and not yet integrated with a richer workflow semantic model.
@@ -14,4 +8,12 @@
 - Workflow input inference now uses demand-driven symbolic open-record analysis instead of a hard-coded workflow input shape. This is a better direction, but it is still approximate and not yet a full semantic model.
 - DAG construction and interpretation are not yet implemented.
 - The workflow semantic layer now supports importing `.swl` workflows in addition to `.sh` tasks, but its workflow signatures are still approximate.
-- The workflow semantic layer still has major limitations: it does not yet track precise value provenance, robust partial application semantics, or full record-flow semantics for arbitrary workflow expressions.
+- The workflow semantic layer still has major limitations: it does not yet track precise value provenance or full record-flow semantics for arbitrary workflow expressions.
+- The current checker does not yet implement the newly-settled lazy partial-application model. It still approximates some partial applications as if they were immediate applications during inference.
+- The current checker does not yet implement scalar-to-record lifting for task application, where a scalar argument should be lifted into a record field named after the first declared task input.
+- The current checker does not yet enforce that a workflow must evaluate to a function.
+- Workflow output inference does not yet implement the newly-specified chain-output rule: when a workflow evaluates to a chain, outputs should be the union of the output variables from left to right.
+- Task semantics do not yet enforce that all task output params must have defaults.
+- Task output defaults may include glob patterns, but glob-aware validation/representation is not yet implemented explicitly.
+- `bash.py` is intended to support pre-runtime and runtime bash validation after interpolation, but this two-stage validation model is not yet implemented.
+- All issues are intended to be errors unless explicitly specified otherwise, but the current code still distinguishes some categories operationally (`chain_errors` vs `issues`).

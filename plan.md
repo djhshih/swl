@@ -23,7 +23,7 @@ Task syntax is now organized as:
 Semantic task typing is now separated as:
 - `python/swl/semantic/task/type.py`
 
-This is a major improvement over the old state because we now have clear boundaries between:
+This gives clear boundaries between:
 - task annotation parsing
 - interpolation parsing
 - optional bash-body analysis
@@ -102,8 +102,10 @@ Implemented in:
 
 Current behavior:
 - runs unit tests
-- runs task parser diagnostics on all `tests/*.sh`
-- runs workflow diagnostics/evaluation on all `tests/*.swl`
+- runs task syntax diagnostics on all `tests/*.sh`
+- runs task semantic diagnostics on all `tests/*.sh`
+- runs workflow syntax diagnostics/evaluation on all `tests/*.swl`
+- runs workflow semantic diagnostics on all `tests/*.swl`
 
 #### Unit tests added
 - `python/swl/syntax/task/test_parser.py`
@@ -112,258 +114,338 @@ Current behavior:
 
 These cover the basic parsing surface and current shell examples.
 
-## Phase 3: Syntax cleanup before semantics - RECOMMENDED
+## Phase 3: Semantic layer - FIRST PASS COMPLETE
 
-Before working deeply on semantics and interpretation, there are a few worthwhile cleanup steps.
+### 3.1 Task semantic typing
+Implemented in:
+- `python/swl/semantic/task/type.py`
 
-These are not architectural rewrites, just polishing the syntax layer so the semantic layer has stable inputs.
+Current behavior:
+- converts parsed task annotations into `TaskSignature`
+- preserves defaults as interpolation syntax objects
+- checks duplicate names and basic chain compatibility
 
-### 3.1 Normalize task annotation shape for downstream use
+### 3.2 Workflow semantic checking
+Implemented in:
+- `python/swl/semantic/wf/check.py`
 
-Right now `Annotation` stores `sections`, and downstream code will probably repeatedly search them.
+Current behavior:
+- resolves imported `.sh` tasks
+- resolves imported `.swl` workflows
+- builds signatures for both tasks and workflows
+- checks explicit `chain` compatibility
+- performs conservative workflow input inference
+- performs approximate workflow output/signature inference
+- detects circular workflow imports
 
-Possible improvement:
-- keep `sections` for preserving source structure
-- also add convenient accessors or normalized views:
-  - `annotation.inputs`
-  - `annotation.outputs`
-  - `annotation.run`
+### 3.3 Semantic diagnostics
+Implemented in:
+- `python/swl/eval_task_semantic.py`
+- `python/swl/eval_wf_semantic.py`
 
-This is optional, but likely useful before semantic work.
+Current behavior:
+- task semantic diagnostics print semantic signatures
+- workflow semantic diagnostics print:
+  - imports
+  - import kinds
+  - chain errors
+  - inferred inputs
+  - inferred workflow signature
 
-### 3.2 Decide how strict the task parser should be
+### 3.4 Current semantic model
+The current semantic checker already uses a very small symbolic value model:
+- open records
+- closed records
+- task/workflow results
+- unknown values
 
-Open questions to settle before semantics:
-- should duplicate names in one section be a parse error or semantic error?
-- should duplicate names across `in/out/run` be allowed syntactically?
-- should empty sections be allowed?
-- should task files require exactly one doc line?
-- should body-less tasks be allowed?
+This has been useful for inference, but it is still only an approximation layer.
 
-Recommendation:
-- keep parser responsible only for surface syntax
-- move most name-validation and consistency checks into semantics
-- but explicitly document these boundaries now
+## Phase 4: Settle evaluation model before IR - DONE
 
-### 3.3 Add a few missing parser tests
+The core semantic decision for IR is now:
 
-Useful remaining tests:
-- optional types like `file?`
-- array types like `[file]`
-- default values with quotes
-- duplicate section headers
-- empty sections
-- malformed default text in annotations
-- `$x` form in interpolation, not just `${x}`
-- interpolation with multiple literals and vars combined
+### 4.1 Lazy evaluation
+The language uses lazy evaluation.
 
-### 3.4 Decide whether `bash.py` is actually needed
+That means:
+- expressions do not eagerly execute tasks/workflows when syntactically applied
+- evaluation produces values or thunks/closures in the semantic/runtime model
+- actual execution should only be forced when building or realizing the execution graph
 
-Current status:
-- it exists
-- it is separate
-- it is intentionally conservative
+### 4.2 Functions everywhere
+Imported tasks and imported workflows are both functions.
 
-Recommendation:
-- keep it, but treat it as provisional
-- do not let it drive semantic design yet
-- if semantics can proceed from annotation metadata alone, do that first
-- only deepen bash analysis when interpretation actually needs it
+That means:
+- `import "align.sh"` yields a function value
+- `import "subworkflow.swl"` yields a function value
+- user-defined workflow lambdas are also function values
 
-This matches the current preference:
-- raw body remains in `Task`
-- bash analysis remains optional and separate
+These should all be represented uniformly in IR.
 
-## Phase 4: Semantic layer design - NEXT
+### 4.3 Partial application semantics
+Partial application returns a function.
 
-The next major phase should be semantics, built on top of the stabilized syntax layer.
+This is now the intended meaning of expressions like:
+- `align_hg38 = align { ref: ..., ref_fai: ... }`
 
-### 4.1 Task signature construction
+This should **not** be modeled as immediate task execution.
+Instead:
+- applying a function to some arguments returns a new function when required inputs remain unsatisfied
+- applying a function with enough inputs returns a lazy computation value
+- forcing that lazy computation later contributes nodes to the execution IR
 
-Use parsed task annotations to construct semantic task signatures.
+### 4.4 Consequence for current checker
+The current workflow checker does not yet fully implement this lazy partial-application model.
+It still approximates such expressions using immediate-demand reasoning.
+That is acceptable temporarily, but IR work should replace that approximation with a first-class lazy function model.
 
-Likely input:
-- `syntax.task.node.Task`
+## Phase 5: IR design - NEXT
 
-Likely output:
-- `semantic.task.type.TaskSignature`
+The next major phase is to build a proper intermediate representation that matches the lazy semantics above.
 
+### 5.1 IR goals
+The IR should:
+- represent lazy evaluation, not eager execution
+- represent tasks, imported workflows, and lambdas uniformly as functions
+- support partial application as a first-class operation
+- preserve enough structure for type/input/output checking
+- lower naturally into an execution DAG when computation is forced
+
+### 5.2 Proposed runtime/IR value kinds
+Suggested value categories:
+
+#### Primitive / literal values
+- strings
+- ints
+- floats
+- possibly booleans later
+
+#### Record values
+- finite mappings from field name to value
+- updates/merges produce derived record values
+- field access projects from record values lazily
+
+#### Function values
+A uniform callable value with variants:
+- imported task function
+- imported workflow function
+- lambda function
+- partially applied function / closure
+
+Each function value should carry:
+- parameter/interface information
+- captured environment if needed
+- provenance (task/workflow/lambda)
+
+#### Computation values
+A lazy application result representing:
+- function applied to argument(s)
+- not yet executed
+- available for further composition, projection, or forcing
+
+This is the key value kind missing today.
+
+### 5.3 Proposed IR nodes
+At minimum, introduce explicit IR nodes roughly like:
+- `IRLiteral`
+- `IRRecord`
+- `IRField`
+- `IRUpdate`
+- `IRImportTask`
+- `IRImportWorkflow`
+- `IRLambda`
+- `IRClosure`
+- `IRApply`
+- `IRBind`
+- `IRBlock`
+- `IRChain`
+
+A second stage may then lower these into execution-oriented nodes such as:
+- `ExecTask`
+- `ExecWorkflowCall`
+- `ExecValue`
+- `ExecProjection`
+- `ExecMerge`
+
+### 5.4 Two-level IR recommendation
+Recommended split:
+
+#### Semantic IR
+A lazy functional IR that mirrors source semantics.
 Responsibilities:
-- convert annotation parameter types into `TypeKind`
-- convert `in/out/run` sections into normalized maps
-- preserve defaults for later evaluation/substitution
+- name resolution
+- lexical binding
+- imports as function values
+- partial application
+- lazy application
+- record construction/update/projection
 
-Suggested API:
-- `signature_from_task(task) -> TaskSignature`
+#### Execution IR / DAG
+A lower-level forced computation graph.
+Responsibilities:
+- concrete task/workflow call nodes
+- data dependencies
+- named outputs
+- runtime parameter propagation
+- eventual scheduling/execution
 
-This is the bridge between syntax and semantics.
+This split should reduce semantic confusion.
+Do not make the first IR immediately execution-specific.
 
-### 4.2 Validation of task signatures
+### 5.5 Suggested function model
+Define a single callable abstraction, e.g. conceptually:
+- `FunctionValue(kind, signature, env, body_or_target, bound_args)`
 
-Semantic validation should likely include:
-- duplicate parameter names within a section
-- duplicate parameter names across sections if disallowed
-- output params should probably have types
-- required vs optional input interpretation
-- consistency of runtime params if any constraints exist
+Where:
+- `kind` is one of `task`, `workflow`, `lambda`, `partial`
+- `signature` describes required/available inputs and outputs
+- `env` captures lexical environment if needed
+- `body_or_target` points to task metadata, workflow IR, or lambda body
+- `bound_args` stores already supplied arguments
 
-These are better handled in semantics than parsing.
+Then application behaves as:
+1. merge supplied argument with already bound arguments
+2. if required inputs remain missing, return another `FunctionValue` (partial)
+3. if sufficiently saturated, return a lazy `ComputationValue`
 
-### 4.3 Workflow semantic checking
+This directly matches the chosen semantics.
 
-Then build workflow semantics on top of:
-- parsed workflow AST
-- imported task signatures
+### 5.6 Argument model
+Callable argument semantics are now clarified.
 
-This phase should handle:
-- import resolution
-- type compatibility in chains
-- compatibility in record update / merge where relevant
-- workflow input inference
-- workflow output inference if needed
-- circular import checks
-- DAG construction and cycle detection
+Rules:
+- workflow/task functions conceptually consume records
+- applying a task to a scalar argument is legal
+- a scalar argument is lifted to a record with a single field named as the first input of the task
+- partial application creates a closure that encloses the provided inputs
 
-### 4.4 Interpretation / evaluation
+Consequences for IR:
+- semantic lowering must support scalar-to-record lifting for task application
+- the function application path must be able to produce closures
+- closure values must remember already-bound inputs for later saturation
 
-Only after task signatures and workflow semantics are stable should we move into interpretation.
+### 5.7 Import lowering model
+Recommended import behavior:
+- `import "task.sh"` lowers to `IRImportTask(path, signature)`
+- `import "workflow.swl"` lowers to `IRImportWorkflow(path, signature, referenced_ir?)`
 
-Likely steps:
-- `import "task.sh"` returns a callable task value/signature
-- `import "workflow.swl"` returns a callable workflow value
-- evaluate workflow AST into an executable DAG or intermediate form
-- perform partial application and chaining semantics
-- resolve task defaults and input propagation
+Both evaluate to function values.
+They should not be executed by import itself.
 
-## Phase 5: What still may be needed before interpretation
-
-Strictly speaking, we can start semantics now.
-
-But a few small things may still be helpful first.
-
-### 5.1 Add syntax-to-semantic bridge functions
-
-This is probably the single most useful next step before broader interpretation.
-
-Examples:
-- parse task file -> `Task`
-- build task signature -> `TaskSignature`
-- parse workflow file -> workflow AST
-
-This avoids mixing parsing with semantic logic.
-
-### 5.2 Decide how interpolation should be represented semantically
-
-Question:
-- should defaults remain syntax nodes (`Word`, `Var`, `Expr`) until execution?
-- or should some be normalized earlier?
-
-Recommendation:
-- keep interpolation as syntax objects for now
-- only resolve them during later evaluation when a value environment exists
-
-That keeps semantics simpler.
-
-### 5.3 Clarify how much shell semantics we need
-
-Important question before interpretation:
-- do workflow/task semantics depend only on annotations?
-- or do we need to understand the bash body to determine outputs or dependencies?
-
-Given current examples, annotations already declare inputs/outputs/run.
+### 5.8 Chain lowering model
+For `a | b`:
+- first resolve both sides as function values
+- semantically this is function composition over task/workflow record interfaces
+- chain checking remains signature-based
+- chain lowering should produce either:
+  - a composed function value, or
+  - syntactic sugar over lambda/application in semantic IR
 
 Recommendation:
-- treat annotation metadata as authoritative for semantics
-- treat bash body as opaque execution text for now
-- only use `bash.py` later for optional validation or interpolation support if needed
+- treat chain as sugar for composition at the semantic IR level
+- lower it before execution DAG construction
 
-This means we probably do not need deeper shell parsing before starting semantics.
+### 5.9 Interpolation placement in IR
+Interpolation timing is now clarified.
 
-## Recommended next steps
+Keep task interpolation defaults as structured values until later phases.
+Their meanings are:
+- `Word`: compile-time verbatim substitution, with compile-time syntax checks where possible
+- `Var`: runtime substitution from the runtime value environment
+- `Expr`: runtime evaluation followed by substitution of the resulting value
 
-### Immediate next step
-Implement a syntax-to-semantic bridge for tasks:
-- `Task` -> `TaskSignature`
+Resolution should happen when:
+- a concrete task call node exists
+- a concrete environment of bound inputs/run params exists
+- pre-runtime bash validation is being performed
 
-That will make the task parser immediately useful to the semantic layer.
+This implies two validation opportunities:
+- pre-runtime validation after compile-time interpolation pieces are known
+- runtime validation after runtime substitutions are known
 
-### Then
-Implement semantic import handling and workflow checking:
-- resolve imported `.sh` and `.swl` files
-- construct signatures for imported tasks
-- check type compatibility in workflow chains
-- infer workflow inputs
+### 5.10 Output/signature policy
+Workflow signature semantics are now clarified.
 
-### Then
-Implement interpretation:
-- evaluate imports into callable values
-- evaluate workflow expressions
-- build DAG/intermediate execution representation
+Rules:
+- a workflow must evaluate to a function
+- the workflow output is the output of that function
+- if the workflow final value is an explicit lambda, the outputs are determined by the final expression in the lambda body
+- if the workflow final value is a named task, the workflow output is the task output
+- if the workflow final value is a chain, semantic analysis should take the union of the output variables of each task/workflow in the chain from left to right
 
-## Phase 6: Concrete next implementation steps - IN PROGRESS
+Task output policy:
+- task output params must have defaults
+- output defaults may include glob patterns such as `*`
 
-### 6.1 Build task signature bridge
-- add `signature_from_task(task)` in `python/swl/semantic/task/type.py`
-- map parsed task annotation params into:
-  - `inputs`
-  - `outputs`
-  - `run`
-- parse param type strings with `parse_type()`
-- preserve defaults as syntax/interpolation objects for later evaluation
-- detect duplicate parameter names at semantic boundary
+Typing policy:
+- preserve output types whenever recoverable from task/workflow signatures
+- record outputs synthesized by workflow analysis may still have unknown type where necessary
 
-### 6.2 Add semantic tests for task signatures
-- valid task -> `TaskSignature`
-- duplicate input/output names fail
-- missing required types where disallowed fail
-- run params are preserved
-- outputs with interpolation defaults are preserved
+## Phase 6: Concrete implementation steps for IR
 
-### 6.3 Add diagnostic entrypoint for semantic task signature
-- add something like `python/swl/eval_task_semantic.py`
-- print parsed task plus constructed `TaskSignature`
-- use this from `test.sh` if helpful
+### 6.1 Add semantic IR module
+Suggested new package:
+- `python/swl/ir/`
 
-### 6.4 Start workflow semantic import layer - DONE (first pass)
-- parse workflow
-- find imported task paths
-- load imported task files
-- build task signatures for imported tasks
-- perform first-pass chain checking and workflow input inference
+Suggested files:
+- `python/swl/ir/node.py`
+- `python/swl/ir/lower.py`
+- `python/swl/ir/eval.py` or `python/swl/ir/force.py`
 
-### 6.5 Build workflow semantic IR - IN PROGRESS
-- introduce symbolic workflow values for:
-  - records
-  - task results
-  - unknown values
-- evaluate workflow bodies conservatively
-- support update/record/function workflows better than simple chain-only analysis
-- replace ad-hoc input inference with proper demand-driven record-field inference
-- build approximate workflow signatures from workflow bodies
-- support importing `.swl` workflows semantically, not just `.sh` tasks
+### 6.2 First IR milestone: lazy semantic lowering
+Implement lowering from workflow AST + imports into semantic IR.
 
-### 6.6 Record issues during implementation
-- document mismatches between current code, spec, and desired semantics in `issues.md`
-- especially note unresolved questions around:
-  - interpolation resolution timing
-  - whether outputs must always have defaults
-  - how much shell analysis is needed for execution
+Scope:
+- imports
+- lambdas
+- records
+- field access
+- update
+- application
+- chain
+- block/bind
 
-## Summary answer: is there anything else to do before semantics and interpretation?
+No execution yet, only semantic lowering.
 
-Not much.
+### 6.3 Second IR milestone: function values and partial application
+Implement function-value objects and application rules:
+- imported task as function
+- imported workflow as function
+- lambda as function
+- partial application returns function
+- saturated application returns lazy computation value
 
-The main parser architecture is now in a good place.
+### 6.4 Third IR milestone: force/lower to execution DAG
+Only after semantic IR is stable:
+- force selected computation roots
+- build task/workflow call graph
+- propagate concrete inputs
+- resolve interpolation for task execution nodes
 
-Before semantics, the only really worthwhile remaining syntax-side work is:
-- a few more focused parser tests
-- possibly small convenience accessors on `Annotation`
-- a clear bridge from parsed `Task` to semantic `TaskSignature`
+### 6.5 Diagnostics for IR
+Add debugging entrypoints such as:
+- `python -m swl.eval_ir file.swl`
+- print semantic IR
+- optionally print forced execution DAG
 
-We do **not** need to fully parse bash before starting semantics.
+## Phase 7: What still remains non-blocking
 
-Recommended principle going forward:
-- annotations drive semantics
-- workflow AST drives composition
-- interpolation stays as syntax until evaluation
-- raw bash body remains opaque unless execution support later requires deeper analysis
+These are important, but they should not block starting IR:
+- implementing the two-stage bash validation promised by the clarified interpolation model
+- perfect workflow type inference
+- precise provenance tracking for every field
+- preserving exact output types for every inferred workflow record
+
+## Recommended immediate next step
+
+Implement the first semantic IR with the lazy function model:
+- imports produce function values
+- lambdas produce function values
+- partial application returns closure/function values
+- saturated application returns lazy computation values
+- chain lowers to function composition
+- task application supports scalar-to-record lifting using the first declared input name
+- task outputs require defaults and may include glob patterns
+
+That is the cleanest bridge from the current checker to a real execution model.
