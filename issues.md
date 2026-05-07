@@ -11,6 +11,9 @@
 - The workflow semantic layer still has major limitations: it does not yet track precise value provenance or full record-flow semantics for arbitrary workflow expressions.
 - The current checker does not yet implement the newly-settled lazy partial-application model. It still approximates some partial applications as if they were immediate applications during inference.
 - The current checker does not yet implement scalar-to-record lifting for task application, where a scalar argument should be lifted into a record field named after the first declared task input.
+- IR representation strategy has been discussed but not implemented yet. Current recommendation: semantic IR should be tree-shaped, while forced execution IR should be graph-shaped / DAG-like.
+- We should keep a note of the tradeoff against a decorated-AST approach: a decorated AST is simpler initially, but imports, chain normalization, closures, lazy application, and later forcing introduce semantic objects that differ enough from raw syntax to justify a small lowering/normalization step.
+- We should continue to validate whether a single semantic `IRImport(kind=...)` node is sufficient, or whether task/workflow imports eventually need separate IR node classes. Current recommendation is to use a single import node in semantic IR and branch on kind only during forcing.
 - The current checker does not yet enforce that a workflow must evaluate to a function.
 - Workflow output inference does not yet implement the newly-specified chain-output rule: when a workflow evaluates to a chain, outputs should be the union of the output variables from left to right.
 - Task semantics do not yet enforce that all task output params must have defaults.

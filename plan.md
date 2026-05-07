@@ -252,14 +252,14 @@ At minimum, introduce explicit IR nodes roughly like:
 - `IRRecord`
 - `IRField`
 - `IRUpdate`
-- `IRImportTask`
-- `IRImportWorkflow`
+- `IRImport`
 - `IRLambda`
 - `IRClosure`
 - `IRApply`
 - `IRBind`
 - `IRBlock`
 - `IRChain`
+- `IRName`
 
 A second stage may then lower these into execution-oriented nodes such as:
 - `ExecTask`
@@ -267,6 +267,15 @@ A second stage may then lower these into execution-oriented nodes such as:
 - `ExecValue`
 - `ExecProjection`
 - `ExecMerge`
+- `ExecEdge`
+
+Use a single `IRImport` node rather than separate `ImportTask` and `ImportWorkflow` nodes unless execution forcing proves that separate node classes materially simplify the design. The common semantics at the semantic IR layer are:
+- imported thing is a function value
+- it has a path
+- it has a signature
+- it has an import kind (`task` or `workflow`)
+
+So the semantic IR can likely model imports as one node with a `kind` field, and defer task/workflow operational differences to forcing.
 
 ### 5.4 Two-level IR recommendation
 Recommended split:
@@ -327,11 +336,26 @@ Consequences for IR:
 
 ### 5.7 Import lowering model
 Recommended import behavior:
-- `import "task.sh"` lowers to `IRImportTask(path, signature)`
-- `import "workflow.swl"` lowers to `IRImportWorkflow(path, signature, referenced_ir?)`
+- `import "task.sh"` lowers to `IRImport(kind='task', path=..., signature=...)`
+- `import "workflow.swl"` lowers to `IRImport(kind='workflow', path=..., signature=...)`
 
 Both evaluate to function values.
 They should not be executed by import itself.
+
+Why prefer one `IRImport` node over separate `ImportTask` / `ImportWorkflow` nodes?
+- at the semantic IR layer they are both just imported callable values
+- both participate in application, closure formation, and chaining uniformly
+- both need the same core metadata: path, signature, kind
+- keeping one node reduces branching in lowering and semantic passes
+
+When separate behavior matters:
+- forcing to execution DAG may still branch on `kind`
+- task forcing may produce a concrete task-execution node
+- workflow forcing may recurse into another lowered workflow body or call boundary
+
+So the recommended split is:
+- single import node in semantic IR
+- differentiated behavior in `ir/force.py`
 
 ### 5.8 Chain lowering model
 For `a | b`:
@@ -391,7 +415,188 @@ Suggested new package:
 Suggested files:
 - `python/swl/ir/node.py`
 - `python/swl/ir/lower.py`
-- `python/swl/ir/eval.py` or `python/swl/ir/force.py`
+- `python/swl/ir/force.py`
+
+#### Overall IR shape
+Use two IR shapes at two different phases:
+- semantic IR should be tree-shaped
+- forced execution IR should be graph-shaped / DAG-like
+
+Rationale:
+- the source language is naturally tree-shaped: lambda, apply, update, record, field access, block
+- tree IR is simpler for lexical scope, lazy semantics, and debugging
+- execution naturally wants sharing and explicit dependencies, which is graph-shaped
+- therefore: semantic tree first, execution DAG second
+Recommended responsibilities:
+- define IR node/value classes
+- define small enums/tags where useful
+- preserve enough metadata for later forcing into an execution DAG
+- keep nodes simple and explicit rather than clever
+
+Recommended node families:
+
+##### Primitive/value nodes
+- `Literal(value)`
+  - for strings, ints, floats
+- `Unknown()`
+  - only if needed for conservative lowering/debugging
+
+##### Record nodes
+- `Record(fields: Dict[str, IRNode])`
+  - lazy record construction
+- `Field(record: IRNode, name: str)`
+  - lazy field projection
+- `Update(left: IRNode, right: IRNode)`
+  - record merge/update
+
+##### Binding/control nodes
+- `Bind(name: str, value: IRNode)`
+  - a single lexical binding
+- `Block(bindings: List[Bind], result: IRNode)`
+  - explicit lexical scope with final result
+
+##### Function nodes
+- `Lambda(param: str, body: IRNode)`
+  - user-defined workflow lambda
+- `ImportTask(name: str, path: str, signature: TaskSignature)`
+  - imported task as a function value
+- `ImportWorkflow(name: str, path: str, signature: TaskSignature)`
+  - imported workflow as a function value
+- `Closure(function: IRNode, bound_arg: IRNode)` or `Closure(function: IRNode, bound_fields: Dict[str, IRNode])`
+  - partial application result
+
+##### Application/composition nodes
+- `Apply(function: IRNode, arg: IRNode)`
+  - lazy application, not execution
+- `Chain(items: List[IRNode])`
+  - explicit composition node initially, even if later desugared
+
+##### Name/reference nodes
+- `Name(name: str)`
+  - local lexical reference after lowering
+  - optional depending on lowering style
+
+##### Optional annotation/signature nodes or metadata
+- all callable nodes should carry or be accompanied by signature metadata where available
+- record-like nodes may optionally carry inferred field/type metadata later
+
+Important design guidance for `node.py`:
+- keep it as a pure representation layer
+- no filesystem access
+- no parsing
+- no import resolution
+- no execution decisions
+- ideally dataclass-style immutable/simple nodes
+
+#### `python/swl/ir/lower.py`
+This file should translate workflow syntax + semantic import information into the semantic IR.
+
+Recommended responsibilities:
+- load/check workflow through the existing semantic layer as needed
+- lower workflow AST nodes into IR nodes
+- resolve imported names to `ImportTask` / `ImportWorkflow`
+- convert lexical bindings into explicit IR `Block` / `Bind`
+- lower chain syntax into either:
+  - explicit `Chain` nodes first, or
+  - desugared `Apply`/`Lambda` composition later
+- attach signature metadata from task/workflow imports
+- preserve lazy semantics: lowering should never execute tasks/workflows
+
+Recommended APIs:
+- `lower_file(path: str) -> IRNode`
+- `lower_tree(tree, imports) -> IRNode`
+- `lower_expr(expr, env, imports) -> IRNode`
+
+Suggested lowering rules:
+
+##### Imports
+Workflow syntax:
+- `x = import "align.sh"`
+
+Lower to:
+- bind `x` to `ImportTask(...)` or `ImportWorkflow(...)`
+
+##### Lambda
+Workflow syntax:
+- `\x -> body`
+
+Lower to:
+- `Lambda("x", lower(body))`
+
+##### Block
+Workflow syntax block with intermediate bindings and final expr
+
+Lower to:
+- `Block([...bindings...], result)`
+
+##### Record
+Workflow syntax:
+- `{a: x, b: y}`
+
+Lower to:
+- `Record({"a": lower(x), "b": lower(y)})`
+
+##### Field access
+Workflow syntax:
+- `x.foo`
+
+Lower to:
+- `Field(lower(x), "foo")`
+
+##### Update
+Workflow syntax:
+- `a // b`
+
+Lower to:
+- `Update(lower(a), lower(b))`
+
+##### Application
+Workflow syntax:
+- `f x`
+
+Lower to:
+- `Apply(lower(f), lower(x))`
+
+Do not decide at lowering time whether this is:
+- a full application
+- a partial application
+- a scalar-lifted application
+
+Those are semantic/runtime questions for later evaluation/forcing passes.
+Lowering should preserve structure, not collapse it.
+
+##### Chain
+Workflow syntax:
+- `a | b | c`
+
+Initial recommendation:
+- lower to `Chain([lower(a), lower(b), lower(c)])`
+
+Reason:
+- preserves user intent clearly
+- lets later semantic/forcing passes decide whether to interpret chain as composition sugar or as a specialized pipeline form
+
+#### Environment model in `lower.py`
+Use an explicit lexical environment for lowering:
+- map workflow identifiers to IR references or imported function nodes
+- distinguish imported names from local bound names
+- keep shadowing rules explicit
+
+Suggested approach:
+- imported names enter the environment first
+- later `Bind`s extend the environment lexically
+- `Name("x")` refers to the nearest lexical binding
+
+#### Non-goals for the first version of `lower.py`
+Do not implement yet:
+- execution DAG creation
+- interpolation resolution
+- bash validation
+- forcing/saturation analysis
+- closure simplification
+- aggressive desugaring of chain into lambdas
+
+The goal of the first lowering pass is only to produce a faithful, lazy semantic IR.
 
 ### 6.2 First IR milestone: lazy semantic lowering
 Implement lowering from workflow AST + imports into semantic IR.
