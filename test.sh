@@ -11,7 +11,8 @@ run_unit_tests() {
 		swl.syntax.task.test_interpolation \
 		swl.syntax.task.test_bash \
 		swl.semantic.task.test_type \
-		swl.semantic.wf.test_check
+		swl.semantic.wf.test_check \
+		swl.ir.test_lower
 	printf "unit tests passed\n\n"
 }
 
@@ -32,6 +33,9 @@ evaluate_wf() {
 	printf "return: $?\n"
 	echo "semantic:"
 	PYTHONPATH=python python -m swl.eval_wf_semantic $1
+	printf "return: $?\n"
+	echo "ir:"
+	PYTHONPATH=python python -m swl.eval_ir $1
 	printf "return: $?\n\n"
 }
 

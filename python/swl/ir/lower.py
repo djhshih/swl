@@ -25,10 +25,14 @@ class Lowerer:
         for expr in exprs[:-1]:
             if expr.type == wf_node.NodeType.bind:
                 value = self.lower_binding(expr, env, imports)
-                bindings.append(ir.Bind(expr.id.name, value))
                 env = dict(env)
                 env[expr.id.name] = value
+                if expr.id.name in imports:
+                    continue
+                bindings.append(ir.Bind(expr.id.name, value))
         result = self.lower_expr(exprs[-1], env, imports)
+        if not bindings:
+            return result
         return ir.Block(bindings, result)
 
     def lower_binding(self, expr, env, imports):
@@ -86,10 +90,14 @@ class Lowerer:
             for item in expr.body[:-1]:
                 if item.type == wf_node.NodeType.bind:
                     value = self.lower_binding(item, local_env, imports)
-                    bindings.append(ir.Bind(item.id.name, value))
                     local_env = dict(local_env)
                     local_env[item.id.name] = value
+                    if item.id.name in imports:
+                        continue
+                    bindings.append(ir.Bind(item.id.name, value))
             result = self.lower_expr(expr.body[-1], local_env, imports)
+            if not bindings:
+                return result
             return ir.Block(bindings, result)
 
         if expr.type == wf_node.NodeType.chain:

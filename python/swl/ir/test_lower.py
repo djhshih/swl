@@ -49,38 +49,36 @@ class TestLower(ut.TestCase):
     def test_lower_lambda_workflow(self):
         files, root = self._files()
         tree = parse_and_lower(_MAIN, root, files)
-        self.assertIsInstance(tree, ir.Block)
-        self.assertEqual(len(tree.bindings), 2)
-        self.assertIsInstance(tree.result, ir.Lambda)
-        self.assertIsInstance(tree.result.body, ir.Block)
+        self.assertIsInstance(tree, ir.Lambda)
+        self.assertEqual(tree.param, 'x')
+        self.assertIsInstance(tree.body, ir.Block)
 
     def test_lower_imports_to_functions(self):
         files, root = self._files()
         tree = parse_and_lower(_MAIN, root, files)
-        self.assertIsInstance(tree.bindings[0].value, ir.Function)
-        self.assertIsInstance(tree.bindings[1].value, ir.Function)
-        self.assertEqual(tree.bindings[0].value.kind, 'task')
-        self.assertEqual(tree.bindings[1].value.kind, 'workflow')
-        self.assertIsNone(tree.bindings[0].value.body)
-        self.assertIsInstance(tree.bindings[1].value.body, ir.Block)
-        body = tree.result.body
+        self.assertIsInstance(tree, ir.Lambda)
+        body = tree.body
+        self.assertIsInstance(body, ir.Block)
+        self.assertEqual(len(body.bindings), 2)
         self.assertIsInstance(body.bindings[0].value, ir.Apply)
         self.assertIsInstance(body.bindings[0].value.function, ir.Function)
         self.assertEqual(body.bindings[0].value.function.kind, 'task')
+        self.assertIsNone(body.bindings[0].value.function.body)
         self.assertIsInstance(body.bindings[1].value.function, ir.Function)
         self.assertEqual(body.bindings[1].value.function.kind, 'workflow')
+        self.assertIsInstance(body.bindings[1].value.function.body, ir.Lambda)
         self.assertEqual(body.bindings[0].value.function.name, 'align')
         self.assertEqual(body.bindings[1].value.function.name, 'sub')
 
     def test_lower_chain_flattens(self):
         files, root = self._files()
         tree = parse_and_lower(_CHAIN, root, files)
-        self.assertIsInstance(tree.result, ir.Chain)
-        self.assertEqual(len(tree.result.items), 2)
-        self.assertEqual(tree.result.items[0].kind, 'task')
-        self.assertEqual(tree.result.items[1].kind, 'workflow')
-        self.assertIsNone(tree.result.items[0].body)
-        self.assertIsInstance(tree.result.items[1].body, ir.Block)
+        self.assertIsInstance(tree, ir.Chain)
+        self.assertEqual(len(tree.items), 2)
+        self.assertEqual(tree.items[0].kind, 'task')
+        self.assertEqual(tree.items[1].kind, 'workflow')
+        self.assertIsNone(tree.items[0].body)
+        self.assertIsInstance(tree.items[1].body, ir.Lambda)
 
 
 if __name__ == '__main__':
