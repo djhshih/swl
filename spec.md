@@ -70,6 +70,11 @@ A block is one or more statements, each ending with `\n` (newline).
 #### Built-in functions
 - `import` imports a task or workflow as a function
 
+#### Name binding rules
+- Variable names are unique within their scope.
+- A variable name cannot be bound twice in the same scope.
+- Import bindings follow the same rule; an imported name cannot be rebound later in the same scope.
+
 
 #### Precedence (highest to lowest)
 
