@@ -151,6 +151,26 @@ sort = import "sort.sh"
 align | sort
 '''
 
+_DUP_BIND = '''x = 1
+x = 2
+\\y -> y
+'''
+
+_DUP_LAMBDA_PARAM = '''x = 1
+\\x -> x
+'''
+
+_DUP_IMPORT = '''x = import "align.sh"
+x = import "sort.sh"
+\\y -> y
+'''
+
+_LAMBDA_BODY_SHADOW = '''x = 1
+\\y ->
+    x = 2
+    x
+'''
+
 _NON_FUNCTION_RECORD = '''{ foo: 1 }
 '''
 
@@ -335,6 +355,30 @@ class TestWorkflowCheck(ut.TestCase):
         result = Checker().load(path)
         self.assertIsNone(result.signature)
         self.assertIn('Workflow must evaluate to a function', result.errors)
+
+    def test_duplicate_binding_in_scope_reports_error(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'dup_bind.swl', _DUP_BIND)
+        result = Checker().load(path)
+        self.assertIn('Duplicate binding in scope: x', result.errors)
+
+    def test_lambda_param_may_shadow_outer_scope(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'dup_lambda.swl', _DUP_LAMBDA_PARAM)
+        result = Checker().load(path)
+        self.assertNotIn('Duplicate binding in scope: x', result.errors)
+
+    def test_duplicate_import_binding_reports_error(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'dup_import.swl', _DUP_IMPORT)
+        result = Checker().load(path)
+        self.assertIn('Duplicate binding in scope: x', result.errors)
+
+    def test_lambda_body_may_shadow_outer_scope(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'lambda_body_shadow.swl', _LAMBDA_BODY_SHADOW)
+        result = Checker().load(path)
+        self.assertNotIn('Duplicate binding in scope: x', result.errors)
 
     def test_workflow_saturated_task_application_reports_not_a_function(self):
         root = self._make_fixture_dir()

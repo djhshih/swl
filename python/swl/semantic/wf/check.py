@@ -90,10 +90,11 @@ class Checker:
             src = self._read_file(full_path)
             tree = WfParser().parse(src)
             imports = self._load_imports(tree, os.path.dirname(full_path))
+            errors = self._check_scope(tree)
             checker = TypeChecker()
             for imported in imports.values():
                 checker.add_task(imported.name, imported.signature)
-            errors = self._check_chains(tree, checker)
+            errors.extend(self._check_chains(tree, checker))
             inferred_inputs, infer_errors = self._infer_inputs(tree, imports)
             errors.extend(infer_errors)
             signature = self._build_workflow_signature(tree, imports, inferred_inputs, errors)
@@ -154,6 +155,33 @@ class Checker:
         if expr.arg.type != wf_node.NodeType.str:
             return None
         return expr.arg.value
+
+    def _check_scope(self, tree):
+        errors = []
+        self._walk_scope(tree, set(), errors)
+        return errors
+
+    def _walk_scope(self, expr, scope, errors):
+        if expr.type == wf_node.NodeType.block:
+            local = set(scope)
+            for item in expr.body:
+                if item.type == wf_node.NodeType.bind:
+                    if item.id.name in local:
+                        errors.append(f'Duplicate binding in scope: {item.id.name}')
+                    else:
+                        local.add(item.id.name)
+                    self._walk_scope(item.value, local, errors)
+                else:
+                    self._walk_scope(item, local, errors)
+            return
+
+        if expr.type == wf_node.NodeType.fun:
+            local = {expr.param.name}
+            self._walk_scope(expr.body, local, errors)
+            return
+
+        for child in self._children(expr):
+            self._walk_scope(child, scope, errors)
 
     def _check_chains(self, tree, checker: TypeChecker):
         errors = []

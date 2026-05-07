@@ -39,7 +39,7 @@ class TestTaskType(ut.TestCase):
         self.assertIn('cpu', sig.run)
         self.assertIsNotNone(sig.outputs['bam'].default)
 
-    def test_duplicate_param_fails(self):
+    def test_duplicate_input_param_fails(self):
         src = (
             '#@ doc\n'
             '# in\n'
@@ -48,8 +48,36 @@ class TestTaskType(ut.TestCase):
             'echo hi\n'
         )
         task = Parser().parse(src)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             signature_from_task(task)
+        self.assertEqual(str(cm.exception), 'Duplicate input parameter: a')
+
+    def test_duplicate_output_param_fails(self):
+        src = (
+            '#@ doc\n'
+            '# out\n'
+            '#   bam file = result.bam\n'
+            '#   bam file = result2.bam\n'
+            'echo hi\n'
+        )
+        task = Parser().parse(src)
+        with self.assertRaises(ValueError) as cm:
+            signature_from_task(task)
+        self.assertEqual(str(cm.exception), 'Duplicate output parameter: bam')
+
+    def test_input_and_output_may_share_name(self):
+        src = (
+            '#@ doc\n'
+            '# in\n'
+            '#   bam file\n'
+            '# out\n'
+            '#   bam file = result.bam\n'
+            'echo hi\n'
+        )
+        task = Parser().parse(src)
+        sig = signature_from_task(task)
+        self.assertIn('bam', sig.inputs)
+        self.assertIn('bam', sig.outputs)
 
     def test_output_without_default_fails(self):
         src = (
@@ -59,8 +87,9 @@ class TestTaskType(ut.TestCase):
             'echo hi\n'
         )
         task = Parser().parse(src)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             signature_from_task(task)
+        self.assertEqual(str(cm.exception), 'Output parameter must have a default: bam')
 
     def test_type_checker_chain(self):
         parser = Parser()
