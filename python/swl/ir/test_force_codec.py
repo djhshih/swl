@@ -68,6 +68,44 @@ class TestForceCodec(ut.TestCase):
         restored = DAG.read(path)
         self.assertEqual(restored.to_dict(), dag.to_dict())
 
+    def test_pipe_and_function_sources_compile_identically(self):
+        root = os.path.abspath('/virtual-force-equivalence')
+        call = '''# @ Call
+# in
+#   bam file
+#   ref file
+#   ref_fai file
+#   outbase str
+# out
+#   bcf file = ${outbase}.bcf
+#   | called variants
+echo call
+'''
+        files = {
+            os.path.join(root, 'align.sh'): _ALIGN,
+            os.path.join(root, 'sort.sh'): _SORT,
+            os.path.join(root, 'call.sh'): call,
+            os.path.join(root, 'pipe.swl'): '''align = import "align.sh"
+sort  = import "sort.sh"
+call  = import "call.sh"
+
+align | sort | call
+''',
+            os.path.join(root, 'function.swl'): '''align = import "align.sh"
+sort  = import "sort.sh"
+call  = import "call.sh"
+
+\\x ->
+    a = align x
+    s = sort ( x // a )
+    c = call ( x // a // s )
+    a // s // c
+''',
+        }
+        pipe = force_file(os.path.join(root, 'pipe.swl'), files).to_dict()
+        function = force_file(os.path.join(root, 'function.swl'), files).to_dict()
+        self.assertEqual(function, pipe)
+
 
 if __name__ == '__main__':
     ut.main()
