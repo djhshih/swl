@@ -86,13 +86,27 @@ _REUSE = '''align = import "align.sh"
 '''
 
 _SHADOW = '''align = import "align.sh"
+sub = import "sub.swl"
 \\x ->
     a = align x
-    inner = {
-        a = align x
-        { bam2: a.bam }
-    }
-    { bam: a.bam, bam2: inner.bam2 }
+    b = sub x
+    { bam: a.bam, bam2: b.bam2 }
+'''
+
+_PARTIAL_REUSE = '''align = import "align.sh"
+\\x ->
+    f = align { ref: x.ref, ref_fai: x.ref_fai }
+    a = f { fastq1: x.fastq1, fastq2: x.fastq2, outbase: x.outbase }
+    b = f { fastq1: x.fastq1, fastq2: x.fastq2, outbase: x.outbase }
+    { bam: a.bam, bam2: b.bam }
+'''
+
+_WORKFLOW_PARTIAL_REUSE = '''mk = import "mk_align.swl"
+\\x ->
+    f = mk { ref: x.ref, ref_fai: x.ref_fai }
+    a = f { fastq1: x.fastq1, fastq2: x.fastq2, outbase: x.outbase }
+    b = f { fastq1: x.fastq1, fastq2: x.fastq2, outbase: x.outbase }
+    { bam: a.bam, bam2: b.bam }
 '''
 
 
@@ -108,7 +122,18 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'chain.swl'): _CHAIN,
             os.path.join(root, 'function.swl'): _FUNCTION,
             os.path.join(root, 'reuse.swl'): _REUSE,
+            os.path.join(root, 'sub.swl'): '''align = import "align.sh"
+\\x ->
+    a = align x
+    { bam2: a.bam }
+''',
+            os.path.join(root, 'mk_align.swl'): '''align = import "align.sh"
+\\x ->
+    align x
+''',
             os.path.join(root, 'shadow.swl'): _SHADOW,
+            os.path.join(root, 'partial_reuse.swl'): _PARTIAL_REUSE,
+            os.path.join(root, 'workflow_partial_reuse.swl'): _WORKFLOW_PARTIAL_REUSE,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -182,12 +207,26 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['outputs']['bam']['task'], 't1')
         self.assertEqual(data['outputs']['bam2']['task'], 't1')
 
-    def test_shadowed_variables_remain_distinct(self):
+    def test_reused_computation_across_imported_workflow_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'shadow.swl'), files).to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align', 'align'])
+        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
         self.assertEqual(data['outputs']['bam']['task'], 't1')
-        self.assertEqual(data['outputs']['bam2']['task'], 't2')
+        self.assertEqual(data['outputs']['bam2']['task'], 't1')
+
+    def test_partial_application_reuse_is_deduped(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'partial_reuse.swl'), files).to_dict()
+        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 't1')
+        self.assertEqual(data['outputs']['bam2']['task'], 't1')
+
+    def test_workflow_partial_application_reuse_is_deduped(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'workflow_partial_reuse.swl'), files).to_dict()
+        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 't1')
+        self.assertEqual(data['outputs']['bam2']['task'], 't1')
 
 
 if __name__ == '__main__':

@@ -135,12 +135,7 @@ class Forcer:
             return self.inputs[node.name]
 
         if isinstance(node, ir.Ref):
-            if node.id in self.forced_variables:
-                return self.forced_variables[node.id]
-            variable = self.variables[node.id]
-            value = self.force_value(variable.value, env)
-            self.forced_variables[node.id] = value
-            return value
+            return self._force_ref(node, env)
 
         if isinstance(node, ir.Record):
             return Record({name: self.force_value(value, env) for name, value in node.fields.items()})
@@ -161,14 +156,7 @@ class Forcer:
             return ForcedFunction(node, None, node.signature)
 
         if isinstance(node, ir.Apply):
-            fn = self.force_value(node.function, env)
-            arg = self.force_value(node.arg, env)
-            key = (_node_key(node.function), _value_key(fn), _value_key(arg))
-            if key in self.apply_cache:
-                return self.apply_cache[key]
-            result = self._apply(fn, arg)
-            self.apply_cache[key] = result
-            return result
+            return self._force_apply(node, env)
 
         if isinstance(node, ir.Block):
             local = ForceEnv(env)
@@ -184,6 +172,25 @@ class Forcer:
             return value
 
         return Literal(None)
+
+    def _force_ref(self, ref, env):
+        if ref.id in self.forced_variables:
+            return self.forced_variables[ref.id]
+        variable = self.variables[ref.id]
+        value = self.force_value(variable.value, env)
+        self.forced_variables[ref.id] = value
+        return value
+
+    def _force_apply(self, node, env):
+        fn = self.force_value(node.function, env)
+        arg = self.force_value(node.arg, env)
+        key = self._apply_key(node.function, fn, arg)
+        if key is not None and key in self.apply_cache:
+            return self.apply_cache[key]
+        result = self._apply(fn, arg)
+        if key is not None:
+            self.apply_cache[key] = result
+        return result
 
     def _apply(self, fn, arg):
         if not isinstance(fn, ForcedFunction):
@@ -204,15 +211,27 @@ class Forcer:
         if isinstance(fn.function, ir.Lambda):
             if not isinstance(bound, Record):
                 return ForcedFunction(fn.function, bound, fn.signature)
-            local = ForceEnv()
-            local.bind(fn.function.param, bound)
-            return self.force_value(fn.function.body, local)
+            return self._force_lambda(fn.function, bound)
 
         return ForcedFunction(fn.function, bound, fn.signature)
 
     def _register_block(self, bindings):
         for bind in bindings:
             self.variables[bind.id] = bind
+
+    def _forced_apply_key(self, value):
+        if not isinstance(value, ForcedFunction):
+            return None
+        return _forced_function_key(value)
+
+    def _apply_key(self, function_node, fn, arg):
+        arg_key = _value_key(arg)
+        forced_key = self._forced_apply_key(fn)
+        if forced_key is not None:
+            return ('apply-forced', forced_key, arg_key)
+        if isinstance(function_node, ir.Ref):
+            return ('apply-ref', function_node.id, arg_key)
+        return None
 
     def _merge_bound(self, old, new):
         if old is None:
@@ -274,7 +293,7 @@ class Forcer:
 
     def _emit_task_call(self, function, bound):
         inputs = self._normalize_task_inputs(function, bound)
-        key = (function.name, tuple(sorted((name, _value_key(value)) for name, value in inputs.items())))
+        key = self._task_call_key(function, inputs)
         if key in self.task_cache:
             return self.task_cache[key]
         self.call_counter += 1
@@ -297,10 +316,19 @@ class Forcer:
     def _force_workflow(self, function, bound):
         body = function.body
         if isinstance(body, ir.Lambda):
-            local = ForceEnv()
-            local.bind(body.param, bound)
-            return self.force_value(body.body, local)
+            return self._force_lambda(body, bound)
         return self.force_value(body, ForceEnv())
+
+    def _task_call_key(self, function, inputs):
+        return (
+            function.path,
+            tuple(sorted((name, _value_key(value)) for name, value in inputs.items())),
+        )
+
+    def _force_lambda(self, function, bound):
+        local = ForceEnv()
+        local.bind(function.param, bound)
+        return self.force_value(function.body, local)
 
     def _task_definition(self, path):
         if path in self.task_defs:
@@ -438,12 +466,15 @@ class Forcer:
         return None
 
 
-def _node_key(node):
-    if isinstance(node, ir.Ref):
-        return ('ref', node.id)
-    if isinstance(node, ir.Name):
-        return ('name', node.name)
-    return ('node', repr(node))
+def _forced_function_key(value):
+    function = value.function
+    if isinstance(function, ir.Function):
+        function_key = ('function', function.kind, function.path)
+    elif isinstance(function, ir.Lambda):
+        function_key = ('lambda', id(function))
+    else:
+        return None
+    return (function_key, _value_key(value.bound))
 
 
 def _value_key(value):
