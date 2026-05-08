@@ -20,7 +20,7 @@ class Lowerer:
     def lower_tree(self, tree, imports, signature=None):
         env = {}
         if tree.type != wf_node.NodeType.block:
-            return self.normalize(self.lower_expr(tree, env, imports))
+            return self.normalize(self._ensure_block_root(self.lower_expr(tree, env, imports), signature))
 
         bindings = []
         exprs = tree.body
@@ -35,8 +35,11 @@ class Lowerer:
                 env[expr.id.name] = ir.Ref(var.id, var.name)
                 bindings.append(var)
         result = self.lower_expr(exprs[-1], env, imports)
-        if isinstance(result, ir.Lambda) and signature is not None:
-            result = ir.Lambda(result.param, result.body, signature)
+        if isinstance(result, ir.Lambda):
+            if signature is not None:
+                result = ir.Lambda(result.param, result.body, signature)
+            if not bindings:
+                return self.normalize(result)
         if not bindings:
             return self.normalize(result)
         return self.normalize(ir.Block(bindings, result))
@@ -85,10 +88,10 @@ class Lowerer:
         if expr.type == wf_node.NodeType.fun:
             local_env = dict(env)
             local_env[expr.param.name] = ir.Name(expr.param.name)
-            return ir.Lambda(
-                expr.param.name,
-                self.lower_expr(expr.body, local_env, imports),
-            )
+            body = self.lower_expr(expr.body, local_env, imports)
+            if isinstance(body, ir.Block):
+                return ir.Lambda(expr.param.name, body)
+            return ir.Lambda(expr.param.name, ir.Block([], body))
 
         if expr.type == wf_node.NodeType.block:
             bindings = []
@@ -144,9 +147,9 @@ class Lowerer:
     def normalize(self, node):
         if isinstance(node, ir.Lambda):
             body = self.normalize(node.body)
-            compose = self._normalize_compose_from_lambda(node.param, body, node.signature)
-            if compose is not None:
-                return compose
+            staged = self._normalize_block_lambda(node.param, body, node.signature)
+            if staged is not None:
+                return staged
             return ir.Lambda(node.param, body, node.signature)
 
         if isinstance(node, ir.Block):
@@ -174,15 +177,7 @@ class Lowerer:
 
         if isinstance(node, ir.Chain):
             items = [self.normalize(item) for item in node.items]
-            stages = []
-            root = ir.Name('_input')
-            current_arg = root
-            for i, item in enumerate(items):
-                stage_name = f'_s{i + 1}'
-                stages.append(ir.Stage(stage_name, item, current_arg))
-                current_arg = self._merge_terms([root] + [ir.Name(stage.name) for stage in stages])
-            result = self._merge_terms([ir.Name(stage.name) for stage in stages]) if stages else ir.Record({})
-            return ir.Compose('_input', stages, result, self._compose_signature(items, node.signature))
+            return self._chain_to_lambda_block(items, node.signature)
 
         return node
 
@@ -203,29 +198,10 @@ class Lowerer:
             result = ir.Update(result, term)
         return result
 
-    def _normalize_compose_from_lambda(self, param, body, signature):
+    def _normalize_block_lambda(self, param, body, signature):
         if not isinstance(body, ir.Block):
             return None
-        stages = []
-        stage_values = {}
-        root = ir.Name(param)
-        for bind in body.bindings:
-            if not isinstance(bind.value, ir.Apply):
-                return None
-            if not self._is_stage_arg(bind.value.arg, root, stage_values):
-                return None
-            stages.append(ir.Stage(bind.name, bind.value.function, bind.value.arg))
-            stage_values[bind.name] = ir.Ref(bind.id, bind.name)
-        if not stages:
-            return None
-        if not self._is_stage_result_union(body.result, stage_values):
-            return None
-        result = self._rewrite_stage_result(body.result, stage_values)
-        normalized_stages = [
-            ir.Stage(stage.name, stage.function, self._rewrite_stage_arg(stage.arg, root, stage_values))
-            for stage in stages
-        ]
-        return ir.Compose(param, normalized_stages, result, signature)
+        return ir.Lambda(param, body, signature)
 
     def _compose_signature(self, items, fallback):
         if fallback is not None:
@@ -254,40 +230,26 @@ class Lowerer:
         from swl.semantic.task.type import TaskSignature
         return TaskSignature(inputs, outputs, run)
 
-    def _is_stage_arg(self, arg, root, stage_values):
-        terms = self._flatten_update_terms(arg)
-        if not terms:
-            return False
-        if terms[0] != root:
-            return False
-        return all(self._is_stage_term(term, stage_values) for term in terms[1:])
+    def _chain_to_lambda_block(self, items, signature):
+        param = '_input'
+        root = ir.Name(param)
+        bindings = []
+        available = [root]
+        for i, item in enumerate(items):
+            name = f'_s{i + 1}'
+            arg = self._merge_terms(list(available))
+            var = ir.Variable(self._alloc_var_id(), name, ir.Apply(item, arg))
+            bindings.append(var)
+            available.append(ir.Ref(var.id, var.name))
+        result = self._merge_terms([ir.Ref(bind.id, bind.name) for bind in bindings]) if bindings else ir.Record({})
+        return ir.Lambda(param, ir.Block(bindings, result), self._compose_signature(items, signature))
 
-    def _is_stage_term(self, term, stage_values):
-        return term in stage_values.values()
-
-    def _is_stage_result_union(self, node, stage_values):
-        terms = self._flatten_update_terms(node)
-        if len(terms) != len(stage_values):
-            return False
-        values = list(stage_values.values())
-        return all(term in values for term in terms)
-
-    def _rewrite_stage_arg(self, arg, root, stage_values):
-        terms = self._flatten_update_terms(arg)
-        rewritten = [root]
-        for term in terms[1:]:
-            rewritten.append(ir.Name(self._stage_name_for_value(term, stage_values)))
-        return self._merge_terms(rewritten)
-
-    def _rewrite_stage_result(self, node, stage_values):
-        terms = self._flatten_update_terms(node)
-        return self._merge_terms([ir.Name(self._stage_name_for_value(term, stage_values)) for term in terms])
-
-    def _stage_name_for_value(self, term, stage_values):
-        for name, value in stage_values.items():
-            if term == value:
-                return name
-        raise ValueError('Unknown stage term during compose normalization')
+    def _ensure_block_root(self, node, signature):
+        if isinstance(node, ir.Lambda):
+            body = node.body if isinstance(node.body, ir.Block) else ir.Block([], node.body)
+            sig = signature if signature is not None else node.signature
+            return ir.Lambda(node.param, body, sig)
+        return node
 
     def _alloc_var_id(self):
         current = self.next_var_id

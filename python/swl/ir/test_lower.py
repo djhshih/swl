@@ -44,6 +44,32 @@ sub = import "sub.swl"
 '''
 
 
+def _strip_ids(node, root_name=None):
+    if isinstance(node, ir.Variable):
+        return ('Variable', node.name, _strip_ids(node.value, root_name))
+    if isinstance(node, ir.Ref):
+        return ('Ref', node.name)
+    if isinstance(node, ir.Lambda):
+        return ('Lambda', '$root', _strip_ids(node.body, node.param))
+    if isinstance(node, ir.Block):
+        return ('Block', [_strip_ids(bind, root_name) for bind in node.bindings], _strip_ids(node.result, root_name))
+    if isinstance(node, ir.Apply):
+        return ('Apply', _strip_ids(node.function, root_name), _strip_ids(node.arg, root_name))
+    if isinstance(node, ir.Update):
+        return ('Update', _strip_ids(node.left, root_name), _strip_ids(node.right, root_name))
+    if isinstance(node, ir.Record):
+        return ('Record', {name: _strip_ids(value, root_name) for name, value in node.fields.items()})
+    if isinstance(node, ir.Field):
+        return ('Field', _strip_ids(node.record, root_name), node.name)
+    if isinstance(node, ir.Function):
+        return ('Function', node.name, node.kind)
+    if isinstance(node, ir.Name):
+        return ('Name', '$root' if node.name == root_name else node.name)
+    if isinstance(node, ir.Literal):
+        return ('Literal', node.value)
+    return node.__class__.__name__
+
+
 class TestLower(ut.TestCase):
     def _files(self):
         root = os.path.abspath('/virtual')
@@ -91,19 +117,63 @@ class TestLower(ut.TestCase):
         self.assertEqual(body.result.fields['bam'].record, ir.Ref(body.bindings[0].id, 'a'))
         self.assertEqual(body.result.fields['sbam'].record, ir.Ref(body.bindings[1].id, 'b'))
 
-    def test_lower_chain_normalizes_to_compose(self):
+    def test_lower_chain_normalizes_to_lambda_block(self):
         files, root = self._files()
         tree = parse_and_lower(_CHAIN, root, files)
-        self.assertIsInstance(tree, ir.Compose)
-        self.assertEqual([stage.name for stage in tree.stages], ['_s1', '_s2'])
+        self.assertIsInstance(tree, ir.Lambda)
         self.assertEqual(tree.param, '_input')
+        self.assertIsInstance(tree.body, ir.Block)
+        self.assertEqual([bind.name for bind in tree.body.bindings], ['_s1', '_s2'])
 
-    def test_lower_explicit_compose_normalizes_to_compose(self):
+    def test_lower_explicit_compose_normalizes_to_lambda_block(self):
         files, root = self._files()
         tree = parse_and_lower(_COMPOSE, root, files)
-        self.assertIsInstance(tree, ir.Compose)
+        self.assertIsInstance(tree, ir.Lambda)
         self.assertEqual(tree.param, 'x')
-        self.assertEqual([stage.name for stage in tree.stages], ['a', 'b'])
+        self.assertIsInstance(tree.body, ir.Block)
+        self.assertEqual([bind.name for bind in tree.body.bindings], ['a', 'b'])
+
+    def test_chain_and_explicit_have_equivalent_lowered_shape(self):
+        root = os.path.abspath('/virtual-equivalent')
+        files = {
+            os.path.join(root, 'align.sh'): _ALIGN,
+            os.path.join(root, 'sort.sh'): '''# @ Sort
+# in
+#   bam file
+#   outbase str
+# out
+#   bam file = ${outbase}.bam
+#   bai file = ${outbase}.bai
+echo sort
+''',
+            os.path.join(root, 'call.sh'): '''# @ Call
+# in
+#   bam file
+#   ref file
+#   ref_fai file
+#   outbase str
+# out
+#   bcf file = ${outbase}.bcf
+echo call
+''',
+        }
+        chain = parse_and_lower('''align = import "align.sh"
+sort = import "sort.sh"
+call = import "call.sh"
+
+align | sort | call
+''', root, files)
+        explicit = parse_and_lower('''align = import "align.sh"
+sort = import "sort.sh"
+call = import "call.sh"
+
+\\x ->
+    _s1 = align x
+    _s2 = sort (x // _s1)
+    _s3 = call (x // _s1 // _s2)
+    _s1 // _s2 // _s3
+''', root, files)
+        self.assertEqual(_strip_ids(chain), _strip_ids(explicit))
 
 
 if __name__ == '__main__':

@@ -85,6 +85,16 @@ _REUSE = '''align = import "align.sh"
     { bam: a.bam, bam2: a.bam }
 '''
 
+_SHADOW = '''align = import "align.sh"
+\\x ->
+    a = align x
+    inner = {
+        a = align x
+        { bam2: a.bam }
+    }
+    { bam: a.bam, bam2: inner.bam2 }
+'''
+
 
 class TestForce(ut.TestCase):
     def _files(self):
@@ -98,6 +108,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'chain.swl'): _CHAIN,
             os.path.join(root, 'function.swl'): _FUNCTION,
             os.path.join(root, 'reuse.swl'): _REUSE,
+            os.path.join(root, 'shadow.swl'): _SHADOW,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -170,6 +181,13 @@ class TestForce(ut.TestCase):
         self.assertEqual([task['name'] for task in data['tasks']], ['align'])
         self.assertEqual(data['outputs']['bam']['task'], 't1')
         self.assertEqual(data['outputs']['bam2']['task'], 't1')
+
+    def test_shadowed_variables_remain_distinct(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'shadow.swl'), files).to_dict()
+        self.assertEqual([task['name'] for task in data['tasks']], ['align', 'align'])
+        self.assertEqual(data['outputs']['bam']['task'], 't1')
+        self.assertEqual(data['outputs']['bam2']['task'], 't2')
 
 
 if __name__ == '__main__':

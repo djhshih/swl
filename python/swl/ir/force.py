@@ -4,7 +4,6 @@ from typing import Dict, List, Tuple
 from swl.ir import node as ir
 from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, TaskCall
 from swl.ir.lower import Lowerer
-from swl.semantic.task.type import TaskSignature
 from swl.syntax.task import interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
 
@@ -173,22 +172,10 @@ class Forcer:
 
         if isinstance(node, ir.Block):
             local = ForceEnv(env)
+            self._register_block(node.bindings)
             for bind in node.bindings:
-                self.variables[bind.id] = bind
                 local.bind(bind.name, ir.Ref(bind.id, bind.name))
             return self.force_value(node.result, local)
-
-        if isinstance(node, ir.Compose):
-            return self._force_compose(node, env)
-
-        if isinstance(node, ir.Chain):
-            items = [self.force_value(item, env) for item in node.items]
-            if not items:
-                return Literal(None)
-            result = items[0]
-            for item in items[1:]:
-                result = self._compose(result, item)
-            return result
 
         if isinstance(node, ir.Variable):
             self.variables[node.id] = node
@@ -198,42 +185,9 @@ class Forcer:
 
         return Literal(None)
 
-    def _compose(self, left, right):
-        return ForcedFunction(('chain', left, right), None, self._compose_signature(left, right))
-
-    def _force_compose(self, node, env):
-        if node.param is None:
-            local = ForceEnv(env)
-            for stage in node.stages:
-                value = self._apply(self.force_value(stage.function, local), self.force_value(stage.arg, local))
-                local.bind(stage.name, value)
-            return self.force_value(node.result, local)
-        return ForcedFunction(node, None, node.signature)
-
     def _apply(self, fn, arg):
         if not isinstance(fn, ForcedFunction):
             return Literal(None)
-
-        if isinstance(fn.function, tuple) and fn.function[0] == 'chain':
-            left = self._apply(fn.function[1], arg)
-            merged = self._merge_bound(arg, left)
-            right = self._apply(fn.function[2], merged)
-            return self._merge_chain_results(left, right)
-
-        if isinstance(fn.function, ir.Compose):
-            if fn.function.param is None:
-                return self._force_compose(fn.function, ForceEnv())
-            local = ForceEnv()
-            local.bind(fn.function.param, arg)
-            for stage in fn.function.stages:
-                stage_key = ('compose-stage', id(fn.function), stage.name, _value_key(arg), tuple(sorted(local.values.keys())))
-                if stage_key in self.apply_cache:
-                    value = self.apply_cache[stage_key]
-                else:
-                    value = self._apply(self.force_value(stage.function, local), self.force_value(stage.arg, local))
-                    self.apply_cache[stage_key] = value
-                local.bind(stage.name, value)
-            return self.force_value(fn.function.result, local)
 
         bound = self._merge_bound(fn.bound, arg)
 
@@ -256,22 +210,14 @@ class Forcer:
 
         return ForcedFunction(fn.function, bound, fn.signature)
 
+    def _register_block(self, bindings):
+        for bind in bindings:
+            self.variables[bind.id] = bind
+
     def _merge_bound(self, old, new):
         if old is None:
             return new
         return Merge(old, new)
-
-    def _merge_chain_results(self, left, right):
-        if isinstance(left, ForcedFunction) or isinstance(right, ForcedFunction):
-            signature = self._compose_signature(left, right)
-            return ForcedFunction(('chain_result', left, right), None, signature)
-        if isinstance(left, Record) and isinstance(right, Record):
-            fields = dict(left.fields)
-            fields.update(right.fields)
-            return Record(fields)
-        if isinstance(right, Record):
-            return right
-        return left
 
     def _saturated_signature(self, function, bound):
         available = self._available_inputs(bound)
@@ -456,35 +402,10 @@ class Forcer:
         arg = Record({name: self._input(name, spec) for name, spec in signature.inputs.items()})
         return self._apply(value, arg)
 
-    def _compose_signature(self, left, right):
-        left_sig = self._forced_signature(left)
-        right_sig = self._forced_signature(right)
-        if left_sig is None or right_sig is None:
-            return None
-        inputs = dict(left_sig.inputs)
-        available = set(left_sig.inputs.keys()).union(left_sig.outputs.keys())
-        for name, param in right_sig.inputs.items():
-            if name not in available:
-                inputs[name] = param
-        outputs = dict(left_sig.outputs)
-        outputs.update(right_sig.outputs)
-        run = dict(left_sig.run)
-        run.update(right_sig.run)
-        return TaskSignature(inputs, outputs, run)
-
-    def _forced_signature(self, value):
-        if isinstance(value, ForcedFunction):
-            return value.signature or self._function_signature(value.function)
-        return None
-
     def _function_signature(self, function):
         if isinstance(function, ir.Function):
             return function.signature
         if isinstance(function, ir.Lambda):
-            return function.signature
-        if isinstance(function, ir.Compose):
-            return function.signature
-        if isinstance(function, ir.Chain):
             return function.signature
         return None
 

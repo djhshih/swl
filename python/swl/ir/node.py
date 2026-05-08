@@ -1,10 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-
-def _indent(text, prefix='  '):
-    return '\n'.join(prefix + line if line else prefix for line in text.splitlines())
-
 from swl.semantic.task.type import TaskSignature
 
 
@@ -104,7 +100,7 @@ class Function(Node):
 @dataclass(frozen=True)
 class Lambda(Node):
     param: str
-    body: Node
+    body: 'Block'
     signature: Optional[TaskSignature] = None
 
     def __repr__(self):
@@ -156,45 +152,6 @@ class Chain(Node):
             f'  items={items},\n'
             f'  signature={self.signature!r},\n'
             f')'
-        )
-
-
-@dataclass(frozen=True)
-class Stage:
-    name: str
-    function: Node
-    arg: Node
-
-    def __repr__(self):
-        return (
-            'Stage(\n'
-            f'  name={self.name!r},\n'
-            f'  function=\n{_indent(repr(self.function), "    ")},\n'
-            f'  arg=\n{_indent(repr(self.arg), "    ")}\n'
-            ')'
-        )
-
-
-@dataclass(frozen=True)
-class Compose(Node):
-    param: Optional[str]
-    stages: List[Stage]
-    result: Node
-    signature: Optional[TaskSignature] = None
-
-    def __repr__(self):
-        if self.stages:
-            stages = ',\n'.join(_indent(repr(stage), '    ') for stage in self.stages)
-            stages = f'[\n{stages}\n  ]'
-        else:
-            stages = '[]'
-        return (
-            'Compose(\n'
-            f'  param={self.param!r},\n'
-            f'  stages={stages},\n'
-            f'  result=\n{_indent(repr(self.result), "    ")},\n'
-            f'  signature={self.signature!r},\n'
-            ')'
         )
 
 
