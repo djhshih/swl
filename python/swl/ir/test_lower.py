@@ -35,6 +35,14 @@ sub = import "sub.swl"
 align | sub
 '''
 
+_COMPOSE = '''align = import "align.sh"
+sub = import "sub.swl"
+\\x ->
+    a = align x
+    b = sub (x // a)
+    a // b
+'''
+
 
 class TestLower(ut.TestCase):
     def _files(self):
@@ -44,6 +52,7 @@ class TestLower(ut.TestCase):
             os.path.join(root, 'sub.swl'): _SUB,
             os.path.join(root, 'main.swl'): _MAIN,
             os.path.join(root, 'chain.swl'): _CHAIN,
+            os.path.join(root, 'compose.swl'): _COMPOSE,
         }, root
 
     def test_lower_lambda_workflow(self):
@@ -72,15 +81,19 @@ class TestLower(ut.TestCase):
         self.assertIs(body.bindings[0].value.function, body.result.fields['bam'].record.function)
         self.assertIs(body.bindings[1].value.function, body.result.fields['sbam'].record.function)
 
-    def test_lower_chain_flattens(self):
+    def test_lower_chain_normalizes_to_compose(self):
         files, root = self._files()
         tree = parse_and_lower(_CHAIN, root, files)
-        self.assertIsInstance(tree, ir.Chain)
-        self.assertEqual(len(tree.items), 2)
-        self.assertEqual(tree.items[0].kind, 'task')
-        self.assertEqual(tree.items[1].kind, 'workflow')
-        self.assertIsNone(tree.items[0].body)
-        self.assertIsInstance(tree.items[1].body, ir.Lambda)
+        self.assertIsInstance(tree, ir.Compose)
+        self.assertEqual([stage.name for stage in tree.stages], ['_s1', '_s2'])
+        self.assertEqual(tree.param, '_input')
+
+    def test_lower_explicit_compose_normalizes_to_compose(self):
+        files, root = self._files()
+        tree = parse_and_lower(_COMPOSE, root, files)
+        self.assertIsInstance(tree, ir.Compose)
+        self.assertEqual(tree.param, 'x')
+        self.assertEqual([stage.name for stage in tree.stages], ['a', 'b'])
 
 
 if __name__ == '__main__':

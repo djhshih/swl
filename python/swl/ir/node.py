@@ -78,6 +78,21 @@ class Chain(Node):
 
 
 @dataclass(frozen=True)
+class Stage:
+    name: str
+    function: Node
+    arg: Node
+
+
+@dataclass(frozen=True)
+class Compose(Node):
+    param: Optional[str]
+    stages: List[Stage]
+    result: Node
+    signature: Optional[TaskSignature] = None
+
+
+@dataclass(frozen=True)
 class Bind(Node):
     name: str
     value: Node

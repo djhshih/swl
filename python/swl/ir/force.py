@@ -161,6 +161,9 @@ class Forcer:
                 local.bind(bind.name, self.force_value(bind.value, local))
             return self.force_value(node.result, local)
 
+        if isinstance(node, ir.Compose):
+            return self._force_compose(node, env)
+
         if isinstance(node, ir.Chain):
             items = [self.force_value(item, env) for item in node.items]
             if not items:
@@ -178,6 +181,15 @@ class Forcer:
     def _compose(self, left, right):
         return ForcedFunction(('chain', left, right), None, self._compose_signature(left, right))
 
+    def _force_compose(self, node, env):
+        if node.param is None:
+            local = ForceEnv(env)
+            for stage in node.stages:
+                value = self._apply(self.force_value(stage.function, local), self.force_value(stage.arg, local))
+                local.bind(stage.name, value)
+            return self.force_value(node.result, local)
+        return ForcedFunction(node, None, node.signature)
+
     def _apply(self, fn, arg):
         if not isinstance(fn, ForcedFunction):
             return Literal(None)
@@ -187,6 +199,16 @@ class Forcer:
             merged = self._merge_bound(arg, left)
             right = self._apply(fn.function[2], merged)
             return self._merge_chain_results(left, right)
+
+        if isinstance(fn.function, ir.Compose):
+            if fn.function.param is None:
+                return self._force_compose(fn.function, ForceEnv())
+            local = ForceEnv()
+            local.bind(fn.function.param, arg)
+            for stage in fn.function.stages:
+                value = self._apply(self.force_value(stage.function, local), self.force_value(stage.arg, local))
+                local.bind(stage.name, value)
+            return self.force_value(fn.function.result, local)
 
         bound = self._merge_bound(fn.bound, arg)
 
@@ -435,6 +457,8 @@ class Forcer:
             return function.signature
         if isinstance(function, ir.Lambda):
             return function.signature
+        if isinstance(function, ir.Compose):
+            return function.signature
         if isinstance(function, ir.Chain):
             return function.signature
         return None
@@ -450,9 +474,22 @@ class Forcer:
         return self.inputs[name]
 
     def _final_outputs(self, value):
+        fields = self._collect_output_fields(value)
+        if fields is not None:
+            return fields
+        return {'result': value}
+
+    def _collect_output_fields(self, value):
         if isinstance(value, Record):
             return dict(value.fields)
-        return {'result': value}
+        if isinstance(value, Merge):
+            left = self._collect_output_fields(value.left)
+            right = self._collect_output_fields(value.right)
+            if left is None or right is None:
+                return None
+            left.update(right)
+            return left
+        return None
 
 
 def _value_key(value):

@@ -68,6 +68,17 @@ call = import "call.sh"
 align | sort | call
 '''
 
+_FUNCTION = '''align = import "align.sh"
+sort = import "sort.sh"
+call = import "call.sh"
+
+\\x ->
+    a = align x
+    s = sort ( x // a )
+    c = call ( x // a // s )
+    a // s // c
+'''
+
 
 class TestForce(ut.TestCase):
     def _files(self):
@@ -79,6 +90,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'pipe.swl'): _PIPE,
             os.path.join(root, 'partial.swl'): _PARTIAL,
             os.path.join(root, 'chain.swl'): _CHAIN,
+            os.path.join(root, 'function.swl'): _FUNCTION,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -133,6 +145,17 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['tasks'][0]['path'], os.path.join(root, 'align.sh'))
         self.assertIn('script', data['tasks'][0])
         self.assertIn('outputs', data['tasks'][0])
+
+    def test_function_and_chain_compile_to_same_shape(self):
+        files, root = self._files()
+        chain = force_file(os.path.join(root, 'chain.swl'), files).to_dict()
+        function = force_file(os.path.join(root, 'function.swl'), files).to_dict()
+        self.assertEqual(chain['inputs'], function['inputs'])
+        self.assertEqual(chain['outputs'], function['outputs'])
+        self.assertEqual(
+            [(task['name'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in chain['tasks']],
+            [(task['name'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in function['tasks']],
+        )
 
 
 if __name__ == '__main__':
