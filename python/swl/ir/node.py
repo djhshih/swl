@@ -1,6 +1,10 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+
+def _indent(text, prefix='  '):
+    return '\n'.join(prefix + line if line else prefix for line in text.splitlines())
+
 from swl.semantic.task.type import TaskSignature
 
 
@@ -154,11 +158,11 @@ class Stage:
 
     def __repr__(self):
         return (
-            f'Stage(\n'
+            'Stage(\n'
             f'  name={self.name!r},\n'
-            f'  function={self.function!r},\n'
-            f'  arg={self.arg!r},\n'
-            f')'
+            f'  function=\n{_indent(repr(self.function), "    ")},\n'
+            f'  arg=\n{_indent(repr(self.arg), "    ")}\n'
+            ')'
         )
 
 
@@ -171,17 +175,17 @@ class Compose(Node):
 
     def __repr__(self):
         if self.stages:
-            stages = ',\n'.join(f'    {stage!r}' for stage in self.stages)
+            stages = ',\n'.join(_indent(repr(stage), '    ') for stage in self.stages)
             stages = f'[\n{stages}\n  ]'
         else:
             stages = '[]'
         return (
-            f'Compose(\n'
+            'Compose(\n'
             f'  param={self.param!r},\n'
             f'  stages={stages},\n'
-            f'  result={self.result!r},\n'
+            f'  result=\n{_indent(repr(self.result), "    ")},\n'
             f'  signature={self.signature!r},\n'
-            f')'
+            ')'
         )
 
 

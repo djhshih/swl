@@ -21,8 +21,7 @@ if __name__ == '__main__':
     args = ap.parse_args()
 
     try:
-        path = compile_workflow(args.input, args.output)
-        print(path)
+        compile_workflow(args.input, args.output)
     except:
         traceback.print_exc()
         raise SystemExit(os.EX_DATAERR)
