@@ -28,17 +28,44 @@ class Name(Node):
 class Record(Node):
     fields: Dict[str, Node]
 
+    def __repr__(self):
+        if self.fields:
+            fields = ',\n'.join(
+                f'    {name!r}: {value!r}'
+                for name, value in self.fields.items()
+            )
+            fields = f'{{\n{fields}\n  }}'
+        else:
+            fields = '{}'
+        return f'Record(fields={fields})'
+
 
 @dataclass(frozen=True)
 class Field(Node):
     record: Node
     name: str
 
+    def __repr__(self):
+        return (
+            f'Field(\n'
+            f'  record={self.record!r},\n'
+            f'  name={self.name!r},\n'
+            f')'
+        )
+
 
 @dataclass(frozen=True)
 class Update(Node):
     left: Node
     right: Node
+
+    def __repr__(self):
+        return (
+            f'Update(\n'
+            f'  left={self.left!r},\n'
+            f'  right={self.right!r},\n'
+            f')'
+        )
 
 
 @dataclass(frozen=True)
@@ -49,12 +76,32 @@ class Function(Node):
     path: Optional[str] = None
     body: Optional[Node] = None
 
+    def __repr__(self):
+        return (
+            f'Function(\n'
+            f'  name={self.name!r},\n'
+            f'  kind={self.kind!r},\n'
+            f'  signature={self.signature!r},\n'
+            f'  path={self.path!r},\n'
+            f'  body={self.body!r},\n'
+            f')'
+        )
+
 
 @dataclass(frozen=True)
 class Lambda(Node):
     param: str
     body: Node
     signature: Optional[TaskSignature] = None
+
+    def __repr__(self):
+        return (
+            f'Lambda(\n'
+            f'  param={self.param!r},\n'
+            f'  body={self.body!r},\n'
+            f'  signature={self.signature!r},\n'
+            f')'
+        )
 
 
 @dataclass(frozen=True)
@@ -70,11 +117,33 @@ class Apply(Node):
     arg: Node
     signature: Optional[TaskSignature] = None
 
+    def __repr__(self):
+        return (
+            f'Apply(\n'
+            f'  function={self.function!r},\n'
+            f'  arg={self.arg!r},\n'
+            f'  signature={self.signature!r},\n'
+            f')'
+        )
+
 
 @dataclass(frozen=True)
 class Chain(Node):
     items: List[Node]
     signature: Optional[TaskSignature] = None
+
+    def __repr__(self):
+        if self.items:
+            items = ',\n'.join(f'    {item!r}' for item in self.items)
+            items = f'[\n{items}\n  ]'
+        else:
+            items = '[]'
+        return (
+            f'Chain(\n'
+            f'  items={items},\n'
+            f'  signature={self.signature!r},\n'
+            f')'
+        )
 
 
 @dataclass(frozen=True)
@@ -82,6 +151,15 @@ class Stage:
     name: str
     function: Node
     arg: Node
+
+    def __repr__(self):
+        return (
+            f'Stage(\n'
+            f'  name={self.name!r},\n'
+            f'  function={self.function!r},\n'
+            f'  arg={self.arg!r},\n'
+            f')'
+        )
 
 
 @dataclass(frozen=True)
@@ -91,14 +169,50 @@ class Compose(Node):
     result: Node
     signature: Optional[TaskSignature] = None
 
+    def __repr__(self):
+        if self.stages:
+            stages = ',\n'.join(f'    {stage!r}' for stage in self.stages)
+            stages = f'[\n{stages}\n  ]'
+        else:
+            stages = '[]'
+        return (
+            f'Compose(\n'
+            f'  param={self.param!r},\n'
+            f'  stages={stages},\n'
+            f'  result={self.result!r},\n'
+            f'  signature={self.signature!r},\n'
+            f')'
+        )
+
 
 @dataclass(frozen=True)
 class Bind(Node):
     name: str
     value: Node
 
+    def __repr__(self):
+        return (
+            f'Bind(\n'
+            f'  name={self.name!r},\n'
+            f'  value={self.value!r},\n'
+            f')'
+        )
+
 
 @dataclass(frozen=True)
 class Block(Node):
     bindings: List[Bind] = field(default_factory=list)
     result: Node = field(default_factory=Unknown)
+
+    def __repr__(self):
+        if self.bindings:
+            bindings = ',\n'.join(f'    {bind!r}' for bind in self.bindings)
+            bindings = f'[\n{bindings}\n  ]'
+        else:
+            bindings = '[]'
+        return (
+            f'Block(\n'
+            f'  bindings={bindings},\n'
+            f'  result={self.result!r},\n'
+            f')'
+        )
