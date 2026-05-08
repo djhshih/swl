@@ -1040,162 +1040,225 @@ all lower into one semantically stable normal form that `force.py` can plan from
 4. Canonicalize their final result assembly into a stable union-of-stage-results form.
 5. Preserve or attach normalized composition metadata/signatures where recoverable.
 
-## Concrete design sketch for normalized staged composition
+## Redesign direction: identity-based semantic IR for DAG-friendly lowering
 
-The main missing piece is a semantic IR representation for "progressive workflow composition" that is more explicit than a raw block of binds/updates, but more general than just `ir.Chain`.
-This should live in `python/swl/ir/node.py` and be produced by `lower.py` normalization when a workflow body matches the explicit staged-composition pattern.
+The current `Compose`-based normalization helped align `pipe.swl` and `function.swl`, but it still carries a tree-oriented weakness: later stage arguments rebuild nested `Update(...)` structure instead of referring explicitly to previously defined semantic values.
+That is acceptable as a transitional normalization, but it is not the best long-term design for scope-correct DAG creation.
 
-### Candidate new semantic IR nodes
+If we are not constrained to keep changes minimal, the better design is to make semantic identity explicit in the IR.
+The real problem is not just pretty normalization of update trees; it is that semantic sharing is currently implicit and tree-shaped, so `force.py` must recover graph structure later.
+The redesign should move that sharing earlier into the IR itself.
 
-#### `Stage`
-A small dataclass, likely not a full `Node`, describing one composition step:
+### Core principle
+Represent bound computations once, with stable identity, and refer to them explicitly everywhere else.
+Do **not** substitute full bound value trees into later expressions.
+Do **not** rely on structural equality of trees to recover sameness.
+Instead:
+- each semantic binding gets a unique identity
+- later uses become explicit references to that identity
+- `force.py` memoizes by semantic identity rather than by syntactic shape
+
+## Proposed semantic IR redesign
+
+### New binding/reference nodes
+Add explicit identity-bearing nodes to `python/swl/ir/node.py`.
+
+#### `Variable`
+Represents one bound semantic computation.
+Suggested fields:
+- `id: int`
 - `name: str`
-- `function: Node`
-- `arg: Node`
+- `value: Node`
 
-This preserves:
-- stage identity/binding name
-- callable being applied
-- normalized argument expression
+This is the semantic definition site of a computed value.
+Examples:
+- `a = align x`
+- `s = sort (x // a)`
+- `c = call (x // a // s)`
 
-#### `Compose`
-A new semantic IR node representing progressive workflow composition:
-- `param: Optional[str]`
-- `stages: List[Stage]`
-- `result: Node`
-- `signature: Optional[TaskSignature] = None`
+should each become one `Variable`.
 
-Interpretation:
-- composition starts from the root param/input environment when present
-- stages are executed left-to-right semantically/lazily
-- later stage args may depend on prior stage results
-- `result` is the normalized final workflow result expression, ideally already canonicalized as a union of stage outputs
+A workflow binding should lower directly to a `Variable`; there should not be a separate semantic `Bind` layer once lowering is complete.
 
-This node is intentionally broader than `Chain`:
-- `Chain` expresses direct syntactic composition sugar
-- `Compose` expresses normalized staged workflow composition regardless of original surface syntax
+#### `Ref`
+Represents a use of a previously defined semantic value.
+Suggested fields:
+- `id: int`
+- `name: str`
 
-### Why `Compose` instead of only expanding `Chain`
-Because `function.swl` is more explicit than `pipe.swl`:
-- it names intermediate stage outputs
-- it applies later stages to progressively updated records
-- it explicitly assembles the final output record
+This is the semantic use site of a computed value.
+A later stage argument should refer to prior stage results through `Ref`, not by copying the original `Apply(...)` tree.
 
-Those are all semantically meaningful workflow-composition facts.
-Rather than throwing them away and pretending everything was surface chain sugar, a `Compose` node keeps the normalized staged meaning explicit.
-Then both:
-- `align | sort | call`
-- `a = align x; s = sort (x // a); c = call (x // a // s); a // s // c`
+### Updated block structure
+`Block` should hold identity-bearing variables rather than anonymous binds whose values get substituted later.
+That means `Block` should conceptually become:
+- a sequence of `Variable`s
+- plus a result expression that may reference them through `Ref`
 
-can normalize to the same `Compose` form.
+The parser AST may still have bind syntax, but semantic lowering should produce `Variable` directly.
 
-## How `lower.py` should build `Compose`
+## Lowering strategy under the redesign
 
-### Step 1: ordinary lowering first
-Continue lowering parser AST into the existing semantic IR as today.
-Do not complicate raw lowering too much.
+### Current problem in `lower.py`
+Today lowering substitutes environment values directly into later expressions.
+That means later expressions contain duplicated copies of earlier computations.
+This is the root cause of tree duplication and ambiguous sharing.
 
-### Step 2: run `normalize(node)`
-After lowering, recursively normalize the IR.
-This is where `Compose` should be introduced.
+### New lowering rule
+When lowering a binding:
+1. allocate a fresh semantic variable id
+2. lower the bound expression once
+3. emit `Variable(id, name, value)`
+4. place `Ref(id, name)` in the environment for later uses
 
-### Step 3: detect composition candidates
-Inside `normalize(node)`, inspect:
-- `ir.Lambda`
-- `ir.Block`
-- final block results built from update unions
+Then:
+- the binding is defined exactly once
+- later references preserve scope-correct identity
+- nested scopes are safe because they allocate fresh ids even for shadowed names
 
-Look for the staged pattern:
-1. A lambda parameter or other canonical root input value exists.
-2. Bindings are stage applications:
-   - `a = f x`
-   - `s = g (x // a)`
-   - `c = h (x // a // s)`
-3. Each later stage arg is a normalized update-union of:
-   - the root input
-   - zero or more previously-bound stage result names
-4. The final block result is itself a normalized union of stage result names, optionally in progressive form.
+### Example target shape
+For:
 
-If those checks hold, rewrite the block/lambda body into `Compose(...)`.
+```swl
+\x ->
+    a = align x
+    s = sort (x // a)
+    c = call (x // a // s)
+    a // s // c
+```
 
-### Step 4: normalize argument environments
-Each stage arg should be normalized into a stable form before being stored in a `Stage`.
-For example, update trees should be flattened into a canonical sequence/order so that:
-- `x // a // s`
-- `(x // a) // s`
-- `x // (a // s)` when semantically equivalent in the accepted pattern
+the lowered semantic IR should conceptually look like:
 
-all normalize identically.
+```python
+Lambda(
+  param='x',
+  body=Block(
+    bindings=[
+      Variable(id=1, name='a', value=Apply(Function('align'), Name('x'))),
+      Variable(id=2, name='s', value=Apply(Function('sort'), Update(Name('x'), Ref(1, 'a')))),
+      Variable(id=3, name='c', value=Apply(Function('call'), Update(Update(Name('x'), Ref(1, 'a')), Ref(2, 's')))),
+    ],
+    result=Update(Update(Ref(1, 'a'), Ref(2, 's')), Ref(3, 'c')),
+  ),
+)
+```
 
-One practical internal representation is to flatten updates into an ordered list of terms first, then rebuild a stable tree form.
-That normalization machinery can be used both for:
-- stage argument detection
-- final result normalization
+The exact syntax can vary, but the essential property is:
+- definitions occur once
+- uses are explicit references
+- no repeated `Apply(align, x)` subtrees are copied into later arguments
 
-### Step 5: normalize final result assembly
-The final result for composition-style workflows should be canonicalized to one stable form.
-For example, if the result is intended to be the union of stage outputs:
-- `a // s // c`
-- `(a // s) // c`
-- `a // (s // c)`
+## Relationship to `Compose`
 
-should normalize to the same result expression under `Compose`.
+### Transitional view
+`Compose` is still useful as a normalization concept because it captures staged workflow composition explicitly.
+However, in the long-term design it should be built on top of value identity, not on top of copied update trees.
 
-That gives `force.py` a direct semantic signal that the workflow outputs are the union of stage result records, independent of original syntax.
+### Better `Compose` model
+If `Compose` remains, its stages should refer to semantic values explicitly.
+That means a stage should represent a stage result variable, not merely a callee/arg pair with ambiguous meaning.
+A cleaner stage model would be something like:
+- a variable/result identity
+- the callee
+- the argument expression, which may include `Ref`s
 
-## How `force.py` should use `Compose`
+or even simply a `Variable` specialized to composition staging.
 
-Once `Compose` exists, `force.py` can handle it directly rather than inferring composition from raw blocks/updates.
+### Important conclusion
+The real long-term goal is **not** merely to make `Compose` prettier.
+The goal is to make the entire lowered semantic IR explicitly shareable and scope-correct.
+Once that exists, `Compose` becomes optional or at least much simpler.
 
-Suggested force behavior:
-1. Create the symbolic root input record if `param` is present.
-2. Evaluate stages left-to-right.
-3. Maintain a local environment mapping stage names to forced record results.
-4. Force each stage's callable application using its normalized arg.
-5. Force the normalized `result` expression at the end.
+## Forcing strategy under the redesign
 
-This makes `force.py` simpler because it no longer has to recover staged workflow structure from arbitrary nested block/update patterns.
-It just executes a normalized semantic representation.
+### Current limitation in `force.py`
+`force.py` currently reconstructs DAG sharing from tree structure, task-input normalization, and ad hoc memoization.
+That is workable but indirect.
 
-## Relationship between `Chain` and `Compose`
+### New forcing rule
+`force.py` should force semantic definitions lazily by identity.
+That means:
+- maintain a mapping from `Variable.id` to forced result
+- when a `Ref(id, ...)` is encountered:
+  - if already forced, reuse the existing forced value
+  - otherwise force the referenced definition once and cache it
 
-Recommended semantics:
-- keep `Chain` as a surface-oriented semantic IR for syntax-directed lowering if useful
-- during normalization, lower `Chain` into `Compose` when possible
-- or normalize both `Chain` and explicit staged blocks into the same final `Compose` representation
+This turns forcing into graph evaluation over semantic let-bindings rather than repeated tree traversal.
 
-That would make `Compose` the canonical semantic form for DAG-oriented workflow composition.
+### Benefits
+- no duplicated task emission for repeated semantic stage uses
+- scope correctness by construction
+- much easier DAG memoization
+- cleaner equivalence between syntactic sugar and explicit workflow definitions
 
-Under that design:
-- `pipe.swl` lowers to `Chain(...)`, then normalizes to `Compose(...)`
-- `function.swl` lowers to `Lambda(Block(...))`, then normalizes to `Compose(...)`
+## Why this is better than structural caching
 
-This is the cleanest route to nearly identical compiled JSON.
+### Structural caching is insufficient
+Caching by raw lowered tree shape like:
+- `Update(Name('x'), Name('a'))`
+- or by repeated `Update(...)` object interning
 
-## Constraints for safe `Compose` detection
+is not enough because:
+- it is not inherently scope-safe
+- it conflates structural similarity with semantic identity
+- it still relies on tree reconstruction heuristics
 
-Normalization should only rewrite into `Compose` when the structure is clearly a workflow-composition pattern.
-Do **not** rewrite arbitrary blocks with applies/updates.
-Conservative acceptance rules should include:
-- stage names are introduced by simple binds
-- stage arguments reference only the root input and previously-bound stage results
-- final result is a union of stage result values, not an arbitrary expression
-- no unrelated side computations are mixed into the candidate composition block
+### Identity-based refs are scope-safe
+With `Variable` / `Ref`:
+- two shadowed names in nested scopes get different ids
+- repeated uses of the same binding share one semantic identity
+- memoization can safely key on that identity
 
-If the pattern does not match cleanly, keep the ordinary lowered IR.
+This is the correct abstraction boundary for DAG creation.
 
-## Suggested implementation order for the design sketch
+## Implications for `pipe.swl` vs `function.swl`
+The ideal end state is that both forms normalize to the same identity-based semantic graph.
 
-1. Add update-flattening helpers in `lower.py` normalization.
-2. Add pattern detection helpers for:
-   - stage application binds
-   - normalized update-union args
-   - normalized final result unions
-3. Add `Stage` and `Compose` to `node.py`.
-4. Normalize simple `Chain(...)` into `Compose(...)` first.
-5. Normalize `function.swl`-style explicit staged blocks into `Compose(...)` second.
-6. Teach `force.py` to force `Compose` directly.
-7. Add regression tests that compare compiled `pipe.swl` vs `function.swl` JSON.
+### `pipe.swl`
+Chain syntax should normalize into explicit staged semantic definitions/refs.
+Conceptually, `align | sort | call` should normalize to the same staged let-graph as the explicit form.
+
+### `function.swl`
+The explicit function form already expresses those stages directly; lowering should preserve them as explicit semantic defs/refs rather than flattening them into copied trees.
+
+Then both workflows converge before forcing, and the forced DAG becomes naturally identical.
+This is better than special-casing chains or relying on forcing-time reconstruction.
+
+## Recommended redesign phases
+
+### Phase 1: introduce semantic identity
+1. Add `Variable` and `Ref` to `python/swl/ir/node.py`.
+2. Update `lower.py` so binding lowering allocates unique ids.
+3. Lower bindings directly to `Variable`.
+4. Stop substituting bound value trees into later expressions; store `Ref`s in the env instead.
+5. Update repr/debug printing accordingly.
+
+### Phase 2: normalize composition on top of refs
+1. Revisit `Compose` so stages refer to identity-bearing values.
+2. Normalize both `Chain(...)` and explicit staged blocks into the same ref-based staged representation.
+3. Keep update normalization only as a helper, not as the primary sharing mechanism.
+
+### Phase 3: rewrite forcing around semantic identity
+1. Teach `force.py` to resolve `Ref` through variable definition lookup.
+2. Memoize forced results by semantic id.
+3. Emit each semantic application/task at most once.
+4. Reduce forcing heuristics that currently reconstruct sharing from tree shape.
+
+### Phase 4: simplify after convergence
+Once the ref-based design is in place:
+- simplify `Compose` if it becomes redundant
+- simplify chain-specific forcing logic
+- simplify update-flattening logic used only for equivalence reconstruction
+
+## Target end state
+The semantic IR should be a tree-with-refs or graph-shaped representation of workflow meaning, not a pure copied tree.
+`force.py` should then be a mostly straightforward graph-to-DAG pass.
+
+That is the best long-term route to:
+- no duplicated DAG work
+- scope-correct caching/memoization
+- clean equivalence between syntactic sugar and explicit workflows
+- less forcing-time guesswork
 
 ### Phase B: simplify `force.py` once lowering is stronger
 After stronger lowering normalization, `force.py` should be able to rely more on the lowered shape and do less equivalence reconstruction.
