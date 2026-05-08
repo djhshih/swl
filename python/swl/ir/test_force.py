@@ -79,6 +79,12 @@ call = import "call.sh"
     a // s // c
 '''
 
+_REUSE = '''align = import "align.sh"
+\\x ->
+    a = align x
+    { bam: a.bam, bam2: a.bam }
+'''
+
 
 class TestForce(ut.TestCase):
     def _files(self):
@@ -91,6 +97,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'partial.swl'): _PARTIAL,
             os.path.join(root, 'chain.swl'): _CHAIN,
             os.path.join(root, 'function.swl'): _FUNCTION,
+            os.path.join(root, 'reuse.swl'): _REUSE,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -156,6 +163,13 @@ class TestForce(ut.TestCase):
             [(task['name'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in chain['tasks']],
             [(task['name'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in function['tasks']],
         )
+
+    def test_reused_variable_forces_once(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'reuse.swl'), files).to_dict()
+        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 't1')
+        self.assertEqual(data['outputs']['bam2']['task'], 't1')
 
 
 if __name__ == '__main__':

@@ -114,6 +114,7 @@ class Forcer:
         self.lowerer = Lowerer(files=files)
         self.variables = {}
         self.forced_variables = {}
+        self.apply_cache = {}
 
     def force(self, node):
         value = self.force_value(node, ForceEnv())
@@ -163,7 +164,12 @@ class Forcer:
         if isinstance(node, ir.Apply):
             fn = self.force_value(node.function, env)
             arg = self.force_value(node.arg, env)
-            return self._apply(fn, arg)
+            key = (_node_key(node.function), _value_key(fn), _value_key(arg))
+            if key in self.apply_cache:
+                return self.apply_cache[key]
+            result = self._apply(fn, arg)
+            self.apply_cache[key] = result
+            return result
 
         if isinstance(node, ir.Block):
             local = ForceEnv(env)
@@ -220,7 +226,12 @@ class Forcer:
             local = ForceEnv()
             local.bind(fn.function.param, arg)
             for stage in fn.function.stages:
-                value = self._apply(self.force_value(stage.function, local), self.force_value(stage.arg, local))
+                stage_key = ('compose-stage', id(fn.function), stage.name, _value_key(arg), tuple(sorted(local.values.keys())))
+                if stage_key in self.apply_cache:
+                    value = self.apply_cache[stage_key]
+                else:
+                    value = self._apply(self.force_value(stage.function, local), self.force_value(stage.arg, local))
+                    self.apply_cache[stage_key] = value
                 local.bind(stage.name, value)
             return self.force_value(fn.function.result, local)
 
@@ -504,6 +515,14 @@ class Forcer:
             left.update(right)
             return left
         return None
+
+
+def _node_key(node):
+    if isinstance(node, ir.Ref):
+        return ('ref', node.id)
+    if isinstance(node, ir.Name):
+        return ('name', node.name)
+    return ('node', repr(node))
 
 
 def _value_key(value):
