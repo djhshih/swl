@@ -1,6 +1,5 @@
 Python:
-- semantic checker
-- ast interpretation
+- Common Subexpression Elimination in lower.py
 - transpile to cwl
 
 Rust:
@@ -8,5 +7,5 @@ Rust:
 - worflow parser
 - task parser
 - semantic checker
-- ast interpretation
+- semantic lowering
 - transpile to cwl
