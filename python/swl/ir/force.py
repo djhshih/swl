@@ -112,6 +112,8 @@ class Forcer:
         self.task_defs = {}
         self.call_counter = 0
         self.lowerer = Lowerer(files=files)
+        self.variables = {}
+        self.forced_variables = {}
 
     def force(self, node):
         value = self.force_value(node, ForceEnv())
@@ -131,6 +133,14 @@ class Forcer:
             if node.name not in self.inputs:
                 self.inputs[node.name] = Input(node.name)
             return self.inputs[node.name]
+
+        if isinstance(node, ir.Ref):
+            if node.id in self.forced_variables:
+                return self.forced_variables[node.id]
+            variable = self.variables[node.id]
+            value = self.force_value(variable.value, env)
+            self.forced_variables[node.id] = value
+            return value
 
         if isinstance(node, ir.Record):
             return Record({name: self.force_value(value, env) for name, value in node.fields.items()})
@@ -158,7 +168,8 @@ class Forcer:
         if isinstance(node, ir.Block):
             local = ForceEnv(env)
             for bind in node.bindings:
-                local.bind(bind.name, self.force_value(bind.value, local))
+                self.variables[bind.id] = bind
+                local.bind(bind.name, ir.Ref(bind.id, bind.name))
             return self.force_value(node.result, local)
 
         if isinstance(node, ir.Compose):
@@ -173,8 +184,11 @@ class Forcer:
                 result = self._compose(result, item)
             return result
 
-        if isinstance(node, ir.Bind):
-            return self.force_value(node.value, env)
+        if isinstance(node, ir.Variable):
+            self.variables[node.id] = node
+            value = self.force_value(node.value, env)
+            self.forced_variables[node.id] = value
+            return value
 
         return Literal(None)
 

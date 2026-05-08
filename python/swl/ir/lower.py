@@ -11,6 +11,7 @@ class Lowerer:
         self.checker = Checker(files=files)
         self.workflow_cache = {}
         self.function_cache = {}
+        self.next_var_id = 1
 
     def lower_file(self, path: str):
         result = self.checker.load(path)
@@ -27,10 +28,12 @@ class Lowerer:
             if expr.type == wf_node.NodeType.bind:
                 value = self.lower_binding(expr, env, imports)
                 env = dict(env)
-                env[expr.id.name] = value
                 if expr.id.name in imports:
+                    env[expr.id.name] = value
                     continue
-                bindings.append(ir.Bind(expr.id.name, value))
+                var = ir.Variable(self._alloc_var_id(), expr.id.name, value)
+                env[expr.id.name] = ir.Ref(var.id, var.name)
+                bindings.append(var)
         result = self.lower_expr(exprs[-1], env, imports)
         if isinstance(result, ir.Lambda) and signature is not None:
             result = ir.Lambda(result.param, result.body, signature)
@@ -94,10 +97,12 @@ class Lowerer:
                 if item.type == wf_node.NodeType.bind:
                     value = self.lower_binding(item, local_env, imports)
                     local_env = dict(local_env)
-                    local_env[item.id.name] = value
                     if item.id.name in imports:
+                        local_env[item.id.name] = value
                         continue
-                    bindings.append(ir.Bind(item.id.name, value))
+                    var = ir.Variable(self._alloc_var_id(), item.id.name, value)
+                    local_env[item.id.name] = ir.Ref(var.id, var.name)
+                    bindings.append(var)
             result = self.lower_expr(expr.body[-1], local_env, imports)
             if not bindings:
                 return result
@@ -107,7 +112,8 @@ class Lowerer:
             return ir.Chain(self._lower_chain_items(expr, env, imports))
 
         if expr.type == wf_node.NodeType.bind:
-            return ir.Bind(expr.id.name, self.lower_binding(expr, env, imports))
+            value = self.lower_binding(expr, env, imports)
+            return ir.Variable(self._alloc_var_id(), expr.id.name, value)
 
         return ir.Unknown()
 
@@ -144,15 +150,18 @@ class Lowerer:
             return ir.Lambda(node.param, body, node.signature)
 
         if isinstance(node, ir.Block):
-            bindings = [ir.Bind(bind.name, self.normalize(bind.value)) for bind in node.bindings]
+            bindings = [ir.Variable(bind.id, bind.name, self.normalize(bind.value)) for bind in node.bindings]
             result = self.normalize(node.result)
             return ir.Block(bindings, result)
 
-        if isinstance(node, ir.Bind):
-            return ir.Bind(node.name, self.normalize(node.value))
+        if isinstance(node, ir.Variable):
+            return ir.Variable(node.id, node.name, self.normalize(node.value))
 
         if isinstance(node, ir.Apply):
             return ir.Apply(self.normalize(node.function), self.normalize(node.arg), node.signature)
+
+        if isinstance(node, ir.Ref):
+            return node
 
         if isinstance(node, ir.Record):
             return ir.Record({name: self.normalize(value) for name, value in node.fields.items()})
@@ -206,7 +215,7 @@ class Lowerer:
             if not self._is_stage_arg(bind.value.arg, root, stage_values):
                 return None
             stages.append(ir.Stage(bind.name, bind.value.function, bind.value.arg))
-            stage_values[bind.name] = bind.value
+            stage_values[bind.name] = ir.Ref(bind.id, bind.name)
         if not stages:
             return None
         if not self._is_stage_result_union(body.result, stage_values):
@@ -254,17 +263,14 @@ class Lowerer:
         return all(self._is_stage_term(term, stage_values) for term in terms[1:])
 
     def _is_stage_term(self, term, stage_values):
-        for value in stage_values.values():
-            if term == value:
-                return True
-        return False
+        return term in stage_values.values()
 
     def _is_stage_result_union(self, node, stage_values):
         terms = self._flatten_update_terms(node)
         if len(terms) != len(stage_values):
             return False
         values = list(stage_values.values())
-        return all(any(term == value for value in values) for term in terms)
+        return all(term in values for term in terms)
 
     def _rewrite_stage_arg(self, arg, root, stage_values):
         terms = self._flatten_update_terms(arg)
@@ -282,6 +288,11 @@ class Lowerer:
             if term == value:
                 return name
         raise ValueError('Unknown stage term during compose normalization')
+
+    def _alloc_var_id(self):
+        current = self.next_var_id
+        self.next_var_id += 1
+        return current
 
 
 def lower_file(path: str, files=None):

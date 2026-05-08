@@ -69,6 +69,7 @@ class TestLower(ut.TestCase):
         body = tree.body
         self.assertIsInstance(body, ir.Block)
         self.assertEqual(len(body.bindings), 2)
+        self.assertIsInstance(body.bindings[0], ir.Variable)
         self.assertIsInstance(body.bindings[0].value, ir.Apply)
         self.assertIsInstance(body.bindings[0].value.function, ir.Function)
         self.assertEqual(body.bindings[0].value.function.kind, 'task')
@@ -78,8 +79,17 @@ class TestLower(ut.TestCase):
         self.assertIsInstance(body.bindings[1].value.function.body, ir.Lambda)
         self.assertEqual(body.bindings[0].value.function.name, 'align')
         self.assertEqual(body.bindings[1].value.function.name, 'sub')
-        self.assertIs(body.bindings[0].value.function, body.result.fields['bam'].record.function)
-        self.assertIs(body.bindings[1].value.function, body.result.fields['sbam'].record.function)
+        self.assertEqual(body.result.fields['bam'].record, ir.Ref(body.bindings[0].id, body.bindings[0].name))
+        self.assertEqual(body.result.fields['sbam'].record, ir.Ref(body.bindings[1].id, body.bindings[1].name))
+
+    def test_lower_bindings_produce_variables_and_refs(self):
+        files, root = self._files()
+        tree = parse_and_lower(_MAIN, root, files)
+        body = tree.body
+        self.assertIsInstance(body.bindings[0], ir.Variable)
+        self.assertIsInstance(body.bindings[1], ir.Variable)
+        self.assertEqual(body.result.fields['bam'].record, ir.Ref(body.bindings[0].id, 'a'))
+        self.assertEqual(body.result.fields['sbam'].record, ir.Ref(body.bindings[1].id, 'b'))
 
     def test_lower_chain_normalizes_to_compose(self):
         files, root = self._files()

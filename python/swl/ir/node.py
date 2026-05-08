@@ -29,6 +29,15 @@ class Name(Node):
 
 
 @dataclass(frozen=True)
+class Ref(Node):
+    id: int
+    name: str
+
+    def __repr__(self):
+        return f'Ref(id={self.id!r}, name={self.name!r})'
+
+
+@dataclass(frozen=True)
 class Record(Node):
     fields: Dict[str, Node]
 
@@ -190,13 +199,15 @@ class Compose(Node):
 
 
 @dataclass(frozen=True)
-class Bind(Node):
+class Variable(Node):
+    id: int
     name: str
     value: Node
 
     def __repr__(self):
         return (
-            f'Bind(\n'
+            f'Variable(\n'
+            f'  id={self.id!r},\n'
             f'  name={self.name!r},\n'
             f'  value={self.value!r},\n'
             f')'
@@ -205,7 +216,7 @@ class Bind(Node):
 
 @dataclass(frozen=True)
 class Block(Node):
-    bindings: List[Bind] = field(default_factory=list)
+    bindings: List[Variable] = field(default_factory=list)
     result: Node = field(default_factory=Unknown)
 
     def __repr__(self):
