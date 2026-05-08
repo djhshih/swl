@@ -211,6 +211,16 @@ That is acceptable temporarily, but IR work should replace that approximation wi
 
 ## Phase 5: IR design - IN PROGRESS
 
+### Current implementation status update
+The semantic-IR and forcing redesign has advanced further than the original phase text below:
+- `Compose` has been removed from the active IR/forcing pipeline
+- canonical lowered workflow form is now `Lambda(Block(...))`
+- chain sugar and explicit staged workflows are tested for lowered-IR equivalence
+- forcing now rejects non-canonical `Chain` input
+- forcing is more explicitly driven by `Variable` / `Ref` identity
+- force-layer value normalization has been tightened for merged records, field projection, output flattening, dependency extraction, and caching
+- DAG codec behavior is now stricter and rejects unsupported binding forms instead of silently preserving unknown placeholders
+
 The next major phase is to build a proper intermediate representation that matches the lazy semantics above.
 
 ### 5.1 IR goals

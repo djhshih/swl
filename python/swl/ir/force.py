@@ -1,4 +1,3 @@
-import json
 from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
@@ -8,83 +7,7 @@ from swl.syntax.task import interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
 
 
-def _dag_to_dict(self):
-    return {
-        'inputs': {
-            name: {
-                'type': value.type,
-                'desc': value.desc,
-            }
-            for name, value in self.inputs.items()
-        },
-        'tasks': [
-            {
-                'id': task.id,
-                'name': task.name,
-                'path': task.path,
-                'deps': list(task.deps),
-                'inputs': {name: _binding_to_dict(value) for name, value in task.inputs.items()},
-                'outputs': {
-                    name: task.task['outputs'][name]
-                    for name in task.outputs
-                },
-                'run': task.task.get('run', {}),
-                'script': task.task['body'],
-            }
-            for task in self.tasks
-        ],
-        'outputs': {name: _binding_to_dict(value) for name, value in self.outputs.items()},
-    }
-
-
-@classmethod
-def _dag_from_dict(cls, data):
-    inputs = {
-        name: Input(name, item.get('type'), item.get('desc'))
-        for name, item in data.get('inputs', {}).items()
-    }
-    tasks = []
-    task_by_id = {}
-    for item in data.get('tasks', []):
-        task_outputs = item.get('outputs', {})
-        task_run = item.get('run', {})
-        task = TaskCall(
-            id=item['id'],
-            name=item['name'],
-            path=item['path'],
-            inputs={},
-            outputs=list(task_outputs.keys()),
-            run={},
-            task={
-                'doc': None,
-                'body': item.get('script', ''),
-                'inputs': {},
-                'outputs': task_outputs,
-                'run': task_run,
-            },
-            deps=list(item.get('deps', [])),
-        )
-        tasks.append(task)
-        task_by_id[task.id] = task
-    for task, item in zip(tasks, data.get('tasks', [])):
-        task.inputs.update({
-            name: _binding_from_dict(value, inputs, task_by_id)
-            for name, value in item.get('inputs', {}).items()
-        })
-    outputs = {
-        name: _binding_from_dict(value, inputs, task_by_id)
-        for name, value in data.get('outputs', {}).items()
-    }
-    return cls(inputs, tasks, outputs)
-
-def _dag_write(self, path):
-    with open(path, 'w') as f:
-        json.dump(self.to_dict(), f, indent=2, sort_keys=True)
-
-@classmethod
-def _dag_read(cls, path):
-    with open(path, 'r') as f:
-        return cls.from_dict(json.load(f))
+_SENTINEL = object()
 
 
 class ForceEnv:
@@ -116,11 +39,42 @@ class Forcer:
         self.apply_cache = {}
 
     def force(self, node):
+        self._assert_canonical(node)
         value = self.force_value(node, ForceEnv())
         value = self._force_root(value)
         self._refine_input_metadata()
         outputs = self._final_outputs(value)
         return DAG(dict(self.inputs), list(self.tasks), outputs)
+
+    def _assert_canonical(self, node):
+        if isinstance(node, ir.Chain):
+            raise ValueError('Forcing expects normalized IR without Chain nodes')
+        if isinstance(node, ir.Lambda):
+            self._assert_canonical(node.body)
+            return
+        if isinstance(node, ir.Block):
+            for bind in node.bindings:
+                self._assert_canonical(bind)
+            self._assert_canonical(node.result)
+            return
+        if isinstance(node, ir.Variable):
+            self._assert_canonical(node.value)
+            return
+        if isinstance(node, ir.Apply):
+            self._assert_canonical(node.function)
+            self._assert_canonical(node.arg)
+            return
+        if isinstance(node, ir.Record):
+            for value in node.fields.values():
+                self._assert_canonical(value)
+            return
+        if isinstance(node, ir.Field):
+            self._assert_canonical(node.record)
+            return
+        if isinstance(node, ir.Update):
+            self._assert_canonical(node.left)
+            self._assert_canonical(node.right)
+            return
 
     def force_value(self, node, env):
         if isinstance(node, ir.Literal):
@@ -142,12 +96,10 @@ class Forcer:
 
         if isinstance(node, ir.Field):
             source = self.force_value(node.record, env)
-            if isinstance(source, Record) and node.name in source.fields:
-                return source.fields[node.name]
-            return Field(source, node.name)
+            return self._project_field(source, node.name)
 
         if isinstance(node, ir.Update):
-            return Merge(self.force_value(node.left, env), self.force_value(node.right, env))
+            return self._merge_values(self.force_value(node.left, env), self.force_value(node.right, env))
 
         if isinstance(node, ir.Function):
             return ForcedFunction(node, None, node.signature)
@@ -171,7 +123,7 @@ class Forcer:
             self.forced_variables[node.id] = value
             return value
 
-        return Literal(None)
+        raise ValueError(f'Unsupported IR node during forcing: {type(node).__name__}')
 
     def _force_ref(self, ref, env):
         if ref.id in self.forced_variables:
@@ -194,7 +146,7 @@ class Forcer:
 
     def _apply(self, fn, arg):
         if not isinstance(fn, ForcedFunction):
-            return Literal(None)
+            raise ValueError(f'Cannot apply non-function value during forcing: {fn!r}')
 
         bound = self._merge_bound(fn.bound, arg)
 
@@ -236,7 +188,7 @@ class Forcer:
     def _merge_bound(self, old, new):
         if old is None:
             return new
-        return Merge(old, new)
+        return self._merge_values(old, new)
 
     def _saturated_signature(self, function, bound):
         available = self._available_inputs(bound)
@@ -276,18 +228,30 @@ class Forcer:
     def _looks_record_like(self, value):
         return isinstance(value, (Record, Merge))
 
+    def _project_field(self, source, name):
+        if isinstance(source, Record):
+            if name in source.fields:
+                return source.fields[name]
+            return _SENTINEL
+        if isinstance(source, Merge):
+            projected = self._project_field(source.right, name)
+            if projected is not _SENTINEL:
+                return projected
+            return self._project_field(source.left, name)
+        return _SENTINEL
+
+    def _merge_values(self, left, right):
+        if isinstance(left, Record) and isinstance(right, Record):
+            fields = dict(left.fields)
+            fields.update(right.fields)
+            return Record(fields)
+        return Merge(left, right)
+
     def _project_input(self, value, name):
-        if isinstance(value, Record):
-            if name in value.fields:
-                return value.fields[name]
-            return Field(value, name)
-        if isinstance(value, Merge):
-            right_fields = self._available_inputs(value.right)
-            if name in right_fields:
-                return self._project_input(value.right, name)
-            left_fields = self._available_inputs(value.left)
-            if name in left_fields:
-                return self._project_input(value.left, name)
+        if isinstance(value, (Record, Merge)):
+            projected = self._project_field(value, name)
+            if projected is not _SENTINEL:
+                return projected
             return Field(value, name)
         return value
 
@@ -407,19 +371,23 @@ class Forcer:
             deps.update(self._value_dependencies(value))
         return deps
 
-    def _value_dependencies(self, value):
-        if isinstance(value, Field) and isinstance(value.source, TaskCall):
-            return {value.source.id}
+    def _walk_values(self, value):
+        yield value
         if isinstance(value, Field):
-            return self._value_dependencies(value.source)
-        if isinstance(value, Merge):
-            return self._value_dependencies(value.left).union(self._value_dependencies(value.right))
-        if isinstance(value, Record):
-            deps = set()
+            yield from self._walk_values(value.source)
+        elif isinstance(value, Merge):
+            yield from self._walk_values(value.left)
+            yield from self._walk_values(value.right)
+        elif isinstance(value, Record):
             for item in value.fields.values():
-                deps.update(self._value_dependencies(item))
-            return deps
-        return set()
+                yield from self._walk_values(item)
+
+    def _value_dependencies(self, value):
+        deps = set()
+        for item in self._walk_values(value):
+            if isinstance(item, Field) and isinstance(item.source, TaskCall):
+                deps.add(item.source.id)
+        return deps
 
     def _force_root(self, value):
         if not isinstance(value, ForcedFunction):
@@ -454,15 +422,9 @@ class Forcer:
         return {'result': value}
 
     def _collect_output_fields(self, value):
-        if isinstance(value, Record):
-            return dict(value.fields)
-        if isinstance(value, Merge):
-            left = self._collect_output_fields(value.left)
-            right = self._collect_output_fields(value.right)
-            if left is None or right is None:
-                return None
-            left.update(right)
-            return left
+        normalized = _normalize_output_value(value)
+        if isinstance(normalized, Record):
+            return dict(normalized.fields)
         return None
 
 
@@ -477,6 +439,60 @@ def _forced_function_key(value):
     return (function_key, _value_key(value.bound))
 
 
+def _flatten_value_terms(value):
+    if isinstance(value, Merge):
+        return _flatten_value_terms(value.left) + _flatten_value_terms(value.right)
+    return [value]
+
+
+def _record_fields_key(fields):
+    return tuple(sorted((name, _value_key(value)) for name, value in fields.items()))
+
+
+def _merge_key(value):
+    terms = _flatten_value_terms(value)
+    record_fields = {}
+    others = []
+    for term in terms:
+        if isinstance(term, Record):
+            record_fields.update(term.fields)
+        else:
+            others.append(_value_key(term))
+    parts = []
+    if record_fields:
+        parts.append(('record', _record_fields_key(record_fields)))
+    parts.extend(others)
+    if len(parts) == 1:
+        return parts[0]
+    return ('merge', tuple(parts))
+
+
+def _normalize_output_value(value):
+    if isinstance(value, Merge):
+        terms = _flatten_value_terms(value)
+        record_fields = {}
+        others = []
+        for term in terms:
+            normalized = _normalize_output_value(term)
+            if isinstance(normalized, Record):
+                record_fields.update(normalized.fields)
+            else:
+                others.append(normalized)
+        if not others:
+            return Record(record_fields)
+        result = Record(record_fields) if record_fields else others[0]
+        if record_fields:
+            start = 0
+        else:
+            start = 1
+        for term in others[start:]:
+            result = Merge(result, term)
+        return result
+    if isinstance(value, Record):
+        return Record({name: _normalize_output_value(item) for name, item in value.fields.items()})
+    return value
+
+
 def _value_key(value):
     if isinstance(value, Input):
         return ('input', value.name)
@@ -485,32 +501,12 @@ def _value_key(value):
     if isinstance(value, Field):
         return ('field', _value_key(value.source), value.name)
     if isinstance(value, Merge):
-        return ('merge', _value_key(value.left), _value_key(value.right))
+        return _merge_key(value)
     if isinstance(value, Record):
-        return ('record', tuple(sorted((name, _value_key(v)) for name, v in value.fields.items())))
+        return ('record', _record_fields_key(value.fields))
     if isinstance(value, TaskCall):
-        return ('task', value.id)
-    return ('other', repr(value))
-
-
-def _binding_to_dict(value):
-    if isinstance(value, Input):
-        return {'source': 'input', 'name': value.name}
-    if isinstance(value, Literal):
-        return {'source': 'literal', 'value': value.value}
-    if isinstance(value, Field):
-        if isinstance(value.source, TaskCall):
-            return {'source': 'task', 'task': value.source.id, 'output': value.name}
-        return {'source': 'field', 'field': value.name, 'value': _binding_to_dict(value.source)}
-    if isinstance(value, Merge):
-        return {'source': 'merge', 'left': _binding_to_dict(value.left), 'right': _binding_to_dict(value.right)}
-    if isinstance(value, Record):
-        return {'source': 'record', 'fields': {name: _binding_to_dict(v) for name, v in value.fields.items()}}
-    if isinstance(value, TaskCall):
-        return {'source': 'task_call', 'task': value.id}
-    if isinstance(value, ForcedFunction):
-        return {'source': 'function'}
-    return {'source': 'unknown', 'repr': repr(value)}
+        return ('task', value.path, value.id)
+    return ('other', type(value).__name__, repr(value))
 
 
 def _interp_to_dict(value):
@@ -523,39 +519,6 @@ def _interp_to_dict(value):
     if isinstance(value, interp.Expr):
         return {'kind': 'expr', 'text': value.text}
     return None
-
-
-def _binding_from_dict(data, inputs, tasks):
-    source = data.get('source')
-    if source == 'input':
-        return inputs[data['name']]
-    if source == 'literal':
-        return Literal(data.get('value'))
-    if source == 'task':
-        return Field(tasks[data['task']], data['output'])
-    if source == 'field':
-        return Field(_binding_from_dict(data['value'], inputs, tasks), data['field'])
-    if source == 'merge':
-        return Merge(
-            _binding_from_dict(data['left'], inputs, tasks),
-            _binding_from_dict(data['right'], inputs, tasks),
-        )
-    if source == 'record':
-        return Record({
-            name: _binding_from_dict(value, inputs, tasks)
-            for name, value in data.get('fields', {}).items()
-        })
-    if source == 'task_call':
-        return tasks[data['task']]
-    if source == 'function':
-        return {'kind': 'function'}
-    return {'kind': 'unknown', 'repr': data.get('repr')}
-
-
-DAG.to_dict = _dag_to_dict
-DAG.from_dict = _dag_from_dict
-DAG.write = _dag_write
-DAG.read = _dag_read
 
 
 def force_file(path: str, files=None):

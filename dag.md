@@ -119,8 +119,24 @@ Each `Variable.id` is forced at most once.
 
 This makes DAG sharing explicit and scope-correct.
 
+### Current tightened invariants
+The current implementation now additionally assumes:
+- forcing only sees canonical lowered IR
+- `Chain` is rejected before forcing begins
+- applying a non-function during forcing is an error
+- DAG serialization/deserialization accepts only supported binding forms
+
+### Current normalization behavior inside force
+The force layer now also normalizes executor-facing values in a few important places:
+- `Update(Record, Record)` collapses to one `Record`
+- field projection over merged records is right-biased
+- nested merged record outputs are flattened before final output extraction
+- dependency extraction walks nested records/merges structurally
+- apply/task-call caching prefers semantic/function identity over generic structural fallback
+
 ## Why this is better
 - no duplicated semantic work
 - scope is encoded by unique variable ids
 - `function.swl` and `pipe.swl` converge before forcing
 - `force.py` becomes a let-graph evaluator rather than a tree-reconstruction pass
+- force-time failures are explicit instead of silently degrading to placeholder values

@@ -1,7 +1,9 @@
 import os
 import unittest as ut
 
-from swl.ir.force import force_file
+from swl.ir import node as ir
+from swl.ir.dag import Literal, Merge, Record
+from swl.ir.force import Forcer, force_file
 
 
 _ALIGN = '''# @ Align
@@ -109,6 +111,22 @@ _WORKFLOW_PARTIAL_REUSE = '''mk = import "mk_align.swl"
     { bam: a.bam, bam2: b.bam }
 '''
 
+_NESTED_LAMBDA_REUSE = '''sub = import "sub.swl"
+\\x ->
+    outer = sub
+    r1 = outer x
+    r2 = outer x
+    { bam: r1.bam2, bam2: r2.bam2 }
+'''
+
+_PARTIAL_DIFFERENT = '''align = import "align.sh"
+\\x ->
+    f = align { ref: x.ref, ref_fai: x.ref_fai }
+    a = f { fastq1: x.fastq1, fastq2: x.fastq2, outbase: x.outbase }
+    b = f { fastq1: x.fastq1, fastq2: x.fastq2, outbase: "other" }
+    { bam: a.bam, bam2: b.bam }
+'''
+
 
 class TestForce(ut.TestCase):
     def _files(self):
@@ -134,6 +152,8 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'shadow.swl'): _SHADOW,
             os.path.join(root, 'partial_reuse.swl'): _PARTIAL_REUSE,
             os.path.join(root, 'workflow_partial_reuse.swl'): _WORKFLOW_PARTIAL_REUSE,
+            os.path.join(root, 'nested_lambda_reuse.swl'): _NESTED_LAMBDA_REUSE,
+            os.path.join(root, 'partial_different.swl'): _PARTIAL_DIFFERENT,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -227,6 +247,63 @@ class TestForce(ut.TestCase):
         self.assertEqual([task['name'] for task in data['tasks']], ['align'])
         self.assertEqual(data['outputs']['bam']['task'], 't1')
         self.assertEqual(data['outputs']['bam2']['task'], 't1')
+
+    def test_nested_workflow_value_reuse_is_deduped(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'nested_lambda_reuse.swl'), files).to_dict()
+        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 't1')
+        self.assertEqual(data['outputs']['bam2']['task'], 't1')
+
+    def test_partial_application_with_different_args_is_not_deduped(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'partial_different.swl'), files).to_dict()
+        self.assertEqual([task['name'] for task in data['tasks']], ['align', 'align'])
+        self.assertEqual(data['outputs']['bam']['task'], 't1')
+        self.assertEqual(data['outputs']['bam2']['task'], 't2')
+
+    def test_force_rejects_non_normalized_chain_ir(self):
+        with self.assertRaisesRegex(ValueError, 'normalized IR without Chain nodes'):
+            Forcer().force(ir.Chain([]))
+
+    def test_merge_of_records_collapses_during_force(self):
+        value = Forcer().force_value(
+            ir.Update(
+                ir.Record({'a': ir.Literal(1)}),
+                ir.Record({'b': ir.Literal(2)}),
+            ),
+            None,
+        )
+        self.assertEqual(value.fields['a'].value, 1)
+        self.assertEqual(value.fields['b'].value, 2)
+
+    def test_field_projection_prefers_right_side_of_merge(self):
+        value = Forcer().force_value(
+            ir.Field(
+                ir.Update(
+                    ir.Record({'a': ir.Literal(1)}),
+                    ir.Record({'a': ir.Literal(2)}),
+                ),
+                'a',
+            ),
+            None,
+        )
+        self.assertEqual(value.value, 2)
+
+    def test_dependency_extraction_walks_merged_record_inputs(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'chain.swl'), files).to_dict()
+        self.assertEqual(data['tasks'][1]['deps'], ['t1'])
+        self.assertEqual(data['tasks'][2]['deps'], ['t2'])
+
+    def test_output_flattening_handles_nested_merged_records(self):
+        outputs = Forcer()._final_outputs(
+            Merge(
+                Record({'a': Literal(1)}),
+                Merge(Record({'b': Literal(2)}), Record({'c': Literal(3)})),
+            )
+        )
+        self.assertEqual(sorted(outputs.keys()), ['a', 'b', 'c'])
 
 
 if __name__ == '__main__':

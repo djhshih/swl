@@ -106,6 +106,14 @@ call  = import "call.sh"
         function = force_file(os.path.join(root, 'function.swl'), files).to_dict()
         self.assertEqual(function, pipe)
 
+    def test_dag_from_dict_rejects_unknown_binding_source(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported binding source'):
+            DAG.from_dict({
+                'inputs': {},
+                'tasks': [],
+                'outputs': {'x': {'source': 'mystery'}},
+            })
+
 
 if __name__ == '__main__':
     ut.main()
