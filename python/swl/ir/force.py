@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 from swl.ir import node as ir
 from swl.ir.lower import Lowerer
+from swl.semantic.task.type import TaskSignature
 from swl.syntax.task import interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
 
@@ -57,6 +58,7 @@ class Output:
 class ForcedFunction:
     function: object
     bound: Optional[object] = None
+    signature: Optional[object] = None
 
 
 @dataclass
@@ -183,10 +185,10 @@ class Forcer:
             return Merge(self.force_value(node.left, env), self.force_value(node.right, env))
 
         if isinstance(node, ir.Function):
-            return ForcedFunction(node, None)
+            return ForcedFunction(node, None, node.signature)
 
         if isinstance(node, ir.Lambda):
-            return ForcedFunction(node, None)
+            return ForcedFunction(node, None, node.signature)
 
         if isinstance(node, ir.Apply):
             fn = self.force_value(node.function, env)
@@ -214,7 +216,7 @@ class Forcer:
         return Literal(None)
 
     def _compose(self, left, right):
-        return ForcedFunction(('chain', left, right), None)
+        return ForcedFunction(('chain', left, right), None, self._compose_signature(left, right))
 
     def _apply(self, fn, arg):
         if not isinstance(fn, ForcedFunction):
@@ -222,28 +224,29 @@ class Forcer:
 
         if isinstance(fn.function, tuple) and fn.function[0] == 'chain':
             left = self._apply(fn.function[1], arg)
-            return self._apply(fn.function[2], left)
+            merged = self._merge_bound(arg, left)
+            return self._apply(fn.function[2], merged)
 
         bound = self._merge_bound(fn.bound, arg)
 
         if isinstance(fn.function, ir.Function):
             if fn.function.kind == 'task':
                 if not self._saturated_task(fn.function, bound):
-                    return ForcedFunction(fn.function, bound)
+                    return ForcedFunction(fn.function, bound, fn.signature)
                 return self._emit_task_call(fn.function, bound)
             if fn.function.kind == 'workflow':
                 if not self._saturated_signature(fn.function, bound):
-                    return ForcedFunction(fn.function, bound)
+                    return ForcedFunction(fn.function, bound, fn.signature)
                 return self._force_workflow(fn.function, bound)
 
         if isinstance(fn.function, ir.Lambda):
             if not isinstance(bound, Record):
-                return ForcedFunction(fn.function, bound)
+                return ForcedFunction(fn.function, bound, fn.signature)
             local = ForceEnv()
             local.bind(fn.function.param, bound)
             return self.force_value(fn.function.body, local)
 
-        return ForcedFunction(fn.function, bound)
+        return ForcedFunction(fn.function, bound, fn.signature)
 
     def _merge_bound(self, old, new):
         if old is None:
@@ -389,16 +392,30 @@ class Forcer:
     def _force_root(self, value):
         if not isinstance(value, ForcedFunction):
             return value
-        signature = self._function_signature(value.function)
+        signature = value.signature or self._function_signature(value.function)
         if signature is None:
             return value
         arg = Record({name: self._input(name) for name in signature.inputs.keys()})
         return self._apply(value, arg)
 
+    def _compose_signature(self, left, right):
+        left_sig = self._forced_signature(left)
+        right_sig = self._forced_signature(right)
+        if left_sig is None or right_sig is None:
+            return None
+        return TaskSignature(dict(left_sig.inputs), dict(right_sig.outputs), dict(right_sig.run))
+
+    def _forced_signature(self, value):
+        if isinstance(value, ForcedFunction):
+            return value.signature or self._function_signature(value.function)
+        return None
+
     def _function_signature(self, function):
         if isinstance(function, ir.Function):
             return function.signature
         if isinstance(function, ir.Lambda):
+            return function.signature
+        if isinstance(function, ir.Chain):
             return function.signature
         return None
 

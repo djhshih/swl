@@ -37,6 +37,11 @@ _PARTIAL = '''align = import "align.sh"
     align { ref: x.ref }
 '''
 
+_CHAIN = '''align = import "align.sh"
+sort = import "sort.sh"
+align | sort
+'''
+
 
 class TestForce(ut.TestCase):
     def _files(self):
@@ -46,6 +51,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'sort.sh'): _SORT,
             os.path.join(root, 'pipe.swl'): _PIPE,
             os.path.join(root, 'partial.swl'): _PARTIAL,
+            os.path.join(root, 'chain.swl'): _CHAIN,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -72,6 +78,14 @@ class TestForce(ut.TestCase):
         data = dag.to_dict()
         self.assertEqual(data['tasks'], [])
         self.assertEqual(data['outputs']['result']['kind'], 'function')
+
+    def test_chain_root_is_instantiated_during_force(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'chain.swl'), files)
+        data = dag.to_dict()
+        self.assertEqual([task['name'] for task in data['tasks']], ['align', 'sort'])
+        self.assertIn('fastq1', data['inputs'])
+        self.assertEqual(data['tasks'][1]['deps'], ['t1'])
 
     def test_serialized_dag_is_self_contained(self):
         files, root = self._files()
