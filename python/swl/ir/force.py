@@ -1,132 +1,91 @@
 import json
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
+from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, TaskCall
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import TaskSignature
 from swl.syntax.task import interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
 
 
-@dataclass(frozen=True)
-class Input:
-    name: str
+def _dag_to_dict(self):
+    return {
+        'inputs': {
+            name: {
+                'type': value.type,
+                'desc': value.desc,
+            }
+            for name, value in self.inputs.items()
+        },
+        'tasks': [
+            {
+                'id': task.id,
+                'name': task.name,
+                'path': task.path,
+                'deps': list(task.deps),
+                'inputs': {name: _binding_to_dict(value) for name, value in task.inputs.items()},
+                'outputs': {
+                    name: task.task['outputs'][name]
+                    for name in task.outputs
+                },
+                'run': task.task.get('run', {}),
+                'script': task.task['body'],
+            }
+            for task in self.tasks
+        ],
+        'outputs': {name: _binding_to_dict(value) for name, value in self.outputs.items()},
+    }
 
 
-@dataclass(frozen=True)
-class Literal:
-    value: object
+@classmethod
+def _dag_from_dict(cls, data):
+    inputs = {
+        name: Input(name, item.get('type'), item.get('desc'))
+        for name, item in data.get('inputs', {}).items()
+    }
+    tasks = []
+    task_by_id = {}
+    for item in data.get('tasks', []):
+        task_outputs = item.get('outputs', {})
+        task_run = item.get('run', {})
+        task = TaskCall(
+            id=item['id'],
+            name=item['name'],
+            path=item['path'],
+            inputs={},
+            outputs=list(task_outputs.keys()),
+            run={},
+            task={
+                'doc': None,
+                'body': item.get('script', ''),
+                'inputs': {},
+                'outputs': task_outputs,
+                'run': task_run,
+            },
+            deps=list(item.get('deps', [])),
+        )
+        tasks.append(task)
+        task_by_id[task.id] = task
+    for task, item in zip(tasks, data.get('tasks', [])):
+        task.inputs.update({
+            name: _binding_from_dict(value, inputs, task_by_id)
+            for name, value in item.get('inputs', {}).items()
+        })
+    outputs = {
+        name: _binding_from_dict(value, inputs, task_by_id)
+        for name, value in data.get('outputs', {}).items()
+    }
+    return cls(inputs, tasks, outputs)
 
+def _dag_write(self, path):
+    with open(path, 'w') as f:
+        json.dump(self.to_dict(), f, indent=2, sort_keys=True)
 
-@dataclass(frozen=True)
-class Record:
-    fields: Dict[str, object]
-
-
-@dataclass(frozen=True)
-class Field:
-    source: object
-    name: str
-
-
-@dataclass(frozen=True)
-class Merge:
-    left: object
-    right: object
-
-
-@dataclass
-class TaskCall:
-    id: str
-    name: str
-    path: str
-    inputs: Dict[str, object]
-    outputs: List[str]
-    run: Dict[str, object] = field(default_factory=dict)
-    task: Optional[dict] = None
-    deps: List[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class Output:
-    name: str
-    value: object
-
-
-@dataclass(frozen=True)
-class ForcedFunction:
-    function: object
-    bound: Optional[object] = None
-    signature: Optional[object] = None
-
-
-@dataclass
-class DAG:
-    inputs: Dict[str, Input]
-    tasks: List[TaskCall]
-    outputs: Dict[str, object]
-
-    def to_dict(self):
-        return {
-            'inputs': sorted(self.inputs.keys()),
-            'tasks': [
-                {
-                    'id': task.id,
-                    'name': task.name,
-                    'path': task.path,
-                    'inputs': {name: _value_to_dict(value) for name, value in task.inputs.items()},
-                    'outputs': list(task.outputs),
-                    'run': {name: _value_to_dict(value) for name, value in task.run.items()},
-                    'task': task.task,
-                    'deps': list(task.deps),
-                }
-                for task in self.tasks
-            ],
-            'outputs': {name: _value_to_dict(value) for name, value in self.outputs.items()},
-        }
-
-    @classmethod
-    def from_dict(cls, data):
-        inputs = {name: Input(name) for name in data.get('inputs', [])}
-        tasks = []
-        task_by_id = {}
-        for item in data.get('tasks', []):
-            task = TaskCall(
-                id=item['id'],
-                name=item['name'],
-                path=item['path'],
-                inputs={},
-                outputs=list(item.get('outputs', [])),
-                run={},
-                task=item.get('task'),
-                deps=list(item.get('deps', [])),
-            )
-            tasks.append(task)
-            task_by_id[task.id] = task
-        for task, item in zip(tasks, data.get('tasks', [])):
-            task.inputs.update({
-                name: _value_from_dict(value, inputs, task_by_id)
-                for name, value in item.get('inputs', {}).items()
-            })
-            task.run.update({
-                name: _value_from_dict(value, inputs, task_by_id)
-                for name, value in item.get('run', {}).items()
-            })
-        outputs = {
-            name: _value_from_dict(value, inputs, task_by_id)
-            for name, value in data.get('outputs', {}).items()
-        }
-        return cls(inputs, tasks, outputs)
-
-    def write(self, path):
-        with open(path, 'w') as f:
-            json.dump(self.to_dict(), f, indent=2, sort_keys=True)
-
-    @classmethod
-    def read(cls, path):
-        with open(path, 'r') as f:
-            return cls.from_dict(json.load(f))
+@classmethod
+def _dag_read(cls, path):
+    with open(path, 'r') as f:
+        return cls.from_dict(json.load(f))
 
 
 class ForceEnv:
@@ -157,6 +116,7 @@ class Forcer:
     def force(self, node):
         value = self.force_value(node, ForceEnv())
         value = self._force_root(value)
+        self._refine_input_metadata()
         outputs = self._final_outputs(value)
         return DAG(dict(self.inputs), list(self.tasks), outputs)
 
@@ -225,7 +185,8 @@ class Forcer:
         if isinstance(fn.function, tuple) and fn.function[0] == 'chain':
             left = self._apply(fn.function[1], arg)
             merged = self._merge_bound(arg, left)
-            return self._apply(fn.function[2], merged)
+            right = self._apply(fn.function[2], merged)
+            return self._merge_chain_results(left, right)
 
         bound = self._merge_bound(fn.bound, arg)
 
@@ -252,6 +213,18 @@ class Forcer:
         if old is None:
             return new
         return Merge(old, new)
+
+    def _merge_chain_results(self, left, right):
+        if isinstance(left, ForcedFunction) or isinstance(right, ForcedFunction):
+            signature = self._compose_signature(left, right)
+            return ForcedFunction(('chain_result', left, right), None, signature)
+        if isinstance(left, Record) and isinstance(right, Record):
+            fields = dict(left.fields)
+            fields.update(right.fields)
+            return Record(fields)
+        if isinstance(right, Record):
+            return right
+        return left
 
     def _saturated_signature(self, function, bound):
         available = self._available_inputs(bound)
@@ -369,6 +342,44 @@ class Forcer:
         self.task_defs[path] = definition
         return definition
 
+    def _refine_input_metadata(self):
+        refined = {}
+        for name, current in self.inputs.items():
+            candidates = []
+            for task in self.tasks:
+                spec = task.task.get('inputs', {}).get(name)
+                if spec is not None:
+                    candidates.append(spec)
+            best = current
+            if candidates:
+                typ = self._merge_input_type(name, current.type, candidates)
+                desc = self._merge_input_desc(current.desc, candidates)
+                best = Input(name, typ, desc)
+            refined[name] = best
+        self.inputs = refined
+
+    def _merge_input_type(self, name, current, candidates):
+        types = []
+        if current is not None:
+            types.append(current)
+        types.extend(spec.get('type') for spec in candidates if spec.get('type') is not None)
+        unique = list(dict.fromkeys(types))
+        if not unique:
+            return None
+        if len(unique) > 1:
+            raise ValueError(f'Conflicting input types during forcing: {name}: {unique}')
+        return unique[0]
+
+    def _merge_input_desc(self, current, candidates):
+        descs = []
+        if current:
+            descs.append(current)
+        descs.extend(spec.get('desc') for spec in candidates if spec.get('desc'))
+        unique = list(dict.fromkeys(descs))
+        if not unique:
+            return None
+        return ' / '.join(unique)
+
     def _task_dependencies(self, inputs):
         deps = set()
         for value in inputs.values():
@@ -395,7 +406,7 @@ class Forcer:
         signature = value.signature or self._function_signature(value.function)
         if signature is None:
             return value
-        arg = Record({name: self._input(name) for name in signature.inputs.keys()})
+        arg = Record({name: self._input(name, spec) for name, spec in signature.inputs.items()})
         return self._apply(value, arg)
 
     def _compose_signature(self, left, right):
@@ -403,7 +414,16 @@ class Forcer:
         right_sig = self._forced_signature(right)
         if left_sig is None or right_sig is None:
             return None
-        return TaskSignature(dict(left_sig.inputs), dict(right_sig.outputs), dict(right_sig.run))
+        inputs = dict(left_sig.inputs)
+        available = set(left_sig.inputs.keys()).union(left_sig.outputs.keys())
+        for name, param in right_sig.inputs.items():
+            if name not in available:
+                inputs[name] = param
+        outputs = dict(left_sig.outputs)
+        outputs.update(right_sig.outputs)
+        run = dict(left_sig.run)
+        run.update(right_sig.run)
+        return TaskSignature(inputs, outputs, run)
 
     def _forced_signature(self, value):
         if isinstance(value, ForcedFunction):
@@ -419,9 +439,14 @@ class Forcer:
             return function.signature
         return None
 
-    def _input(self, name):
+    def _input(self, name, spec=None):
         if name not in self.inputs:
-            self.inputs[name] = Input(name)
+            typ = None
+            desc = None
+            if spec is not None:
+                typ = spec.type.value if getattr(spec, 'type', None) is not None else None
+                desc = spec.desc
+            self.inputs[name] = Input(name, typ, desc)
         return self.inputs[name]
 
     def _final_outputs(self, value):
@@ -446,24 +471,24 @@ def _value_key(value):
     return ('other', repr(value))
 
 
-def _value_to_dict(value):
+def _binding_to_dict(value):
     if isinstance(value, Input):
-        return {'kind': 'input', 'name': value.name}
+        return {'source': 'input', 'name': value.name}
     if isinstance(value, Literal):
-        return {'kind': 'literal', 'value': value.value}
+        return {'source': 'literal', 'value': value.value}
     if isinstance(value, Field):
         if isinstance(value.source, TaskCall):
-            return {'kind': 'task_output', 'task': value.source.id, 'name': value.name}
-        return {'kind': 'field', 'source': _value_to_dict(value.source), 'name': value.name}
+            return {'source': 'task', 'task': value.source.id, 'output': value.name}
+        return {'source': 'field', 'field': value.name, 'value': _binding_to_dict(value.source)}
     if isinstance(value, Merge):
-        return {'kind': 'merge', 'left': _value_to_dict(value.left), 'right': _value_to_dict(value.right)}
+        return {'source': 'merge', 'left': _binding_to_dict(value.left), 'right': _binding_to_dict(value.right)}
     if isinstance(value, Record):
-        return {'kind': 'record', 'fields': {name: _value_to_dict(v) for name, v in value.fields.items()}}
+        return {'source': 'record', 'fields': {name: _binding_to_dict(v) for name, v in value.fields.items()}}
     if isinstance(value, TaskCall):
-        return {'kind': 'task', 'id': value.id}
+        return {'source': 'task_call', 'task': value.id}
     if isinstance(value, ForcedFunction):
-        return {'kind': 'function'}
-    return {'kind': 'unknown', 'repr': repr(value)}
+        return {'source': 'function'}
+    return {'source': 'unknown', 'repr': repr(value)}
 
 
 def _interp_to_dict(value):
@@ -478,31 +503,37 @@ def _interp_to_dict(value):
     return None
 
 
-def _value_from_dict(data, inputs, tasks):
-    kind = data.get('kind')
-    if kind == 'input':
+def _binding_from_dict(data, inputs, tasks):
+    source = data.get('source')
+    if source == 'input':
         return inputs[data['name']]
-    if kind == 'literal':
+    if source == 'literal':
         return Literal(data.get('value'))
-    if kind == 'task_output':
-        return Field(tasks[data['task']], data['name'])
-    if kind == 'field':
-        return Field(_value_from_dict(data['source'], inputs, tasks), data['name'])
-    if kind == 'merge':
+    if source == 'task':
+        return Field(tasks[data['task']], data['output'])
+    if source == 'field':
+        return Field(_binding_from_dict(data['value'], inputs, tasks), data['field'])
+    if source == 'merge':
         return Merge(
-            _value_from_dict(data['left'], inputs, tasks),
-            _value_from_dict(data['right'], inputs, tasks),
+            _binding_from_dict(data['left'], inputs, tasks),
+            _binding_from_dict(data['right'], inputs, tasks),
         )
-    if kind == 'record':
+    if source == 'record':
         return Record({
-            name: _value_from_dict(value, inputs, tasks)
+            name: _binding_from_dict(value, inputs, tasks)
             for name, value in data.get('fields', {}).items()
         })
-    if kind == 'task':
-        return tasks[data['id']]
-    if kind == 'function':
+    if source == 'task_call':
+        return tasks[data['task']]
+    if source == 'function':
         return {'kind': 'function'}
     return {'kind': 'unknown', 'repr': data.get('repr')}
+
+
+DAG.to_dict = _dag_to_dict
+DAG.from_dict = _dag_from_dict
+DAG.write = _dag_write
+DAG.read = _dag_read
 
 
 def force_file(path: str, files=None):
