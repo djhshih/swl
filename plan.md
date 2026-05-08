@@ -865,6 +865,357 @@ Initial contents of `python/swl/ir/force.py` should likely include:
 - helpers to produce a serializable DAG form
 - optional pretty-printer or separate `eval_force.py` later
 
+Current implemented forcing shape:
+- root callable workflows, including root chain-valued workflows, are auto-instantiated with symbolic external inputs
+- compiled JSON is executor-oriented rather than syntax-oriented
+- serialized payload keeps only minimally required executor data:
+  - external `inputs` keyed by name
+  - per-task `id`, `name`, `path`, `deps`
+  - per-task normalized input bindings
+  - per-task normalized declared outputs
+  - per-task normalized run params
+  - per-task embedded `script`
+  - final workflow `outputs`
+- raw task annotation sections are intentionally not serialized
+- dependency traversal is available directly via each task's `deps`
+- source-file rereads should not be required at execution time
+
+Remaining force work from here:
+- improve workflow-input metadata so compiled external inputs retain more precise type/description information in more cases
+- finalize executor contract for evaluating interpolation/default expressions against runtime bindings
+- decide whether compiled task `path` remains required provenance only or also part of executor identity
+- canonicalize final output formation so workflows written with explicit task applications and record updates compile to the same output shape as equivalent chain sugar
+
+Specific canonicalization target discovered during compilation:
+- `tests/pipe.swl` and `tests/function.swl` are intended to be equivalent
+- today `pipe.swl` lowers to `ir.Chain(...)`, while `function.swl` lowers to explicit `Apply(...)` + `Update(...)` structure
+- the current forcing pass already knows how to merge chain outputs into a flat output map, but it does not yet flatten general nested record merges at the workflow boundary
+- forcing should therefore flatten final `Merge(Record(...), ...)` structures into a canonical flat output map using right-biased update semantics
+- after that, both chain sugar and explicit update-based workflow composition should serialize the same final outputs
+
+Possible later lowering cleanup in `python/swl/ir/lower.py`:
+- add a small canonicalization pass after lowering expressions but before forcing
+- detect explicit workflow-composition patterns such as:
+  - `a = f x`
+  - `b = g (x // a)`
+  - final result built from `a // b` (and longer left-to-right repetitions)
+- rewrite those patterns into a canonical chain-like representation, or into a normalized record-producing block shape
+- this is optional once `force.py` flattens final merges correctly, but it would reduce divergence between equivalent source forms earlier in the pipeline and make equality/testing/debugging simpler
+
+## Current responsibility split: `lower.py` vs `force.py`
+
+### `python/swl/ir/lower.py`
+`lower.py` should be the semantic normalization boundary.
+Its job is to erase parser-specific syntax details and produce a smaller, more canonical semantic IR.
+That means it should own:
+- import normalization (`import` syntax -> callable/function IR values)
+- lexical block/lambda/binding normalization
+- canonicalization of equivalent source forms where no execution forcing is required
+- attachment/preservation of signature metadata where available
+- structural simplifications that are semantics-preserving and do not depend on runtime data or DAG identity
+
+In other words, `lower.py` should answer:
+- what is the program structurally?
+- which forms are semantically equivalent before any execution planning happens?
+
+### `python/swl/ir/force.py`
+`force.py` should be the execution-planning boundary.
+Its job is to take the semantic IR and instantiate it into an executor-facing DAG template.
+That means it should own:
+- symbolic external input creation for root callable workflows
+- saturation / partial-application handling at compile time
+- imported workflow expansion at force time
+- concrete task-call node creation
+- task-call memoization / graph sharing
+- dependency extraction and final executor-facing JSON serialization
+
+In other words, `force.py` should answer:
+- given the normalized semantic meaning, what concrete execution template should an executor traverse?
+
+### Problem with the current split
+Right now `force.py` is compensating for too much structural divergence that should ideally have been reduced earlier.
+`pipe.swl` and `function.swl` are the clearest example:
+- `pipe.swl` lowers directly to a chain-oriented semantic form
+- `function.swl` lowers to a block of explicit applications plus nested record updates
+- both are intended to mean the same workflow composition
+- because the lowerer preserves those different shapes, forcing has to reconstruct their equivalence late
+
+This is why forcing currently carries logic for:
+- merging chain outputs
+- flattening final output records/merges
+- recovering input metadata from emitted tasks
+- composing signatures that the lowerer could potentially make more explicit earlier
+
+## How to get `lower.py` to do more work
+
+The right direction is not to make `lower.py` eagerly build DAG nodes.
+Instead, it should do more semantic canonicalization so `force.py` sees fewer distinct-but-equivalent shapes.
+
+### 1. Add an explicit normalization pass inside `lower.py`
+Recommended structure:
+- first lower parser AST to semantic IR
+- then run `normalize(node)` before returning
+
+This keeps the parser-to-IR translation simple while giving a dedicated place for semantic canonicalization.
+That pass can work recursively over the semantic IR and rewrite equivalent trees to a more stable normal form.
+
+### 2. Normalize record-update structure more aggressively
+Beyond closed-record merging, the lowerer should normalize update trees into a predictable shape.
+Examples:
+- associate nested updates consistently
+- flatten statically-known record fragments where safe
+- normalize `Update(Update(a, b), c)` into one ordered update chain representation, even when some pieces are not closed records
+
+The goal is not to erase open-record semantics, but to remove purely syntactic nesting noise.
+This would make final-result assembly in explicit workflows much more uniform before forcing.
+
+### 3. Recognize explicit stage-building patterns in blocks
+Without converting everything into `ir.Chain`, the lowerer can still recognize a canonical staged-composition shape.
+For workflows like:
+- `a = f x`
+- `s = g (x // a)`
+- `c = h (x // a // s)`
+- final result `a // s // c`
+
+the lowerer can attach or produce a normalized staged form that records:
+- stage order (`a`, `s`, `c`)
+- each stage's callable
+- each stage's argument environment as a progressive accumulation of previous stage outputs plus root input
+- final output assembly as the union of stage result records
+
+Important point:
+- this does **not** have to rewrite the program into `ir.Chain`
+- instead it can canonicalize it into a normalized block/result shape that is equivalent to chain sugar but still preserves the explicit style
+
+A practical way to do this is:
+- detect a block whose bindings are stage applications
+- verify that each stage argument is the root input updated with previously-bound stage results
+- verify that the final result is an update-union of those stage bindings
+- then rewrite just the *result assembly* and stage metadata into a canonical staged normal form
+
+### 4. Preserve progressive workflow-composition metadata in semantic IR
+If full structural rewriting feels too invasive, the lowerer can still enrich the semantic IR with canonical metadata.
+Examples:
+- attach a normalized composed signature to staged blocks
+- annotate canonical stage order for certain normalized blocks
+- preserve explicit information about which updates are stage-result unions rather than arbitrary record merges
+
+This would allow `force.py` to consume a more informative semantic IR without having to rediscover everything structurally.
+
+### 5. Normalize final result construction
+One concrete target is the workflow final expression.
+Today:
+- chain sugar tends to arrive at force time already looking like a union of stage outputs
+- explicit composition arrives as nested updates/merges
+
+The lowerer should normalize final workflow result expressions so that equivalent programs expose the same logical output assembly before forcing.
+That means:
+- a final union of stage result records should lower to one canonical form regardless of whether it came from syntactic chain sugar or explicit `//` expressions
+- forcing should then only have to serialize that canonical result, not rediscover its meaning
+
+## Desired end state for `tests/function.swl` vs `tests/pipe.swl`
+
+The goal is:
+- same task set
+- same task dependencies
+- same external inputs
+- same workflow outputs
+- almost identical compiled JSON
+
+The remaining acceptable differences should be limited to provenance/debug details, not semantic structure.
+Specifically, we do **not** want to merely special-case `function.swl` by converting it into `ir.Chain`.
+Instead, we want a more general canonicalization story where:
+- chain sugar
+- explicit stage bindings
+- explicit final result unions
+
+all lower into one semantically stable normal form that `force.py` can plan from uniformly.
+
+## Proposed implementation plan
+
+### Phase A: strengthen normalization in `lower.py`
+1. Add `normalize(node)` after lowering.
+2. Normalize update trees into a stable internal shape.
+3. Detect stage-building workflow blocks/lambdas that represent progressive composition.
+4. Canonicalize their final result assembly into a stable union-of-stage-results form.
+5. Preserve or attach normalized composition metadata/signatures where recoverable.
+
+## Concrete design sketch for normalized staged composition
+
+The main missing piece is a semantic IR representation for "progressive workflow composition" that is more explicit than a raw block of binds/updates, but more general than just `ir.Chain`.
+This should live in `python/swl/ir/node.py` and be produced by `lower.py` normalization when a workflow body matches the explicit staged-composition pattern.
+
+### Candidate new semantic IR nodes
+
+#### `Stage`
+A small dataclass, likely not a full `Node`, describing one composition step:
+- `name: str`
+- `function: Node`
+- `arg: Node`
+
+This preserves:
+- stage identity/binding name
+- callable being applied
+- normalized argument expression
+
+#### `Compose`
+A new semantic IR node representing progressive workflow composition:
+- `param: Optional[str]`
+- `stages: List[Stage]`
+- `result: Node`
+- `signature: Optional[TaskSignature] = None`
+
+Interpretation:
+- composition starts from the root param/input environment when present
+- stages are executed left-to-right semantically/lazily
+- later stage args may depend on prior stage results
+- `result` is the normalized final workflow result expression, ideally already canonicalized as a union of stage outputs
+
+This node is intentionally broader than `Chain`:
+- `Chain` expresses direct syntactic composition sugar
+- `Compose` expresses normalized staged workflow composition regardless of original surface syntax
+
+### Why `Compose` instead of only expanding `Chain`
+Because `function.swl` is more explicit than `pipe.swl`:
+- it names intermediate stage outputs
+- it applies later stages to progressively updated records
+- it explicitly assembles the final output record
+
+Those are all semantically meaningful workflow-composition facts.
+Rather than throwing them away and pretending everything was surface chain sugar, a `Compose` node keeps the normalized staged meaning explicit.
+Then both:
+- `align | sort | call`
+- `a = align x; s = sort (x // a); c = call (x // a // s); a // s // c`
+
+can normalize to the same `Compose` form.
+
+## How `lower.py` should build `Compose`
+
+### Step 1: ordinary lowering first
+Continue lowering parser AST into the existing semantic IR as today.
+Do not complicate raw lowering too much.
+
+### Step 2: run `normalize(node)`
+After lowering, recursively normalize the IR.
+This is where `Compose` should be introduced.
+
+### Step 3: detect composition candidates
+Inside `normalize(node)`, inspect:
+- `ir.Lambda`
+- `ir.Block`
+- final block results built from update unions
+
+Look for the staged pattern:
+1. A lambda parameter or other canonical root input value exists.
+2. Bindings are stage applications:
+   - `a = f x`
+   - `s = g (x // a)`
+   - `c = h (x // a // s)`
+3. Each later stage arg is a normalized update-union of:
+   - the root input
+   - zero or more previously-bound stage result names
+4. The final block result is itself a normalized union of stage result names, optionally in progressive form.
+
+If those checks hold, rewrite the block/lambda body into `Compose(...)`.
+
+### Step 4: normalize argument environments
+Each stage arg should be normalized into a stable form before being stored in a `Stage`.
+For example, update trees should be flattened into a canonical sequence/order so that:
+- `x // a // s`
+- `(x // a) // s`
+- `x // (a // s)` when semantically equivalent in the accepted pattern
+
+all normalize identically.
+
+One practical internal representation is to flatten updates into an ordered list of terms first, then rebuild a stable tree form.
+That normalization machinery can be used both for:
+- stage argument detection
+- final result normalization
+
+### Step 5: normalize final result assembly
+The final result for composition-style workflows should be canonicalized to one stable form.
+For example, if the result is intended to be the union of stage outputs:
+- `a // s // c`
+- `(a // s) // c`
+- `a // (s // c)`
+
+should normalize to the same result expression under `Compose`.
+
+That gives `force.py` a direct semantic signal that the workflow outputs are the union of stage result records, independent of original syntax.
+
+## How `force.py` should use `Compose`
+
+Once `Compose` exists, `force.py` can handle it directly rather than inferring composition from raw blocks/updates.
+
+Suggested force behavior:
+1. Create the symbolic root input record if `param` is present.
+2. Evaluate stages left-to-right.
+3. Maintain a local environment mapping stage names to forced record results.
+4. Force each stage's callable application using its normalized arg.
+5. Force the normalized `result` expression at the end.
+
+This makes `force.py` simpler because it no longer has to recover staged workflow structure from arbitrary nested block/update patterns.
+It just executes a normalized semantic representation.
+
+## Relationship between `Chain` and `Compose`
+
+Recommended semantics:
+- keep `Chain` as a surface-oriented semantic IR for syntax-directed lowering if useful
+- during normalization, lower `Chain` into `Compose` when possible
+- or normalize both `Chain` and explicit staged blocks into the same final `Compose` representation
+
+That would make `Compose` the canonical semantic form for DAG-oriented workflow composition.
+
+Under that design:
+- `pipe.swl` lowers to `Chain(...)`, then normalizes to `Compose(...)`
+- `function.swl` lowers to `Lambda(Block(...))`, then normalizes to `Compose(...)`
+
+This is the cleanest route to nearly identical compiled JSON.
+
+## Constraints for safe `Compose` detection
+
+Normalization should only rewrite into `Compose` when the structure is clearly a workflow-composition pattern.
+Do **not** rewrite arbitrary blocks with applies/updates.
+Conservative acceptance rules should include:
+- stage names are introduced by simple binds
+- stage arguments reference only the root input and previously-bound stage results
+- final result is a union of stage result values, not an arbitrary expression
+- no unrelated side computations are mixed into the candidate composition block
+
+If the pattern does not match cleanly, keep the ordinary lowered IR.
+
+## Suggested implementation order for the design sketch
+
+1. Add update-flattening helpers in `lower.py` normalization.
+2. Add pattern detection helpers for:
+   - stage application binds
+   - normalized update-union args
+   - normalized final result unions
+3. Add `Stage` and `Compose` to `node.py`.
+4. Normalize simple `Chain(...)` into `Compose(...)` first.
+5. Normalize `function.swl`-style explicit staged blocks into `Compose(...)` second.
+6. Teach `force.py` to force `Compose` directly.
+7. Add regression tests that compare compiled `pipe.swl` vs `function.swl` JSON.
+
+### Phase B: simplify `force.py` once lowering is stronger
+After stronger lowering normalization, `force.py` should be able to rely more on the lowered shape and do less equivalence reconstruction.
+That should allow simplifications in:
+- final output flattening logic
+- chain-vs-explicit-composition special handling
+- signature composition heuristics
+
+### Phase C: regression tests
+Add tests asserting that compiling:
+- `tests/pipe.swl`
+- `tests/function.swl`
+
+produces nearly identical JSON, especially for:
+- `inputs`
+- `tasks`
+- `outputs`
+
+If exact object equality is too strict, compare normalized serialized forms with provenance-only differences ignored.
+
 #### Suggested implementation order
 1. Define tiny execution-node dataclasses.
 2. Force literals/records/fields/updates/names/blocks.
