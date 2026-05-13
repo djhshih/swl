@@ -7,6 +7,7 @@
 # out
 #   bcf      file  =  ${outbase}.bcf | output alignment
 # run
+#   time   = 30
 #   image  = djhshih/seqkit:0.1
 
 bcftools mpileup -Ou -f ${ref} ${bam} | 

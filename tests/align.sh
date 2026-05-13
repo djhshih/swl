@@ -13,6 +13,7 @@
 #
 # run
 #   cpu = 2
+#   time = 2-04:30:00
 #   image = djhshih/seqkit:0.1
 
 bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam
