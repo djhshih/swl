@@ -2,6 +2,20 @@
 
 set -e
 
+EXPECT_COMPILE_FAIL=(
+	tests/bad_pipe.swl
+)
+
+expects_compile_fail() {
+	local target="$1"
+	for item in "${EXPECT_COMPILE_FAIL[@]}"; do
+		if [[ "$item" == "$target" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
 run_unit_tests() {
 	echo "running unit tests"
 	PYTHONPATH=python python -m unittest \
@@ -19,6 +33,7 @@ run_unit_tests() {
 }
 
 evaluate_task() {
+	set +e
 	echo "file: $1"
 	echo "syntax:"
 	PYTHONPATH=python python -m swl.eval_task $1
@@ -26,26 +41,87 @@ evaluate_task() {
 	echo "semantic:"
 	PYTHONPATH=python python -m swl.eval_task_semantic $1
 	printf "return: $?\n\n"
+	set -e
 }
 
 evaluate_wf() {
-	echo "file: $1"
+	set +e
+	local wf="$1"
+	local out="tests/dag/$(basename ${wf%.swl}).json"
+	local expect_fail=0
+	if expects_compile_fail "$wf"; then
+		expect_fail=1
+	fi
+
+	echo "file: $wf"
+	if (( expect_fail )); then
+		echo "expectation: compile failure"
+	else
+		echo "expectation: compile success"
+	fi
+
 	echo "syntax:"
-	PYTHONPATH=python python -m swl.eval $1
+	PYTHONPATH=python python -m swl.eval "$wf"
 	printf "return: $?\n"
+
 	echo "semantic:"
-	PYTHONPATH=python python -m swl.eval_wf_semantic $1
+	PYTHONPATH=python python -m swl.eval_wf_semantic "$wf"
 	printf "return: $?\n"
+
 	echo "ir:"
-	PYTHONPATH=python python -m swl.eval_ir $1
-	printf "return: $?\n"
+	PYTHONPATH=python python -m swl.eval_ir "$wf"
+	local ir_status=$?
+	printf "return: %d" "$ir_status"
+	if (( expect_fail )) && (( ir_status != 0 )); then
+		printf " (expected failure)"
+	fi
+	printf "\n"
+
 	echo "force:"
-	PYTHONPATH=python python -m swl.eval_force $1
-	printf "return: $?\n"
+	PYTHONPATH=python python -m swl.eval_force "$wf"
+	local force_status=$?
+	printf "return: %d" "$force_status"
+	if (( expect_fail )) && (( force_status != 0 )); then
+		printf " (expected failure)"
+	fi
+	printf "\n"
+
 	echo "compile:"
-	mkdir -p tests/dag
-	PYTHONPATH=python python -m swl.compile $1 -o tests/dag/$(basename ${1%.swl}).json
-	printf "return: $?\n\n"
+	rm -f "$out"
+	PYTHONPATH=python python -m swl.compile "$wf" -o "$out"
+	local compile_status=$?
+	printf "return: %d" "$compile_status"
+	if (( expect_fail )); then
+		if (( compile_status != 0 )); then
+			printf " (expected failure)"
+		else
+			printf " (UNEXPECTED SUCCESS)"
+			set -e
+			return 1
+		fi
+		if [[ -e "$out" ]]; then
+			echo
+			echo "unexpected artifact: $out"
+			set -e
+			return 1
+		fi
+	else
+		if (( compile_status == 0 )); then
+			printf " (expected success)"
+		else
+			printf " (UNEXPECTED FAILURE)"
+			set -e
+			return 1
+		fi
+		if [[ ! -e "$out" ]]; then
+			echo
+			echo "missing artifact: $out"
+			set -e
+			return 1
+		fi
+	fi
+	printf "\n\n"
+	set -e
 }
 
 if (( $# > 0 )); then
@@ -56,6 +132,7 @@ if (( $# > 0 )); then
 	fi
 else
 	run_unit_tests
+	mkdir -p tests/dag && rm -f tests/dag/*
 	for task in tests/*.sh; do
 		evaluate_task $task
 	done
