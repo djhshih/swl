@@ -4,6 +4,7 @@ import tempfile
 import unittest as ut
 
 from swl.ir.force import DAG, force_file
+from swl.ir.lower import Lowerer
 
 
 _ALIGN = '''# @ Align
@@ -34,6 +35,12 @@ sort = import "sort.sh"
     sort (x // a)
 '''
 
+_BAD_OUTBASE = '''# @ Bad
+# out
+#   outbase file = result.txt
+echo bad
+'''
+
 
 class TestForceCodec(ut.TestCase):
     def _files(self):
@@ -41,7 +48,12 @@ class TestForceCodec(ut.TestCase):
         return {
             os.path.join(root, 'align.sh'): _ALIGN,
             os.path.join(root, 'sort.sh'): _SORT,
+            os.path.join(root, 'bad_outbase.sh'): _BAD_OUTBASE,
             os.path.join(root, 'pipe.swl'): _PIPE,
+            os.path.join(root, 'bad_pipe.swl'): '''align = import "bad_outbase.sh"
+sort = import "sort.sh"
+align | sort
+''',
         }, root
 
     def test_dag_round_trip_dict(self):
@@ -113,6 +125,11 @@ call  = import "call.sh"
                 'tasks': [],
                 'outputs': {'x': {'source': 'mystery'}},
             })
+
+    def test_lower_file_rejects_semantic_errors_before_force(self):
+        files, root = self._files()
+        with self.assertRaisesRegex(ValueError, 'Type mismatch for "outbase": file -> str'):
+            Lowerer(files=files).lower_file(os.path.join(root, 'bad_pipe.swl'))
 
 
 if __name__ == '__main__':

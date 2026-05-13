@@ -151,6 +151,17 @@ sort = import "sort.sh"
 align | sort
 '''
 
+_BAD_EXPLICIT_PARTIAL_FIELD = '''align = import "align.sh"
+sort  = import "sort.sh"
+call  = import "call.sh"
+
+\\x ->
+    a = align x
+    s = sort { bam: a.bam, outbase: x.outbase }
+    c = call { bam: s.bam, ref: x.ref, outbase: x.outbase }
+    { bcf: c.bcf }
+'''
+
 _DUP_BIND = '''x = 1
 x = 2
 \\y -> y
@@ -322,18 +333,17 @@ class TestWorkflowCheck(ut.TestCase):
         self.assertIn('outbase', result.inferred_inputs)
         self.assertIn('bam', result.signature.outputs)
 
-    def test_scalar_task_application_lifts_to_first_input(self):
+    def test_scalar_task_application_lifts_to_first_input_but_field_access_on_partial_is_an_error(self):
         root = self._make_fixture_dir()
         path = self._write(root, 'scalar_apply.swl', _SCALAR_APPLY)
         result = Checker().load(path)
-        self.assertEqual(result.chain_errors, [])
         self.assertIsNotNone(result.signature)
         self.assertIn('fastq2', result.inferred_inputs)
         self.assertIn('ref', result.inferred_inputs)
         self.assertIn('ref_fai', result.inferred_inputs)
         self.assertIn('outbase', result.inferred_inputs)
         self.assertNotIn('fastq1', result.inferred_inputs)
-        self.assertIn('bam', result.signature.outputs)
+        self.assertTrue(any('Cannot access field on function value' in err for err in result.errors))
 
     def test_bad_pipe_reports_chain_error(self):
         root = self._make_fixture_dir()
@@ -341,6 +351,12 @@ class TestWorkflowCheck(ut.TestCase):
         result = Checker().load(path)
         self.assertEqual(len(result.chain_errors), 1)
         self.assertIn('outbase', result.chain_errors[0])
+
+    def test_field_access_on_partial_function_reports_error(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'bad_explicit_partial_field.swl', _BAD_EXPLICIT_PARTIAL_FIELD)
+        result = Checker().load(path)
+        self.assertTrue(any('Cannot access field on function value' in err for err in result.errors))
 
     def test_workflow_record_final_value_reports_not_a_function(self):
         root = self._make_fixture_dir()

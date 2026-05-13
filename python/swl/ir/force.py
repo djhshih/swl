@@ -96,7 +96,10 @@ class Forcer:
 
         if isinstance(node, ir.Field):
             source = self.force_value(node.record, env)
-            return self._project_field(source, node.name)
+            projected = self._project_field(source, node.name)
+            if projected is not _SENTINEL:
+                return projected
+            return Field(source, node.name)
 
         if isinstance(node, ir.Update):
             return self._merge_values(self.force_value(node.left, env), self.force_value(node.right, env))

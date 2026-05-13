@@ -15,6 +15,8 @@ class Lowerer:
 
     def lower_file(self, path: str):
         result = self.checker.load(path)
+        if result.errors:
+            raise ValueError('\n'.join(result.errors))
         return self.lower_tree(result.tree, result.imports, result.signature)
 
     def lower_tree(self, tree, imports, signature=None):
@@ -265,4 +267,6 @@ def parse_and_lower(src: str, base_dir: str = '.', files=None):
     fake_path = os.path.abspath(os.path.join(base_dir, '__input__.swl'))
     checker = Checker(files=files)
     result = checker.load_content(src, fake_path)
+    if result.errors:
+        raise ValueError('\n'.join(result.errors))
     return Lowerer(files=files).lower_tree(result.tree, result.imports, result.signature)

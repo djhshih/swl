@@ -304,9 +304,9 @@ class Checker:
             if isinstance(rec, ComputationValue):
                 if field in rec.signature.outputs:
                     return UnknownValue()
-            if isinstance(rec, ClosureValue):
-                if field in rec.signature.outputs:
-                    return UnknownValue()
+            if isinstance(rec, (FunctionValue, ClosureValue)):
+                issues.append(f'Cannot access field on function value: {expr}')
+                return UnknownValue()
             issues.append(f'Cannot resolve field access: {expr}')
             return UnknownValue()
 
