@@ -3,6 +3,13 @@ import traceback
 import swl.semantic.wf.check as ck
 
 
+def _format_param(param):
+    extra = ''
+    if getattr(param, 'parsed_default', None) is not None:
+        extra = f' parsed_default={param.parsed_default!r}'
+    return f'type={param.type} default={param.default!r}{extra} desc={param.desc!r}'
+
+
 def eval(fname):
     result = ck.Checker().load(fname)
     print('imports:')
@@ -18,13 +25,13 @@ def eval(fname):
     else:
         print('  inputs:')
         for name, param in result.signature.inputs.items():
-            print(f'    {name}: type={param.type} default={param.default!r} desc={param.desc!r}')
+            print(f'    {name}: {_format_param(param)}')
         print('  outputs:')
         for name, param in result.signature.outputs.items():
-            print(f'    {name}: type={param.type} default={param.default!r} desc={param.desc!r}')
+            print(f'    {name}: {_format_param(param)}')
         print('  run:')
         for name, param in result.signature.run.items():
-            print(f'    {name}: type={param.type} default={param.default!r} desc={param.desc!r}')
+            print(f'    {name}: {_format_param(param)}')
 
 
 if __name__ == '__main__':

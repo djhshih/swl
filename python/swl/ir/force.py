@@ -3,6 +3,7 @@ from typing import Dict, List, Tuple
 from swl.ir import node as ir
 from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, TaskCall
 from swl.ir.lower import Lowerer
+from swl.semantic.task.type import signature_from_task
 from swl.syntax.task import interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
 
@@ -302,6 +303,7 @@ class Forcer:
             return self.task_defs[path]
         src = self.lowerer.checker._read_file(path)
         task = TaskParser().parse(src)
+        signature = signature_from_task(task)
         inputs = {}
         outputs = {}
         run = {}
@@ -315,11 +317,20 @@ class Forcer:
                 target = run
             for param in section.params:
                 for name in param.names:
-                    target[name] = {
-                        'type': param.type,
-                        'default': _interp_to_dict(param.default) if param.default is not None else None,
-                        'desc': param.desc,
-                    }
+                    if section.kind.value == 'run':
+                        semantic = signature.run[name]
+                        target[name] = {
+                            'type': semantic.type.value if semantic.type is not None else None,
+                            'value': semantic.parsed_default,
+                            'desc': param.desc,
+                        }
+                    else:
+                        semantic = signature.inputs.get(name) if section.kind.value == 'in' else signature.outputs.get(name)
+                        target[name] = {
+                            'type': semantic.type.value if semantic and semantic.type is not None else param.type,
+                            'default': _interp_to_dict(param.default) if param.default is not None else None,
+                            'desc': param.desc,
+                        }
         definition = {
             'doc': task.annotation.doc,
             'body': task.body,

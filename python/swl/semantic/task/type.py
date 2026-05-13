@@ -1,6 +1,9 @@
+import math
+import re
 from enum import Enum
 from typing import Dict, List, Set
 
+from swl.syntax.task import interpolation as interp
 from swl.syntax.task import node as task_node
 
 
@@ -9,6 +12,8 @@ class TypeKind(Enum):
     STR = 'str'
     INT = 'int'
     FLOAT = 'float'
+    MEMORY = 'memory'
+    TIME = 'time'
     FILE_OPT = 'file?'
     STR_OPT = 'str?'
     INT_OPT = 'int?'
@@ -28,6 +33,8 @@ def parse_type(type_str: str) -> TypeKind:
         'str': TypeKind.STR,
         'int': TypeKind.INT,
         'float': TypeKind.FLOAT,
+        'memory': TypeKind.MEMORY,
+        'time': TypeKind.TIME,
         'file?': TypeKind.FILE_OPT,
         'str?': TypeKind.STR_OPT,
         'int?': TypeKind.INT_OPT,
@@ -85,6 +92,8 @@ COMPATIBLE_PAIRS = {
     (TypeKind.INT, TypeKind.INT_OPT): True,
     (TypeKind.FLOAT, TypeKind.FLOAT): True,
     (TypeKind.FLOAT, TypeKind.FLOAT_OPT): True,
+    (TypeKind.MEMORY, TypeKind.MEMORY): True,
+    (TypeKind.TIME, TypeKind.TIME): True,
 }
 
 
@@ -104,11 +113,12 @@ def types_compatible(output_type: TypeKind, input_type: TypeKind) -> bool:
 class Param:
     '''Semantic task parameter.'''
 
-    def __init__(self, name: str, typ: TypeKind = None, default=None, desc: str = None):
+    def __init__(self, name: str, typ: TypeKind = None, default=None, desc: str = None, parsed_default=None):
         self.name = name
         self.type = typ
         self.default = default
         self.desc = desc
+        self.parsed_default = parsed_default
 
 
 class TaskSignature:
@@ -187,7 +197,11 @@ def signature_from_task(task: task_node.Task) -> TaskSignature:
         for parsed in section.params:
             typ = parse_type(parsed.type) if parsed.type else None
             for name in parsed.names:
-                param = Param(name, typ, parsed.default, parsed.desc)
+                parsed_default = None
+                effective_type = typ
+                if section.kind == task_node.SectionType.RUN:
+                    effective_type, parsed_default = _normalize_run_param(name, typ, parsed.default)
+                param = Param(name, effective_type, parsed.default, parsed.desc, parsed_default)
                 if section.kind == task_node.SectionType.IN:
                     _add_param(inputs, param, 'input')
                 elif section.kind == task_node.SectionType.OUT:
@@ -206,3 +220,114 @@ def _add_param(params: Dict[str, Param], param: Param, kind: str):
     if param.name in params:
         raise ValueError(f'Duplicate {kind} parameter: {param.name}')
     params[param.name] = param
+
+
+def _normalize_run_param(name: str, typ: TypeKind, default):
+    if name == 'memory':
+        return _normalize_memory_param(typ, default)
+    if name == 'time':
+        return _normalize_time_param(typ, default)
+    if name == 'cpu':
+        return _normalize_cpu_param(typ, default)
+    if name == 'image':
+        return _normalize_image_param(typ, default)
+    return typ, None
+
+
+def _normalize_memory_param(typ: TypeKind, default):
+    if typ is None:
+        typ = TypeKind.MEMORY
+    elif typ != TypeKind.MEMORY:
+        raise ValueError(f'Run parameter memory must have type memory: {typ.value}')
+    if default is None:
+        return typ, None
+    text = _literal_default_text(default)
+    if text is None:
+        raise ValueError('Run parameter memory must have a literal default')
+    return typ, _parse_memory_literal(text)
+
+
+def _normalize_time_param(typ: TypeKind, default):
+    if typ is None:
+        typ = TypeKind.TIME
+    elif typ != TypeKind.TIME:
+        raise ValueError(f'Run parameter time must have type time: {typ.value}')
+    if default is None:
+        return typ, None
+    text = _literal_default_text(default)
+    if text is None:
+        raise ValueError('Run parameter time must have a literal default')
+    return typ, _parse_time_literal(text)
+
+
+def _normalize_cpu_param(typ: TypeKind, default):
+    if typ is None:
+        typ = TypeKind.INT
+    elif typ != TypeKind.INT:
+        raise ValueError(f'Run parameter cpu must have type int: {typ.value}')
+    if default is None:
+        return typ, None
+    text = _literal_default_text(default)
+    if text is None:
+        raise ValueError('Run parameter cpu must have a literal default')
+    return typ, _parse_cpu_literal(text)
+
+
+def _normalize_image_param(typ: TypeKind, default):
+    if typ is None:
+        typ = TypeKind.STR
+    elif typ != TypeKind.STR:
+        raise ValueError(f'Run parameter image must have type str: {typ.value}')
+    if default is None:
+        return typ, None
+    text = _literal_default_text(default)
+    if text is None:
+        raise ValueError('Run parameter image must have a literal default')
+    return typ, text
+
+
+def _literal_default_text(default):
+    if not isinstance(default, interp.Word):
+        return None
+    if len(default.parts) != 1:
+        return None
+    part = default.parts[0]
+    if not isinstance(part, interp.Literal):
+        return None
+    return part.text.strip()
+
+
+def _parse_cpu_literal(text: str) -> int:
+    if not re.fullmatch(r'[0-9]+', text):
+        raise ValueError(f'Invalid cpu literal: {text}')
+    return int(text)
+
+
+def _parse_memory_literal(text: str) -> int:
+    m = re.fullmatch(r'([0-9]+)([KMGTP])?', text)
+    if not m:
+        raise ValueError(f'Invalid memory literal: {text}')
+    value = int(m.group(1))
+    unit = m.group(2) or 'M'
+    scale = {
+        'K': 1 / 1024,
+        'M': 1,
+        'G': 1024,
+        'T': 1024 * 1024,
+        'P': 1024 * 1024 * 1024,
+    }[unit]
+    return int(math.ceil(value * scale))
+
+
+def _parse_time_literal(text: str) -> int:
+    if re.fullmatch(r'[0-9]+', text):
+        return int(text)
+    m = re.fullmatch(r'(?:(\d+)-)?(\d+):(\d+):(\d+)', text)
+    if not m:
+        raise ValueError(f'Invalid time literal: {text}')
+    days = int(m.group(1) or 0)
+    hours = int(m.group(2))
+    minutes = int(m.group(3))
+    seconds = int(m.group(4))
+    total_seconds = days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60 + seconds
+    return int(math.ceil(total_seconds / 60))

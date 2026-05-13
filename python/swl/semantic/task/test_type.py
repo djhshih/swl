@@ -13,6 +13,9 @@ _ALIGN = (
     '#   bam file = ${outbase}.bam\n'
     '# run\n'
     '#   cpu = 2\n'
+    '#   memory = 8G\n'
+    '#   time = 2-04:30:00\n'
+    '#   image = djhshih/seqkit:0.1\n'
     'echo hi\n'
 )
 
@@ -36,7 +39,14 @@ class TestTaskType(ut.TestCase):
         self.assertEqual(sig.inputs['fastq2'].type, TypeKind.FILE)
         self.assertEqual(sig.inputs['outbase'].type, TypeKind.STR)
         self.assertEqual(sig.outputs['bam'].type, TypeKind.FILE)
-        self.assertIn('cpu', sig.run)
+        self.assertEqual(sig.run['cpu'].type, TypeKind.INT)
+        self.assertEqual(sig.run['cpu'].parsed_default, 2)
+        self.assertEqual(sig.run['memory'].type, TypeKind.MEMORY)
+        self.assertEqual(sig.run['memory'].parsed_default, 8 * 1024)
+        self.assertEqual(sig.run['time'].type, TypeKind.TIME)
+        self.assertEqual(sig.run['time'].parsed_default, 3150)
+        self.assertEqual(sig.run['image'].type, TypeKind.STR)
+        self.assertEqual(sig.run['image'].parsed_default, 'djhshih/seqkit:0.1')
         self.assertIsNotNone(sig.outputs['bam'].default)
 
     def test_duplicate_input_param_fails(self):
@@ -90,6 +100,72 @@ class TestTaskType(ut.TestCase):
         with self.assertRaises(ValueError) as cm:
             signature_from_task(task)
         self.assertEqual(str(cm.exception), 'Output parameter must have a default: bam')
+
+    def test_memory_rounds_up_to_mib(self):
+        src = (
+            '#@ doc\n'
+            '# run\n'
+            '#   memory = 512K\n'
+            'echo hi\n'
+        )
+        sig = signature_from_task(Parser().parse(src))
+        self.assertEqual(sig.run['memory'].type, TypeKind.MEMORY)
+        self.assertEqual(sig.run['memory'].parsed_default, 1)
+
+    def test_time_rounds_up_to_minutes(self):
+        src = (
+            '#@ doc\n'
+            '# run\n'
+            '#   time = 00:00:01\n'
+            'echo hi\n'
+        )
+        sig = signature_from_task(Parser().parse(src))
+        self.assertEqual(sig.run['time'].type, TypeKind.TIME)
+        self.assertEqual(sig.run['time'].parsed_default, 1)
+
+    def test_cpu_must_be_integer(self):
+        src = (
+            '#@ doc\n'
+            '# run\n'
+            '#   cpu = 2.5\n'
+            'echo hi\n'
+        )
+        with self.assertRaises(ValueError) as cm:
+            signature_from_task(Parser().parse(src))
+        self.assertEqual(str(cm.exception), 'Invalid cpu literal: 2.5')
+
+    def test_memory_must_be_memory_literal(self):
+        src = (
+            '#@ doc\n'
+            '# run\n'
+            '#   memory = nope\n'
+            'echo hi\n'
+        )
+        with self.assertRaises(ValueError) as cm:
+            signature_from_task(Parser().parse(src))
+        self.assertEqual(str(cm.exception), 'Invalid memory literal: nope')
+
+    def test_time_must_be_time_literal(self):
+        src = (
+            '#@ doc\n'
+            '# run\n'
+            '#   time = soon\n'
+            'echo hi\n'
+        )
+        with self.assertRaises(ValueError) as cm:
+            signature_from_task(Parser().parse(src))
+        self.assertEqual(str(cm.exception), 'Invalid time literal: soon')
+
+    def test_image_must_have_string_type(self):
+        src = (
+            '#@ doc\n'
+            '# run\n'
+            '#   image int = 1\n'
+            'echo hi\n'
+        )
+        with self.assertRaises(ValueError) as cm:
+            signature_from_task(Parser().parse(src))
+        self.assertEqual(str(cm.exception), 'Run parameter image must have type str: int')
 
     def test_type_checker_chain(self):
         parser = Parser()
