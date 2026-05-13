@@ -3,6 +3,7 @@
 set -e
 
 EXPECT_COMPILE_FAIL=(
+	tests/bad_explicit.swl
 	tests/bad_pipe.swl
 )
 
