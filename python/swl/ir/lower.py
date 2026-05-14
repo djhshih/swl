@@ -114,7 +114,8 @@ class Lowerer:
             return ir.Block(bindings, result)
 
         if expr.type == wf_node.NodeType.chain:
-            return ir.Chain(self._lower_chain_items(expr, env, imports))
+            items = self._lower_chain_items(expr, env, imports)
+            return self._chain_to_lambda_block(items, None)
 
         if expr.type == wf_node.NodeType.bind:
             value = self.lower_binding(expr, env, imports)
@@ -176,10 +177,6 @@ class Lowerer:
 
         if isinstance(node, ir.Update):
             return self._normalize_update(self.normalize(node.left), self.normalize(node.right))
-
-        if isinstance(node, ir.Chain):
-            items = [self.normalize(item) for item in node.items]
-            return self._chain_to_lambda_block(items, node.signature)
 
         return node
 

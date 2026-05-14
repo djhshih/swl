@@ -137,25 +137,6 @@ class Apply(Node):
 
 
 @dataclass(frozen=True)
-class Chain(Node):
-    items: List[Node]
-    signature: Optional[TaskSignature] = None
-
-    def __repr__(self):
-        if self.items:
-            items = ',\n'.join(f'    {item!r}' for item in self.items)
-            items = f'[\n{items}\n  ]'
-        else:
-            items = '[]'
-        return (
-            f'Chain(\n'
-            f'  items={items},\n'
-            f'  signature={self.signature!r},\n'
-            f')'
-        )
-
-
-@dataclass(frozen=True)
 class Variable(Node):
     id: int
     name: str

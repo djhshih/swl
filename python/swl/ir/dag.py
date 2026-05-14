@@ -83,7 +83,10 @@ class DAG:
                         name: task.task['outputs'][name]
                         for name in task.outputs
                     },
-                    'run': task.task.get('run', {}),
+                    'run': {
+                        name: _run_param_to_dict(spec, task.run.get(name))
+                        for name, spec in task.task.get('run', {}).items()
+                    },
                     'script': task.task['body'],
                 }
                 for task in self.tasks
@@ -108,7 +111,13 @@ class DAG:
                 path=item['path'],
                 inputs={},
                 outputs=list(task_outputs.keys()),
-                run={},
+                run={
+                    name: _binding_from_dict(spec['value'], inputs, task_by_id)
+                    for name, spec in task_run.items()
+                    if isinstance(spec, dict)
+                    and isinstance(spec.get('value'), dict)
+                    and spec['value'].get('source') is not None
+                },
                 task={
                     'doc': None,
                     'body': item.get('script', ''),
@@ -186,3 +195,16 @@ def _binding_from_dict(data, inputs, tasks):
     if source == 'function':
         return {'kind': 'function'}
     raise ValueError(f'Unsupported binding source during deserialization: {source!r}')
+
+
+def _run_param_to_dict(spec, value):
+    data = dict(spec)
+    default = data.pop('default', data.pop('value', None))
+    if value is None:
+        data['value'] = default
+        return data
+    if isinstance(value, Literal):
+        data['value'] = value.value
+        return data
+    data['value'] = _binding_to_dict(value)
+    return data

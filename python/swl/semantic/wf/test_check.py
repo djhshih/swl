@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest as ut
 
-from swl.semantic.wf.check import Checker
+from swl.semantic.wf.check import Checker, ClosedRecord, ClosureValue, ComputationValue, FunctionValue, UnknownValue
 
 
 _ALIGN = '''# @ Align
@@ -84,6 +84,12 @@ align_hg38
 
 _IMPORT_PARTIAL = '''partial = import "partial.swl"
 partial
+'''
+
+_LAMBDA_APPLY = '''mk = \\x -> { y: x.a }
+\\z ->
+    r = mk z
+    { y: r.y }
 '''
 
 _RECORD_WORKFLOW = '''\\x ->
@@ -221,7 +227,7 @@ class TestWorkflowCheck(ut.TestCase):
         path = self._write(root, 'pipe.swl', _PIPE)
         result = Checker().load(path)
         self.assertEqual(sorted(result.imports.keys()), ['align', 'call', 'sort'])
-        self.assertEqual(result.chain_errors, [])
+        self.assertEqual(result.errors, [])
         self.assertEqual(result.inferred_inputs, set())
         self.assertIn('bcf', result.signature.outputs)
 
@@ -229,7 +235,7 @@ class TestWorkflowCheck(ut.TestCase):
         root = self._make_fixture_dir()
         path = self._write(root, 'function.swl', _FUNCTION)
         result = Checker().load(path)
-        self.assertEqual(result.chain_errors, [])
+        self.assertEqual(result.errors, [])
         self.assertIn('fastq1', result.inferred_inputs)
         self.assertIn('fastq2', result.inferred_inputs)
         self.assertIn('ref', result.inferred_inputs)
@@ -241,7 +247,7 @@ class TestWorkflowCheck(ut.TestCase):
         root = self._make_fixture_dir()
         path = self._write(root, 'explicit.swl', _EXPLICIT)
         result = Checker().load(path)
-        self.assertEqual(result.chain_errors, [])
+        self.assertEqual(result.errors, [])
         self.assertIn('fastq1', result.inferred_inputs)
         self.assertIn('fastq2', result.inferred_inputs)
         self.assertIn('ref', result.inferred_inputs)
@@ -262,13 +268,53 @@ class TestWorkflowCheck(ut.TestCase):
         root = self._make_fixture_dir()
         path = self._write(root, 'partial.swl', _PARTIAL)
         result = Checker().load(path)
-        self.assertEqual(result.chain_errors, [])
+        self.assertEqual(result.errors, [])
         self.assertIn('fastq1', result.signature.inputs)
         self.assertIn('fastq2', result.signature.inputs)
         self.assertIn('outbase', result.signature.inputs)
         self.assertNotIn('ref', result.signature.inputs)
         self.assertNotIn('ref_fai', result.signature.inputs)
         self.assertIn('bam', result.signature.outputs)
+
+    def test_closure_preserves_bound_value_fields(self):
+        root = self._make_fixture_dir()
+        checker = Checker()
+        imported = checker._load_import('align', os.path.join(root, 'align.sh'))
+        fn = FunctionValue('align', imported.signature, 'task')
+        closure = checker._apply_function(fn, ClosedRecord({'ref': object(), 'ref_fai': object()}), set())
+        self.assertIsInstance(closure, ClosureValue)
+        self.assertIn('ref', closure.bound_value.fields)
+        self.assertIn('ref_fai', closure.bound_value.fields)
+        self.assertNotIn('ref', closure.signature.inputs)
+        self.assertNotIn('ref_fai', closure.signature.inputs)
+
+    def test_lambda_application_evaluates_body_for_signature(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'lambda_apply.swl', _LAMBDA_APPLY)
+        result = Checker().load(path)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(sorted(result.signature.inputs.keys()), ['a'])
+        self.assertEqual(sorted(result.signature.outputs.keys()), ['y'])
+
+    def test_computation_preserves_output_record_shape(self):
+        root = self._make_fixture_dir()
+        checker = Checker()
+        imported = checker._load_import('align', os.path.join(root, 'align.sh'))
+        fn = FunctionValue('align', imported.signature, 'task')
+        value = checker._application_result(
+            fn,
+            ClosedRecord({
+                'fastq1': UnknownValue(),
+                'fastq2': UnknownValue(),
+                'ref': UnknownValue(),
+                'ref_fai': UnknownValue(),
+                'outbase': UnknownValue(),
+            }),
+            set(),
+            [],
+        )
+        self.assertIsInstance(value, ComputationValue)
+        self.assertIn('bam', value.output_value.fields)
 
     def test_import_workflow_record_signature(self):
         root = self._make_fixture_dir()
@@ -316,7 +362,7 @@ class TestWorkflowCheck(ut.TestCase):
         self._write(root, 'task_result.swl', _TASK_RESULT_WORKFLOW)
         path = self._write(root, 'workflow_chain.swl', _WORKFLOW_CHAIN)
         result = Checker().load(path)
-        self.assertEqual(result.chain_errors, [])
+        self.assertEqual(result.errors, [])
         self.assertIn('call', result.imports)
         self.assertEqual(result.imports['w'].kind, 'workflow')
 
@@ -325,7 +371,7 @@ class TestWorkflowCheck(ut.TestCase):
         self._write(root, 'task_result.swl', _TASK_RESULT_WORKFLOW)
         path = self._write(root, 'workflow_apply.swl', _WORKFLOW_APPLY)
         result = Checker().load(path)
-        self.assertEqual(result.chain_errors, [])
+        self.assertEqual(result.errors, [])
         self.assertIn('fastq1', result.inferred_inputs)
         self.assertIn('fastq2', result.inferred_inputs)
         self.assertIn('ref', result.inferred_inputs)
@@ -349,8 +395,8 @@ class TestWorkflowCheck(ut.TestCase):
         root = self._make_fixture_dir()
         path = self._write(root, 'bad_pipe.swl', _BAD_PIPE)
         result = Checker().load(path)
-        self.assertEqual(len(result.chain_errors), 1)
-        self.assertIn('outbase', result.chain_errors[0])
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn('outbase', result.errors[0])
 
     def test_field_access_on_partial_function_reports_error(self):
         root = self._make_fixture_dir()

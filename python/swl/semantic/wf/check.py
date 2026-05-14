@@ -7,29 +7,41 @@ from swl.syntax.wf.parser import Parser as WfParser
 
 
 class Import:
-    def __init__(self, name: str, path: str, signature: TaskSignature, kind: str):
+    def __init__(self, name: str, path: str, signature: TaskSignature, kind: str, check=None):
         self.name = name
         self.path = path
         self.signature = signature
         self.kind = kind
+        self.check = check
 
 
 class OpenRecord:
     def __init__(self, fields=None):
-        self.fields = set(fields or [])
+        if isinstance(fields, dict):
+            self.fields = dict(fields)
+        else:
+            self.fields = {name: UnknownValue() for name in (fields or [])}
 
 
 class ClosedRecord:
     def __init__(self, fields=None):
-        self.fields = set(fields or [])
+        if isinstance(fields, dict):
+            self.fields = dict(fields)
+        else:
+            self.fields = {name: UnknownValue() for name in (fields or [])}
 
 
 class FunctionValue:
-    def __init__(self, name: str, signature: TaskSignature, kind: str, first_input: str = None):
+    def __init__(self, name: str, signature: TaskSignature, kind: str, first_input: str = None, param=None, body=None, env=None, imports=None, imported_check=None):
         self.name = name
         self.signature = signature
         self.kind = kind
         self.first_input = first_input or self._first_input_name()
+        self.param = param
+        self.body = body
+        self.env = dict(env or {})
+        self.imports = dict(imports or {})
+        self.imported_check = imported_check
 
     def _first_input_name(self):
         for name in self.signature.inputs.keys():
@@ -38,23 +50,27 @@ class FunctionValue:
 
 
 class ClosureValue:
-    def __init__(self, function: FunctionValue, bound_fields=None):
+    def __init__(self, function: FunctionValue, bound_value=None):
         self.function = function
-        self.bound_fields = set(bound_fields or [])
+        self.bound_value = bound_value or ClosedRecord({})
 
     @property
     def signature(self):
         remaining = {}
+        bound_fields = set(self.bound_value.fields.keys()) if isinstance(self.bound_value, (OpenRecord, ClosedRecord)) else set()
         for name, param in self.function.signature.inputs.items():
-            if name not in self.bound_fields:
+            if name not in bound_fields:
                 remaining[name] = param
         return TaskSignature(remaining, dict(self.function.signature.outputs), {})
 
 
 class ComputationValue:
-    def __init__(self, function: FunctionValue, available_fields=None):
+    def __init__(self, function: FunctionValue, arg_value=None, output_value=None):
         self.function = function
-        self.available_fields = set(available_fields or [])
+        self.arg_value = arg_value
+        self.output_value = output_value or ClosedRecord({
+            name: UnknownValue() for name in function.signature.outputs.keys()
+        })
 
     @property
     def signature(self):
@@ -69,11 +85,17 @@ class WorkflowCheck:
     def __init__(self, tree, imports, errors, inferred_inputs, signature=None):
         self.tree = tree
         self.imports = imports
-        self.chain_errors = errors
-        self.errors = errors
+        self.errors = list(errors)
         self.inferred_inputs = inferred_inputs
-        self.issues = errors
         self.signature = signature
+
+    @property
+    def chain_errors(self):
+        return self.errors
+
+    @property
+    def issues(self):
+        return self.errors
 
 
 class Checker:
@@ -144,7 +166,7 @@ class Checker:
             check = self.load(path)
             if check.signature is None:
                 raise ValueError(f'Imported workflow does not produce a signature: {path}')
-            return Import(name, path, check.signature, 'workflow')
+            return Import(name, path, check.signature, 'workflow', check=check)
         raise ValueError(f'Unrecognized import path: {path}')
 
     def _match_import(self, expr):
@@ -206,7 +228,13 @@ class Checker:
         demanded = set()
 
         if final.type == wf_node.NodeType.fun:
-            env = {final.param.name: OpenRecord()}
+            env = {}
+            for expr in tree.body[:-1]:
+                if expr.type == wf_node.NodeType.bind:
+                    if self._match_import(expr.value) is not None:
+                        continue
+                    env[expr.id.name] = self._eval_expr(expr.value, imports, env, demanded, issues)
+            env[final.param.name] = OpenRecord()
             self._eval_function_body(final, imports, env, demanded, issues)
             return demanded, issues
 
@@ -227,7 +255,13 @@ class Checker:
 
         final = tree.body[-1]
         if final.type == wf_node.NodeType.fun:
-            env = {final.param.name: OpenRecord(inferred_inputs)}
+            env = {}
+            for expr in tree.body[:-1]:
+                if expr.type == wf_node.NodeType.bind:
+                    if self._match_import(expr.value) is not None:
+                        continue
+                    env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
+            env[final.param.name] = OpenRecord(inferred_inputs)
             result = self._eval_function_body(final, imports, env, set(), issues)
             inputs = {
                 name: Param(name, None)
@@ -257,9 +291,9 @@ class Checker:
         if isinstance(value, FunctionValue):
             return dict(value.signature.outputs)
         if isinstance(value, ClosedRecord):
-            return {name: Param(name, None) for name in sorted(value.fields)}
+            return {name: Param(name, None) for name in sorted(value.fields.keys())}
         if isinstance(value, OpenRecord):
-            return {name: Param(name, None) for name in sorted(value.fields)}
+            return {name: Param(name, None) for name in sorted(value.fields.keys())}
         return {}
 
     def _eval_function_body(self, fn, imports, env, demanded, issues):
@@ -283,13 +317,20 @@ class Checker:
                 return env[expr.name]
             if expr.name in imports:
                 imported = imports[expr.name]
-                return FunctionValue(expr.name, imported.signature, imported.kind)
+                return FunctionValue(
+                    expr.name,
+                    imported.signature,
+                    imported.kind,
+                    imports=imported.check.imports if imported.check is not None else None,
+                    imported_check=imported.check,
+                )
             return UnknownValue()
 
         if expr.type == wf_node.NodeType.rec:
-            fields = set(expr.value.keys())
-            for value_expr in expr.value.values():
-                self._eval_expr(value_expr, imports, env, demanded, issues)
+            fields = {
+                name: self._eval_expr(value_expr, imports, env, demanded, issues)
+                for name, value_expr in expr.value.items()
+            }
             return ClosedRecord(fields)
 
         if expr.type == wf_node.NodeType.get:
@@ -297,11 +338,16 @@ class Checker:
             field = expr.member.name
             if isinstance(rec, OpenRecord):
                 demanded.add(field)
-                rec.fields.add(field)
-                return UnknownValue()
+                rec.fields[field] = UnknownValue()
+                return rec.fields[field]
             if isinstance(rec, ClosedRecord):
+                if field in rec.fields:
+                    return rec.fields[field]
                 return UnknownValue()
             if isinstance(rec, ComputationValue):
+                outputs = self._field_map(rec.output_value)
+                if outputs is not None and field in outputs:
+                    return outputs[field]
                 if field in rec.signature.outputs:
                     return UnknownValue()
             if isinstance(rec, (FunctionValue, ClosureValue)):
@@ -347,7 +393,15 @@ class Checker:
                 for name in sorted(fn_demanded)
             }
             signature = TaskSignature(inputs, body_outputs, {})
-            return FunctionValue(expr.param.name, signature, 'lambda')
+            return FunctionValue(
+                expr.param.name,
+                signature,
+                'lambda',
+                param=expr.param.name,
+                body=expr.body,
+                env=env,
+                imports=imports,
+            )
 
         if expr.type == wf_node.NodeType.chain:
             return self._eval_chain(expr, imports)
@@ -356,57 +410,90 @@ class Checker:
 
     def _apply(self, fun, arg, demanded, issues):
         if isinstance(fun, ClosureValue):
-            return self._apply_closure(fun, arg, demanded)
+            return self._apply_closure(fun, arg, demanded, issues)
         if isinstance(fun, FunctionValue):
-            return self._apply_function(fun, arg, demanded)
+            return self._apply_function(fun, arg, demanded, issues)
         issues.append(f'Cannot apply non-function value: {fun}')
         return UnknownValue()
 
-    def _apply_closure(self, closure, arg, demanded):
-        available = set(closure.bound_fields)
-        available.update(self._available_fields_for_apply(closure.function, arg))
-        return self._application_result(closure.function, available, demanded)
+    def _apply_closure(self, closure, arg, demanded, issues=None):
+        bound = self._merge_arg_values(closure.bound_value, self._argument_value(closure.function, arg))
+        return self._application_result(closure.function, bound, demanded, issues or [])
 
-    def _apply_function(self, fun, arg, demanded):
-        available = self._available_fields_for_apply(fun, arg)
-        return self._application_result(fun, available, demanded)
+    def _apply_function(self, fun, arg, demanded, issues=None):
+        bound = self._argument_value(fun, arg)
+        return self._application_result(fun, bound, demanded, issues or [])
 
-    def _application_result(self, fun, available, demanded):
-        if isinstance(available, OpenRecord):
+    def _application_result(self, fun, bound, demanded, issues):
+        if isinstance(bound, OpenRecord):
             for name, param in fun.signature.inputs.items():
-                if name in available.fields:
+                if name in bound.fields:
                     continue
                 if param.type is not None and str(param.type.value).endswith('?'):
                     continue
                 demanded.add(name)
-                available.fields.add(name)
-            return ComputationValue(fun, available.fields)
+                bound.fields[name] = UnknownValue()
+            return self._computation_value(fun, bound)
 
-        missing = self._required_missing(fun.signature, available)
+        missing = self._required_missing(fun.signature, bound)
         for name in missing:
             demanded.add(name)
         if missing:
-            return ClosureValue(fun, available)
-        return ComputationValue(fun, available)
+            return ClosureValue(fun, bound)
+        if fun.kind == 'lambda' and fun.param is not None and fun.body is not None:
+            local_env = dict(fun.env)
+            local_env[fun.param] = bound
+            return self._eval_expr(fun.body, fun.imports, local_env, demanded, issues)
+        if fun.kind == 'workflow' and fun.imported_check is not None:
+            return self._apply_imported_workflow(fun, bound, demanded, issues)
+        return self._computation_value(fun, bound)
+
+    def _apply_imported_workflow(self, fun, bound, demanded, issues):
+        tree = fun.imported_check.tree
+        if tree.type != wf_node.NodeType.block or not tree.body:
+            return self._computation_value(fun, bound)
+        final = tree.body[-1]
+        if final.type != wf_node.NodeType.fun:
+            return self._computation_value(fun, bound)
+        env = {}
+        for expr in tree.body[:-1]:
+            if expr.type == wf_node.NodeType.bind:
+                if self._match_import(expr.value) is not None:
+                    continue
+                env[expr.id.name] = self._eval_expr(expr.value, fun.imports, env, demanded, issues)
+        env[final.param.name] = bound
+        return self._eval_function_body(final, fun.imports, env, demanded, issues)
+
+    def _computation_value(self, fun, bound):
+        return ComputationValue(
+            fun,
+            bound,
+            ClosedRecord({name: UnknownValue() for name in fun.signature.outputs.keys()}),
+        )
 
     def _required_missing(self, signature, available):
         missing = set()
+        fields = self._field_map(available)
         for name, param in signature.inputs.items():
-            if name in available:
+            if name in fields:
                 continue
             if param.type is not None and str(param.type.value).endswith('?'):
                 continue
             missing.add(name)
         return missing
 
-    def _available_fields_for_apply(self, fun, arg):
-        if isinstance(arg, OpenRecord):
+    def _argument_value(self, fun, arg):
+        if isinstance(arg, (OpenRecord, ClosedRecord)):
             return arg
-        if isinstance(arg, (ClosedRecord, ComputationValue, ClosureValue, FunctionValue)):
-            return self._available_fields(arg)
+        if isinstance(arg, ComputationValue):
+            return ClosedRecord({name: UnknownValue() for name in arg.signature.outputs.keys()})
+        if isinstance(arg, ClosureValue):
+            return ClosedRecord({name: UnknownValue() for name in arg.signature.outputs.keys()})
+        if isinstance(arg, FunctionValue):
+            return ClosedRecord({name: UnknownValue() for name in arg.signature.outputs.keys()})
         if fun.first_input is not None:
-            return {fun.first_input}
-        return set()
+            return ClosedRecord({fun.first_input: arg})
+        return ClosedRecord({})
 
     def _eval_chain(self, expr, imports):
         names = self._chain_names(expr)
@@ -427,42 +514,31 @@ class Checker:
         return isinstance(value, (FunctionValue, ClosureValue))
 
     def _merge_records(self, left, right):
-        if isinstance(left, OpenRecord) and isinstance(right, OpenRecord):
-            return OpenRecord(left.fields.union(right.fields))
-        if isinstance(left, OpenRecord) and isinstance(right, ClosedRecord):
-            return OpenRecord(left.fields.union(right.fields))
-        if isinstance(left, ClosedRecord) and isinstance(right, OpenRecord):
-            return OpenRecord(left.fields.union(right.fields))
-        if isinstance(left, ClosedRecord) and isinstance(right, ClosedRecord):
-            return ClosedRecord(left.fields.union(right.fields))
-        if isinstance(left, ComputationValue) and isinstance(right, ClosedRecord):
-            return ClosedRecord(set(left.signature.outputs.keys()).union(right.fields))
-        if isinstance(left, ClosedRecord) and isinstance(right, ComputationValue):
-            return ClosedRecord(left.fields.union(set(right.signature.outputs.keys())))
-        if isinstance(left, OpenRecord) and isinstance(right, ComputationValue):
-            return OpenRecord(left.fields.union(set(right.signature.outputs.keys())))
-        if isinstance(left, ComputationValue) and isinstance(right, OpenRecord):
-            return OpenRecord(set(left.signature.outputs.keys()).union(right.fields))
-        if isinstance(left, ComputationValue) and isinstance(right, ComputationValue):
-            return ClosedRecord(
-                set(left.signature.outputs.keys()).union(
-                    set(right.signature.outputs.keys())
-                )
-            )
-        return UnknownValue()
+        return self._merge_arg_values(left, right)
 
-    def _available_fields(self, value):
+    def _merge_arg_values(self, left, right):
+        left_fields = self._field_map(left)
+        right_fields = self._field_map(right)
+        if left_fields is None or right_fields is None:
+            return UnknownValue()
+        merged = dict(left_fields)
+        merged.update(right_fields)
+        if isinstance(left, OpenRecord) or isinstance(right, OpenRecord):
+            return OpenRecord(merged)
+        return ClosedRecord(merged)
+
+    def _field_map(self, value):
         if isinstance(value, OpenRecord):
-            return set(value.fields)
+            return dict(value.fields)
         if isinstance(value, ClosedRecord):
-            return set(value.fields)
+            return dict(value.fields)
         if isinstance(value, FunctionValue):
-            return set(value.signature.outputs.keys())
+            return {name: UnknownValue() for name in value.signature.outputs.keys()}
         if isinstance(value, ClosureValue):
-            return set(value.signature.outputs.keys())
+            return {name: UnknownValue() for name in value.signature.outputs.keys()}
         if isinstance(value, ComputationValue):
-            return set(value.signature.outputs.keys())
-        return set()
+            return self._field_map(value.output_value)
+        return None
 
     def _chain_names(self, expr):
         if expr.type == wf_node.NodeType.id:

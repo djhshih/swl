@@ -133,7 +133,7 @@ call  = import "call.sh"
         dag = force_file(os.path.join(root, 'partial.swl'), files)
         data = dag.to_dict()
         self.assertNotIn('default', data['tasks'][0]['run']['cpu'])
-        self.assertEqual(data['tasks'][0]['run']['cpu']['value'], {'source': 'literal', 'value': 4})
+        self.assertEqual(data['tasks'][0]['run']['cpu']['value'], 4)
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
 

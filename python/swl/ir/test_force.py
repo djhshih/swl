@@ -197,7 +197,7 @@ class TestForce(ut.TestCase):
         data = force_file(os.path.join(root, 'partial.swl'), files).to_dict()
         self.assertEqual(data['tasks'][0]['run']['cpu']['type'], 'int')
         self.assertNotIn('default', data['tasks'][0]['run']['cpu'])
-        self.assertEqual(data['tasks'][0]['run']['cpu']['value'], {'source': 'literal', 'value': 4})
+        self.assertEqual(data['tasks'][0]['run']['cpu']['value'], 4)
 
     def test_chain_root_is_instantiated_during_force(self):
         files, root = self._files()

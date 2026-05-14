@@ -15,8 +15,8 @@ def eval(fname):
     print('imports:')
     for name, imported in result.imports.items():
         print(f'  {name}: kind={imported.kind} path={imported.path}')
-    print('chain errors:')
-    print(result.chain_errors)
+    print('errors:')
+    print(result.errors)
     print('inferred inputs:')
     print(sorted(result.inferred_inputs))
     print('signature:')
