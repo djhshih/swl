@@ -2,6 +2,10 @@
 
 set -e
 
+TASK_COUNT=0
+WF_COUNT=0
+COMPARE_COUNT=0
+
 EXPECT_COMPILE_FAIL=(
 	tests/bad_explicit.swl
 	tests/bad_pipe.swl
@@ -34,6 +38,7 @@ run_unit_tests() {
 }
 
 evaluate_task() {
+	TASK_COUNT=$((TASK_COUNT + 1))
 	set +e
 	echo "file: $1"
 	echo "syntax:"
@@ -46,6 +51,7 @@ evaluate_task() {
 }
 
 evaluate_wf() {
+	WF_COUNT=$((WF_COUNT + 1))
 	set +e
 	local wf="$1"
 	local out="tests/dag/$(basename ${wf%.swl}).json"
@@ -125,6 +131,30 @@ evaluate_wf() {
 	set -e
 }
 
+compare_dags() {
+	local left="$1"
+	local right="$2"
+	COMPARE_COUNT=$((COMPARE_COUNT + 1))
+	echo "compare: $left == $right"
+	PYTHONPATH=python python - <<'PY' "$left" "$right"
+import json, sys
+left = json.load(open(sys.argv[1]))
+right = json.load(open(sys.argv[2]))
+if left != right:
+    raise SystemExit(1)
+PY
+	echo "result: ok"
+	echo
+}
+
+print_summary() {
+	echo "summary:"
+	echo "  unit tests: passed"
+	echo "  task files checked: $TASK_COUNT"
+	echo "  workflow files checked: $WF_COUNT"
+	echo "  dag equality checks: $COMPARE_COUNT"
+}
+
 if (( $# > 0 )); then
 	if [[ $1 =~ \.swl ]]; then
 		evaluate_wf $1
@@ -140,5 +170,8 @@ else
 	for swl in tests/*.swl; do
 		evaluate_wf $swl
 	done
+	compare_dags tests/dag/pipe.json tests/dag/function.json
+	compare_dags tests/dag/explicit.json tests/dag/function.json
+	print_summary
 fi
 
