@@ -26,10 +26,10 @@ The remaining work is now mostly about semantic precision, cleanup, and executor
 Make workflow semantic checking less approximate around lazy application, closures, and record provenance.
 
 ### Remaining issues
-- closure semantics still track field availability more than concrete bound values/provenance
-- computation values are still signature-oriented rather than execution-oriented
+- closure semantics have improved, but computation values are still more signature-oriented than provenance-oriented
+- imported workflow application is still only partially semantic and does not yet model a full lazy value graph
 - some semantic conclusions are still inferred from field sets instead of preserved value flow
-- error reporting still exposes some legacy naming (`chain_errors`) instead of one clean error surface
+- compatibility aliases (`chain_errors`, `issues`) still exist even though `errors` is now the primary semantic error surface
 
 ### Planned files
 - modify `python/swl/semantic/wf/check.py`
@@ -37,17 +37,18 @@ Make workflow semantic checking less approximate around lazy application, closur
 - optionally update `python/swl/eval_wf_semantic.py`
 
 ### Next steps
-1. Make closure modeling more provenance-aware.
-   - preserve which values/records were actually bound, not just which field names are available
+1. Make computation modeling more provenance-aware.
+   - preserve more value-flow information after saturated application, not just signatures
+   - continue improving imported workflow application so nested workflow calls retain semantic structure where possible
 
 2. Tighten partial-application semantics.
    - keep distinguishing function/closure values from computation/record-like values
    - continue rejecting field access on function values early
    - reduce remaining approximation gaps for nested applications
 
-3. Simplify semantic error reporting.
-   - move toward one `errors` surface
-   - keep compatibility shims only if still needed by tests/tools
+3. Simplify semantic error reporting further.
+   - `errors` is now the primary surface
+   - remove compatibility shims (`chain_errors`, `issues`) once tests/tools no longer rely on them
 
 ## Phase 2: clean up semantic IR
 
@@ -55,7 +56,6 @@ Make workflow semantic checking less approximate around lazy application, closur
 Keep semantic IR minimal, canonical, and closely aligned with what forcing expects.
 
 ### Remaining issues
-- `ir.Chain` still exists as a transient node even though forcing rejects it
 - some older plan assumptions in code/comments still refer to superseded IR shapes
 - `force.py` is still structurally large and mixes multiple concerns
 
@@ -67,14 +67,11 @@ Keep semantic IR minimal, canonical, and closely aligned with what forcing expec
 - modify `python/swl/ir/test_force.py`
 
 ### Next steps
-1. Remove transient `ir.Chain` completely.
-   - if lowering always normalizes it away, the node may no longer need to exist
-
-2. Refactor `python/swl/ir/force.py`.
+1. Refactor `python/swl/ir/force.py`.
    - separate forcing logic, task-definition shaping, normalization helpers, dependency extraction, and codec-related helpers more clearly
    - keep behavior unchanged while improving readability and maintainability
 
-3. Tighten invariants around canonical IR.
+2. Tighten invariants around canonical IR.
    - keep failing loudly on unsupported/non-normalized forms
    - add direct regression tests where useful
 
@@ -86,6 +83,7 @@ Make compiled DAG JSON more directly usable by an executor, with less need to re
 ### Remaining issues
 - task `run` metadata is normalized, but `inputs` / `outputs` may still expose more syntax-oriented structure than necessary
 - compiled metadata shape should be reviewed for consistency across inputs, outputs, and run params
+- compiled task `run` fields should expose one executor-facing `value`, chosen by precedence task default < workflow-bound value < runtime user override
 - current executor-facing JSON behavior should be covered more explicitly by tests
 
 ### Planned files
@@ -95,15 +93,25 @@ Make compiled DAG JSON more directly usable by an executor, with less need to re
 - modify `python/swl/ir/test_force_codec.py`
 
 ### Next steps
-1. Review whether task `inputs` and `outputs` should carry more normalized semantic metadata.
+1. Fix forcing for partially applied root functions.
+   - when compiling workflows like `partial.swl`, external DAG inputs should exclude parameters already satisfied by bound literals/records in the workflow
+   - forcing should derive root required inputs from the remaining unsatisfied function signature, not the original imported task signature
+
+2. Preserve `run` value precedence clearly in compiled DAG JSON.
+   - compiled artifacts should expose one executor-facing `value`
+   - that value should represent the compile-time best choice: task default overridden by any workflow-bound value
+   - runtime user-provided values should remain the highest-precedence layer for the eventual executor
+
+3. Review whether task `inputs` and `outputs` should carry more normalized semantic metadata.
    - keep enough information for execution
    - avoid unnecessary raw-syntax leakage where possible
 
-2. Add regression tests for compiled metadata shape.
+4. Add regression tests for compiled metadata shape.
    - especially `run[*].type`
-   - and `run[*].value`
+   - `run[*].value`
+   - and partial-workflow external input reduction
 
-3. Keep the compiled artifact self-contained.
+5. Keep the compiled artifact self-contained.
    - executors should not need to reread original `.swl` / `.sh` files
 
 ## Phase 4: optional task/bash follow-up
