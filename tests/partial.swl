@@ -3,10 +3,11 @@ align = import "align.sh"
 align_hg38 = align {
   ref: "hg38.fa",
   ref_ann: "hg38.fa.ann",
+  ref_amb: "hg38.fa.amb",
   ref_bwt: "hg38.fa.bwt",
   ref_pac: "hg38.fa.pac",
   ref_sa: "hg38.fa.sa",
-  cpu: 2
+  cpu: 4
 }
 
 align_hg38
