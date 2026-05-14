@@ -43,13 +43,15 @@ class Forcer:
         self._assert_canonical(node)
         value = self.force_value(node, ForceEnv())
         value = self._force_root(value)
+        return self._finalize_dag(value)
+
+    def _finalize_dag(self, value):
         self._refine_input_metadata()
         outputs = self._final_outputs(value)
+        self._prune_unused_inputs(value, outputs)
         return DAG(dict(self.inputs), list(self.tasks), outputs)
 
     def _assert_canonical(self, node):
-        if isinstance(node, ir.Chain):
-            raise ValueError('Forcing expects normalized IR without Chain nodes')
         if isinstance(node, ir.Lambda):
             self._assert_canonical(node.body)
             return
@@ -221,6 +223,8 @@ class Forcer:
             return set()
         return set()
 
+    # task argument shaping -------------------------------------------------
+
     def _normalize_task_inputs(self, function, bound):
         names = list(function.signature.inputs.keys())
         if not names:
@@ -304,42 +308,42 @@ class Forcer:
         src = self.lowerer.checker._read_file(path)
         task = TaskParser().parse(src)
         signature = signature_from_task(task)
-        inputs = {}
-        outputs = {}
-        run = {}
-        for section in task.annotation.sections:
-            target = None
-            if section.kind.value == 'in':
-                target = inputs
-            elif section.kind.value == 'out':
-                target = outputs
-            elif section.kind.value == 'run':
-                target = run
-            for param in section.params:
-                for name in param.names:
-                    if section.kind.value == 'run':
-                        semantic = signature.run[name]
-                        target[name] = {
-                            'type': semantic.type.value if semantic.type is not None else None,
-                            'value': semantic.parsed_default,
-                            'desc': param.desc,
-                        }
-                    else:
-                        semantic = signature.inputs.get(name) if section.kind.value == 'in' else signature.outputs.get(name)
-                        target[name] = {
-                            'type': semantic.type.value if semantic and semantic.type is not None else param.type,
-                            'default': _interp_to_dict(param.default) if param.default is not None else None,
-                            'desc': param.desc,
-                        }
         definition = {
             'doc': task.annotation.doc,
             'body': task.body,
-            'inputs': inputs,
-            'outputs': outputs,
-            'run': run,
+            'inputs': self._build_task_section(task, signature, 'in'),
+            'outputs': self._build_task_section(task, signature, 'out'),
+            'run': self._build_task_section(task, signature, 'run'),
         }
         self.task_defs[path] = definition
         return definition
+
+    def _build_task_section(self, task, signature, kind):
+        built = {}
+        for section in task.annotation.sections:
+            if section.kind.value != kind:
+                continue
+            for param in section.params:
+                for name in param.names:
+                    built[name] = self._build_task_param(signature, kind, name, param)
+        return built
+
+    def _build_task_param(self, signature, kind, name, param):
+        if kind == 'run':
+            semantic = signature.run[name]
+            return {
+                'type': semantic.type.value if semantic.type is not None else None,
+                'value': semantic.parsed_default,
+                'desc': param.desc,
+            }
+        semantic = signature.inputs.get(name) if kind == 'in' else signature.outputs.get(name)
+        return {
+            'type': semantic.type.value if semantic and semantic.type is not None else param.type,
+            'default': _interp_to_dict(param.default) if param.default is not None else None,
+            'desc': param.desc,
+        }
+
+    # dag finalization ------------------------------------------------------
 
     def _refine_input_metadata(self):
         refined = {}
@@ -379,6 +383,25 @@ class Forcer:
             return None
         return ' / '.join(unique)
 
+    def _prune_unused_inputs(self, root_value, outputs):
+        used = set()
+        if isinstance(root_value, ForcedFunction):
+            signature = self._forced_signature(root_value)
+            if signature is not None:
+                used.update(signature.inputs.keys())
+        for task in self.tasks:
+            for value in task.inputs.values():
+                for item in self._walk_values(value):
+                    if isinstance(item, Input):
+                        used.add(item.name)
+        for value in outputs.values():
+            for item in self._walk_values(value):
+                if isinstance(item, Input):
+                    used.add(item.name)
+        self.inputs = {name: value for name, value in self.inputs.items() if name in used}
+
+    # dependency and reachability helpers ----------------------------------
+
     def _task_dependencies(self, inputs):
         deps = set()
         for value in inputs.values():
@@ -403,14 +426,30 @@ class Forcer:
                 deps.add(item.source.id)
         return deps
 
+    # root forcing and signature helpers -----------------------------------
+
     def _force_root(self, value):
         if not isinstance(value, ForcedFunction):
             return value
-        signature = value.signature or self._function_signature(value.function)
+        signature = self._forced_signature(value)
         if signature is None:
             return value
         arg = Record({name: self._input(name, spec) for name, spec in signature.inputs.items()})
         return self._apply(value, arg)
+
+    def _forced_signature(self, value):
+        signature = value.signature or self._function_signature(value.function)
+        if signature is None:
+            return None
+        if value.bound is None:
+            return signature
+        available = self._available_inputs(value.bound)
+        inputs = {
+            name: param
+            for name, param in signature.inputs.items()
+            if name not in available
+        }
+        return type(signature)(inputs, dict(signature.outputs), dict(signature.run))
 
     def _function_signature(self, function):
         if isinstance(function, ir.Function):
