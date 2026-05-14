@@ -276,7 +276,7 @@ class Forcer:
             path=function.path,
             inputs=inputs,
             outputs=outputs,
-            run={},
+            run=self._normalize_task_run(function, bound),
             task=self._task_definition(function.path),
             deps=sorted(self._task_dependencies(inputs)),
         )
@@ -301,6 +301,16 @@ class Forcer:
         local = ForceEnv()
         local.bind(function.param, bound)
         return self.force_value(function.body, local)
+
+    def _normalize_task_run(self, function, bound):
+        names = list(function.signature.run.keys())
+        if not names or not self._looks_record_like(bound):
+            return {}
+        return {
+            name: self._project_input(bound, name)
+            for name in names
+            if self._project_field(bound, name) is not _SENTINEL
+        }
 
     def _task_definition(self, path):
         if path in self.task_defs:

@@ -19,6 +19,8 @@ _ALIGN = '''# @ Align
 # out
 #   bam file = ${outbase}.bam
 #   | aligned bam
+# run
+#   cpu = 2
 echo align
 '''
 
@@ -44,8 +46,12 @@ sort = import "sort.sh"
 '''
 
 _PARTIAL = '''align = import "align.sh"
-\\x ->
-    align { ref: x.ref }
+align_hg38 = align {
+    ref: "hg38.fa",
+    ref_fai: "hg38.fa.fai",
+    cpu: 4
+}
+align_hg38
 '''
 
 _CALL = '''# @ Call
@@ -137,6 +143,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'call.sh'): _CALL,
             os.path.join(root, 'pipe.swl'): _PIPE,
             os.path.join(root, 'partial.swl'): _PARTIAL,
+            os.path.join(root, 'partial.swl'): _PARTIAL,
             os.path.join(root, 'chain.swl'): _CHAIN,
             os.path.join(root, 'function.swl'): _FUNCTION,
             os.path.join(root, 'reuse.swl'): _REUSE,
@@ -177,12 +184,20 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['tasks'][1]['deps'], ['t1'])
         self.assertEqual(sorted(data['outputs'].keys()), ['bai', 'bam'])
 
-    def test_force_partial_workflow_keeps_function_output(self):
+    def test_force_partial_workflow_emits_task_with_remaining_inputs(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'partial.swl'), files)
         data = dag.to_dict()
-        self.assertEqual(data['tasks'], [])
-        self.assertEqual(data['outputs']['result']['source'], 'function')
+        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
+        self.assertEqual(sorted(data['inputs'].keys()), ['fastq1', 'fastq2', 'outbase'])
+        self.assertEqual(sorted(data['outputs'].keys()), ['bam'])
+
+    def test_task_run_value_prefers_partial_application_over_task_default(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'partial.swl'), files).to_dict()
+        self.assertEqual(data['tasks'][0]['run']['cpu']['type'], 'int')
+        self.assertNotIn('default', data['tasks'][0]['run']['cpu'])
+        self.assertEqual(data['tasks'][0]['run']['cpu']['value'], {'source': 'literal', 'value': 4})
 
     def test_chain_root_is_instantiated_during_force(self):
         files, root = self._files()
@@ -262,9 +277,9 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['outputs']['bam']['task'], 't1')
         self.assertEqual(data['outputs']['bam2']['task'], 't2')
 
-    def test_force_rejects_non_normalized_chain_ir(self):
-        with self.assertRaisesRegex(ValueError, 'normalized IR without Chain nodes'):
-            Forcer().force(ir.Chain([]))
+    def test_force_rejects_unsupported_ir_node(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported IR node during forcing: object'):
+            Forcer().force_value(object(), None)
 
     def test_merge_of_records_collapses_during_force(self):
         value = Forcer().force_value(
