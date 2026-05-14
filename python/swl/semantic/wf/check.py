@@ -503,12 +503,21 @@ class Checker:
         if missing:
             return UnknownValue()
 
-        first = imports[names[0]].signature
-        outputs = dict(first.outputs)
-        for name in names[1:]:
-            outputs.update(imports[name].signature.outputs)
+        signatures = [imports[name].signature for name in names]
+        inputs = dict(signatures[0].inputs)
+        available = set(signatures[0].inputs.keys()).union(signatures[0].outputs.keys())
+        outputs = {}
+        run = {}
+        for sig in signatures:
+            for name, param in sig.inputs.items():
+                if name not in available:
+                    inputs[name] = param
+            available.update(sig.inputs.keys())
+            available.update(sig.outputs.keys())
+            outputs.update(sig.outputs)
+            run.update(sig.run)
         kind = imports[names[-1]].kind
-        return FunctionValue(names[-1], TaskSignature(first.inputs, outputs, {}), kind)
+        return FunctionValue(names[-1], TaskSignature(inputs, outputs, run), kind)
 
     def _is_function_value(self, value):
         return isinstance(value, (FunctionValue, ClosureValue))
