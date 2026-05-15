@@ -70,6 +70,20 @@ call  = import "call.sh"
     c = call ( x // a // s )
     a // s // c
 ''',
+            os.path.join(root, 'partial.swl'): '''align = import "align.sh"
+align_hg38 = align {
+    ref: "hg38.fa",
+    ref_amb: "hg38.fa.amb",
+    ref_ann: "hg38.fa.ann",
+    ref_bwt: "hg38.fa.bwt",
+    ref_pac: "hg38.fa.pac",
+    ref_sa: "hg38.fa.sa",
+    cpu: 4
+}
+align_hg38
+''',
+            os.path.join(root, 'literal_output.swl'): '1\n',
+            os.path.join(root, 'import_partial.swl'): 'partial = import "partial.swl"\npartial\n',
         }, root
 
     def test_transpile_function_workflow(self):
@@ -103,6 +117,25 @@ call  = import "call.sh"
 
     def test_rejects_non_task_workflow_output(self):
         dag = DAG(inputs={}, tasks=[], outputs={'x': Literal(1)})
+        with self.assertRaisesRegex(ValueError, 'Unsupported workflow output'):
+            transpile_dag_dict(dag.to_dict())
+
+    def test_partial_workflow_transpiles(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'partial.swl'), files)
+        cwl = transpile_dag_dict(dag.to_dict())
+        workflow = cwl['$graph'][-1]
+        outputs = {item['id']: item for item in workflow['outputs']}
+        self.assertEqual(outputs['#main/bam']['outputSource'], '#main/align/bam')
+
+    def test_literal_top_level_workflow_is_rejected_before_transpile(self):
+        files, root = self._files()
+        with self.assertRaisesRegex(ValueError, 'Workflow must evaluate to a function'):
+            force_file(os.path.join(root, 'literal_output.swl'), files)
+
+    def test_rejects_imported_workflow_function_output(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'import_partial.swl'), files)
         with self.assertRaisesRegex(ValueError, 'Unsupported workflow output'):
             transpile_dag_dict(dag.to_dict())
 
