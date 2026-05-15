@@ -141,24 +141,70 @@ def _docker_requirement(run):
 
 
 def _validate_supported(dag):
-    for value in dag.outputs.values():
-        if not _is_supported_workflow_output(value):
-            raise ValueError(f'Unsupported workflow output for CWL transpilation: {value!r}')
+    seen = {}
     for task in dag.tasks:
-        for value in task.inputs.values():
-            if not _is_supported_step_input(value):
-                raise ValueError(f'Unsupported task input binding for CWL transpilation: {value!r}')
+        tool_id = task.tool or task.id
+        key = _tool_signature_key(task)
+        if tool_id in seen and seen[tool_id] != key:
+            raise ValueError(f'Conflicting packed tool id during CWL transpilation: {tool_id}')
+        seen[tool_id] = key
+
+    for name, value in dag.outputs.items():
+        error = _workflow_output_error(value)
+        if error is not None:
+            raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: {error}')
+
+    for task in dag.tasks:
+        for name, value in task.inputs.items():
+            error = _step_input_error(value)
+            if error is not None:
+                raise ValueError(f'Unsupported task input binding for CWL transpilation: {task.id}.{name}: {error}')
         for name, spec in task.task.get('outputs', {}).items():
-            _interp_to_cwl_glob(spec.get('default'))
+            try:
+                _interp_to_cwl_glob(spec.get('default'))
+            except ValueError as exc:
+                raise ValueError(f'Unsupported task output path for CWL transpilation: {task.id}.{name}: {exc}') from exc
 
 
-def _is_supported_step_input(value):
+def _tool_signature_key(task):
+    definition = task.task or {}
+    return json.dumps(definition, sort_keys=True)
+
+
+def _step_input_error(value):
     kind = value.__class__.__name__
-    return kind in {'Input', 'Literal'} or (kind == 'Field' and value.source.__class__.__name__ == 'TaskCall')
+    if kind == 'Input':
+        return None
+    if kind == 'Literal':
+        return None
+    if kind == 'Field' and value.source.__class__.__name__ == 'TaskCall':
+        return None
+    if kind == 'Merge':
+        return 'merge values are not supported'
+    if kind == 'Record':
+        return 'record values are not supported'
+    if kind == 'Field':
+        return f'field source {value.source.__class__.__name__} is not supported'
+    if kind == 'ForcedFunction':
+        return 'function values are not supported'
+    return f'{kind} values are not supported'
 
 
-def _is_supported_workflow_output(value):
-    return value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'TaskCall'
+def _workflow_output_error(value):
+    kind = value.__class__.__name__
+    if kind == 'Field' and value.source.__class__.__name__ == 'TaskCall':
+        return None
+    if kind == 'Literal':
+        return 'literal outputs are not supported'
+    if kind == 'Merge':
+        return 'merge outputs are not supported'
+    if kind == 'Record':
+        return 'record outputs are not supported'
+    if kind == 'ForcedFunction':
+        return 'function outputs are not supported'
+    if kind == 'Field':
+        return f'field source {value.source.__class__.__name__} is not supported'
+    return f'{kind} outputs are not supported'
 
 
 def _binding_source(workflow_id, value):

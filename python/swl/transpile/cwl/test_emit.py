@@ -84,6 +84,15 @@ align_hg38
 ''',
             os.path.join(root, 'literal_output.swl'): '1\n',
             os.path.join(root, 'import_partial.swl'): 'partial = import "partial.swl"\npartial\n',
+            os.path.join(root, 'bad_expr.sh'): '''#@  Bad expr output
+# in
+#   outbase str
+# out
+#   bam file = ${outbase / 2}.bam
+
+echo hi
+''',
+            os.path.join(root, 'bad_expr.swl'): 'bad = import "bad_expr.sh"\nbad\n',
         }, root
 
     def test_transpile_function_workflow(self):
@@ -174,8 +183,54 @@ align_hg38
             ],
             'outputs': {'bam': {'source': 'task', 'task': 'align', 'output': 'bam'}},
         }
-        with self.assertRaisesRegex(ValueError, 'Unsupported task input binding'):
+        with self.assertRaisesRegex(ValueError, 'align.x: merge values are not supported'):
             transpile_dag_dict(bad)
+
+    def test_rejects_conflicting_packed_tool_id(self):
+        bad = {
+            'inputs': {},
+            'tasks': [
+                {
+                    'id': 'align',
+                    'tool': 'dup',
+                    'path': '/tmp/a.sh',
+                    'deps': [],
+                    'interface': {
+                        'inputs': {},
+                        'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'a.bam'}]}, 'desc': None}},
+                        'run': {},
+                    },
+                    'inputs': {},
+                    'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'a.bam'}]}, 'desc': None}},
+                    'run': {},
+                    'script': 'echo a\n',
+                },
+                {
+                    'id': 'sort',
+                    'tool': 'dup',
+                    'path': '/tmp/b.sh',
+                    'deps': [],
+                    'interface': {
+                        'inputs': {},
+                        'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'b.bam'}]}, 'desc': None}},
+                        'run': {},
+                    },
+                    'inputs': {},
+                    'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'b.bam'}]}, 'desc': None}},
+                    'run': {},
+                    'script': 'echo b\n',
+                }
+            ],
+            'outputs': {'bam': {'source': 'task', 'task': 'align', 'output': 'bam'}},
+        }
+        with self.assertRaisesRegex(ValueError, 'Conflicting packed tool id during CWL transpilation: dup'):
+            transpile_dag_dict(bad)
+
+    def test_rejects_output_expr_interpolation(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'bad_expr.swl'), files)
+        with self.assertRaisesRegex(ValueError, 'Unsupported task output path for CWL transpilation: bad.bam: Unsupported interpolation'):
+            transpile_dag_dict(dag.to_dict())
 
 
 if __name__ == '__main__':
