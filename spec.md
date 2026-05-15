@@ -283,7 +283,7 @@ Upon providing inputs to a workflow ...
 - Functions can defined using a lambda
 
 ### Function Application
-- `f record` applies function `f` to `record`
+- `f r` applies function `f` to record `r`
 - Partial application returns a new function
 
 ### Pipeline
