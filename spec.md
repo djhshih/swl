@@ -60,6 +60,10 @@ eol             ::= "\n"
 ws             ::= [ \t\n]+
 ```
 
+#### Comments
+
+Comments are prefixed by `#`
+
 #### Block Syntax (described in words)
 
 A block is one or more statements, each ending with `\n` (newline).
