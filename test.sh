@@ -183,15 +183,21 @@ else
 	for swl in tests/*.swl; do
 		evaluate_wf $swl
 	done
+
 	compare_dags tests/dag/pipe.json tests/dag/function.json
 	compare_dags tests/dag/explicit.json tests/dag/function.json
-	mkdir -p tests/cwl
-	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/function.json -o tests/cwl/function.pack.cwl
-	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/pipe.json -o tests/cwl/pipe.pack.cwl
-	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/explicit.json -o tests/cwl/explicit.pack.cwl
-	compare_files tests/cwl/pipe.pack.cwl tests/cwl/function.pack.cwl
-	compare_files tests/cwl/explicit.pack.cwl tests/cwl/function.pack.cwl
-	compare_files tests/cwl/function.pack.cwl tests/cwl/function.pack.expected.cwl
+
+	mkdir -p tests/cwl && rm -f tests/cwl/*
+	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/function.json \
+		-o tests/cwl/function.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/pipe.json \
+		-o tests/cwl/pipe.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/explicit.json \
+		-o tests/cwl/explicit.cwl
+
+	compare_files tests/cwl/pipe.cwl tests/cwl/function.cwl
+	compare_files tests/cwl/explicit.cwl tests/cwl/function.cwl
+
 	print_summary
 fi
 
