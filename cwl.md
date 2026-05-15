@@ -731,20 +731,30 @@ Tool nodes may appear before or after workflow; either is fine as long as ids re
 
 ## 11. Important first implementation constraints
 
-To keep the first transpiler tractable, the first supported subset should be:
+To keep the first transpiler tractable, the supported subset should be explicit and enforced:
 
 1. task bodies are shell scripts lowered through `InitialWorkDirRequirement`
-2. workflow outputs must be flat named bindings
-3. step input sources must be:
+2. the packed workflow id is always `#main`
+3. workflow outputs must be direct task-output references
+   - literal outputs are rejected
+   - record outputs are rejected
+   - merge outputs are rejected
+   - function-valued outputs are rejected
+4. step input sources may be only:
    - workflow input
    - upstream task output
-   - maybe scalar literal
-4. output path interpolation must stay within:
+   - scalar literal
+   - merge inputs are rejected
+   - record inputs are rejected
+   - function-valued inputs are rejected
+5. output path interpolation must stay within:
    - literals
    - `${name}` variable substitution
    - concatenation
-5. only one top-level workflow is emitted
-6. no attempt yet to lower lazy function-valued outputs to CWL
+   - unsupported interpolation forms should fail clearly
+6. tool ids come from import binding names and must not collide across distinct tool definitions
+7. only one top-level workflow is emitted
+8. no attempt yet to lower lazy function-valued outputs to CWL
 
 That subset already covers the current `pipe/function/explicit` style examples.
 
