@@ -168,9 +168,9 @@ class TestForce(ut.TestCase):
         dag = force_file(os.path.join(root, 'pipe.swl'), files)
         data = dag.to_dict()
         self.assertEqual([task['id'] for task in data['tasks']], ['align', 'sort'])
-        bam = data['tasks'][1]['inputs']['bam']
-        self.assertEqual(bam['source'], 'task')
-        self.assertEqual(bam['task'], 'align')
+        bam = data['tasks'][1]['bindings']['bam']
+        self.assertEqual(bam['source'], 'align')
+        self.assertEqual(bam['output'], 'bam')
         self.assertIn('fastq1', data['inputs'])
         self.assertIn('outbase', data['inputs'])
         self.assertEqual(data['inputs']['fastq1']['type'], 'file')
@@ -231,8 +231,8 @@ class TestForce(ut.TestCase):
         self.assertEqual(chain['inputs'], function['inputs'])
         self.assertEqual(chain['outputs'], function['outputs'])
         self.assertEqual(
-            [(task['id'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in chain['tasks']],
-            [(task['id'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in function['tasks']],
+            [(task['id'], task['deps'], sorted(task['bindings'].keys()), sorted(task['outputs'].keys())) for task in chain['tasks']],
+            [(task['id'], task['deps'], sorted(task['bindings'].keys()), sorted(task['outputs'].keys())) for task in function['tasks']],
         )
 
     def test_reused_variable_forces_once(self):

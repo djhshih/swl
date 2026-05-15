@@ -15,7 +15,7 @@ def transpile_dag_dict(data, workflow_id='main'):
     tools = []
     tool_ids = {}
     for task in dag.tasks:
-        tool_id = task.tool or task.id
+        tool_id = task.id
         if tool_id not in tool_ids:
             tool_ids[tool_id] = f'#{tool_id}'
             tools.append(_tool_to_cwl(task, tool_ids[tool_id]))
@@ -26,7 +26,7 @@ def transpile_dag_dict(data, workflow_id='main'):
         'inputs': [_workflow_input_to_cwl(workflow_id, name, spec) for name, spec in dag.inputs.items()],
         'outputs': [_workflow_output_to_cwl(workflow_id, name, value, dag) for name, value in dag.outputs.items()],
         'requirements': [],
-        'steps': [_step_to_cwl(workflow_id, task, tool_ids[task.tool or task.id]) for task in dag.tasks],
+        'steps': [_step_to_cwl(workflow_id, task, tool_ids[task.id]) for task in dag.tasks],
     }
     return {
         'cwlVersion': 'v1.0',
@@ -86,7 +86,7 @@ def _step_to_cwl(workflow_id, task, tool_id):
     return {
         'id': f'#main/{task.id}',
         'run': tool_id,
-        'in': [_step_input_to_cwl(task.id, name, value) for name, value in task.inputs.items()],
+        'in': [_step_input_to_cwl(task.id, name, value) for name, value in task.bindings.items()],
         'out': [f'#main/{task.id}/{name}' for name in task.outputs],
     }
 
@@ -141,21 +141,13 @@ def _docker_requirement(run):
 
 
 def _validate_supported(dag):
-    seen = {}
-    for task in dag.tasks:
-        tool_id = task.tool or task.id
-        key = _tool_signature_key(task)
-        if tool_id in seen and seen[tool_id] != key:
-            raise ValueError(f'Conflicting packed tool id during CWL transpilation: {tool_id}')
-        seen[tool_id] = key
-
     for name, value in dag.outputs.items():
         error = _workflow_output_error(value)
         if error is not None:
             raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: {error}')
 
     for task in dag.tasks:
-        for name, value in task.inputs.items():
+        for name, value in task.bindings.items():
             error = _step_input_error(value)
             if error is not None:
                 raise ValueError(f'Unsupported task input binding for CWL transpilation: {task.id}.{name}: {error}')
@@ -164,11 +156,6 @@ def _validate_supported(dag):
                 _interp_to_cwl_glob(spec.get('default'))
             except ValueError as exc:
                 raise ValueError(f'Unsupported task output path for CWL transpilation: {task.id}.{name}: {exc}') from exc
-
-
-def _tool_signature_key(task):
-    definition = task.task or {}
-    return json.dumps(definition, sort_keys=True)
 
 
 def _step_input_error(value):

@@ -152,9 +152,8 @@ echo hi
         task = TaskCall(
             id='align',
             path='/tmp/align.sh',
-            inputs={'x': Merge(Input('a'), Input('b'))},
+            bindings={'x': Merge(Input('a'), Input('b'))},
             outputs=['bam'],
-            tool='align',
             task={
                 'body': 'echo hi\n',
                 'inputs': {'x': {'type': 'str', 'desc': None}},
@@ -167,15 +166,10 @@ echo hi
             'tasks': [
                 {
                     'id': 'align',
-                    'tool': 'align',
                     'path': '/tmp/align.sh',
                     'deps': [],
-                    'interface': {
-                        'inputs': {'x': {'type': 'str', 'desc': None}},
-                        'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
-                        'run': {},
-                    },
-                    'inputs': {'x': {'source': 'merge', 'left': {'source': 'input', 'name': 'a'}, 'right': {'source': 'input', 'name': 'b'}}},
+                    'inputs': {'x': {'type': 'str', 'desc': None}},
+                    'bindings': {'x': {'source': 'merge', 'left': {'source': 'input', 'name': 'a'}, 'right': {'source': 'input', 'name': 'b'}}},
                     'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
                     'run': {},
                     'script': 'echo hi\n',
@@ -183,47 +177,7 @@ echo hi
             ],
             'outputs': {'bam': {'source': 'task', 'task': 'align', 'output': 'bam'}},
         }
-        with self.assertRaisesRegex(ValueError, 'align.x: merge values are not supported'):
-            transpile_dag_dict(bad)
-
-    def test_rejects_conflicting_packed_tool_id(self):
-        bad = {
-            'inputs': {},
-            'tasks': [
-                {
-                    'id': 'align',
-                    'tool': 'dup',
-                    'path': '/tmp/a.sh',
-                    'deps': [],
-                    'interface': {
-                        'inputs': {},
-                        'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'a.bam'}]}, 'desc': None}},
-                        'run': {},
-                    },
-                    'inputs': {},
-                    'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'a.bam'}]}, 'desc': None}},
-                    'run': {},
-                    'script': 'echo a\n',
-                },
-                {
-                    'id': 'sort',
-                    'tool': 'dup',
-                    'path': '/tmp/b.sh',
-                    'deps': [],
-                    'interface': {
-                        'inputs': {},
-                        'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'b.bam'}]}, 'desc': None}},
-                        'run': {},
-                    },
-                    'inputs': {},
-                    'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'b.bam'}]}, 'desc': None}},
-                    'run': {},
-                    'script': 'echo b\n',
-                }
-            ],
-            'outputs': {'bam': {'source': 'task', 'task': 'align', 'output': 'bam'}},
-        }
-        with self.assertRaisesRegex(ValueError, 'Conflicting packed tool id during CWL transpilation: dup'):
+        with self.assertRaisesRegex(ValueError, 'Unsupported task binding during deserialization: x'):
             transpile_dag_dict(bad)
 
     def test_rejects_output_expr_interpolation(self):

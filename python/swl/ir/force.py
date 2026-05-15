@@ -275,8 +275,7 @@ class Forcer:
         call = TaskCall(
             id=call_id,
             path=function.path,
-            tool=function.name,
-            inputs=inputs,
+            bindings=inputs,
             outputs=outputs,
             run=self._normalize_task_run(function, bound),
             task=self._task_definition(function.path),
@@ -350,17 +349,22 @@ class Forcer:
     def _build_task_param(self, signature, kind, name, param):
         if kind == 'run':
             semantic = signature.run[name]
-            return {
+            built = {
                 'type': semantic.type.value if semantic.type is not None else None,
                 'value': semantic.parsed_default,
-                'desc': param.desc,
             }
+            if param.desc is not None:
+                built['desc'] = param.desc
+            return built
         semantic = signature.inputs.get(name) if kind == 'in' else signature.outputs.get(name)
-        return {
+        built = {
             'type': semantic.type.value if semantic and semantic.type is not None else param.type,
-            'default': _interp_to_dict(param.default) if param.default is not None else None,
-            'desc': param.desc,
         }
+        if param.desc is not None:
+            built['desc'] = param.desc
+        if param.default is not None:
+            built['default'] = _interp_to_dict(param.default)
+        return built
 
     # dag finalization ------------------------------------------------------
 
@@ -409,7 +413,7 @@ class Forcer:
             if signature is not None:
                 used.update(signature.inputs.keys())
         for task in self.tasks:
-            for value in task.inputs.values():
+            for value in task.bindings.values():
                 for item in self._walk_values(value):
                     if isinstance(item, Input):
                         used.add(item.name)

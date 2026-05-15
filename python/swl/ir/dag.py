@@ -36,9 +36,8 @@ class Merge:
 class TaskCall:
     id: str
     path: str
-    inputs: Dict[str, object]
+    bindings: Dict[str, object]
     outputs: List[str]
-    tool: Optional[str] = None
     run: Dict[str, object] = field(default_factory=dict)
     task: Optional[dict] = None
     deps: List[str] = field(default_factory=list)
@@ -75,17 +74,13 @@ class DAG:
             'tasks': [
                 {
                     'id': task.id,
-                    'tool': task.tool or task.id,
                     'path': task.path,
                     'deps': list(task.deps),
-                    'inputs': {name: _binding_to_dict(value) for name, value in task.inputs.items()},
-                    'interface': {
-                        'inputs': dict(task.task.get('inputs', {})),
-                        'outputs': {
-                            name: task.task['outputs'][name]
-                            for name in task.outputs
-                        },
-                        'run': dict(task.task.get('run', {})),
+                    'inputs': dict(task.task.get('inputs', {})),
+                    'bindings': {
+                        name: _binding_to_binding_dict(value)
+                        for name, value in task.bindings.items()
+                        if not (isinstance(value, Input) and value.name == name)
                     },
                     'outputs': {
                         name: task.task['outputs'][name]
@@ -111,15 +106,13 @@ class DAG:
         tasks = []
         task_by_id = {}
         for item in data.get('tasks', []):
-            interface = item.get('interface', {})
-            task_outputs = interface.get('outputs', item.get('outputs', {}))
-            task_run = interface.get('run', item.get('run', {}))
-            task_inputs = interface.get('inputs', {})
+            task_outputs = item.get('outputs', {})
+            task_run = item.get('run', {})
+            task_inputs = item.get('inputs', {})
             task = TaskCall(
                 id=item['id'],
                 path=item['path'],
-                tool=item.get('tool', item['id']),
-                inputs={},
+                bindings={},
                 outputs=list(task_outputs.keys()),
                 run={
                     name: _run_value_from_dict(name, spec, task_run, inputs, task_by_id)
@@ -138,9 +131,14 @@ class DAG:
             tasks.append(task)
             task_by_id[task.id] = task
         for task, item in zip(tasks, data.get('tasks', [])):
-            task.inputs.update({
-                name: _binding_from_dict(value, inputs, task_by_id)
-                for name, value in item.get('inputs', {}).items()
+            task.bindings.update({
+                name: inputs[name]
+                for name in task.task.get('inputs', {}).keys()
+                if name in inputs and name not in item.get('bindings', {})
+            })
+            task.bindings.update({
+                name: _binding_from_binding_dict(name, value, inputs, task_by_id)
+                for name, value in item.get('bindings', {}).items()
             })
         outputs = {
             name: _binding_from_dict(value, inputs, task_by_id)
@@ -203,6 +201,29 @@ def _binding_from_dict(data, inputs, tasks):
     if source == 'function':
         return {'kind': 'function'}
     raise ValueError(f'Unsupported binding source during deserialization: {source!r}')
+
+
+def _binding_to_binding_dict(value):
+    if isinstance(value, Input):
+        return {}
+    if isinstance(value, Literal):
+        return {'value': value.value}
+    if isinstance(value, Field) and isinstance(value.source, TaskCall):
+        return {'source': value.source.id, 'output': value.name}
+    raise ValueError(f'Unsupported task binding for serialization: {type(value).__name__}')
+
+
+def _binding_from_binding_dict(name, data, inputs, tasks):
+    if 'value' in data:
+        return Literal(data.get('value'))
+    source = data.get('source')
+    if source is None:
+        if 'output' in data or any(key not in {'source'} for key in data.keys()):
+            raise ValueError(f'Unsupported task binding during deserialization: {name}: {data!r}')
+        return inputs[name]
+    if 'output' not in data:
+        raise ValueError(f'Unsupported task binding during deserialization: {name}: {data!r}')
+    return Field(tasks[source], data['output'])
 
 
 def _run_param_to_dict(spec, value):
