@@ -94,9 +94,7 @@ should produce packed tool ids:
 
 This matches the language-level naming the user wrote, and gives stable readable ids.
 
-Implication:
-- the compiled artifact must preserve the import binding name for each imported task definition
-- the transpiler should not invent tool ids from path basenames unless no import-bound name is available
+The ids only need to be unique within the packed CWL file. They do not need to include the source file name.
 
 ---
 
@@ -668,30 +666,11 @@ Why:
 ## 9.8 Add a compiled-workflow name/id
 
 Workflow id rule:
-- derive the CWL workflow id from the file stem of the source `.swl` file
-- example:
-  - `tests/function.swl` -> `#function`
-  - `tests/pipe.swl` -> `#pipe`
+- always use `#main` for the packed CWL workflow id
 
-This should be the primary rule for the packed workflow id.
+This matches the style of `cipher.pack.cwl` and avoids carrying unnecessary workflow naming metadata through the compiled JSON.
 
-Recommended compiled top-level additions:
-
-```json
-{
-  "source": {
-    "path": "tests/function.swl",
-    "stem": "function"
-  },
-  "name": "function",
-  ...
-}
-```
-
-Why:
-- packed CWL needs a stable workflow id
-- the chosen rule is now explicit: use the `.swl` file stem
-- preserving the source stem in the compiled artifact keeps the transpiler deterministic and avoids recomputing naming policy elsewhere
+We do not need a workflow name field in the compiled SWL JSON for CWL transpilation.
 
 ---
 
@@ -806,8 +785,8 @@ That subset already covers the current `pipe/function/explicit` style examples.
 Minimum strongly recommended changes:
 
 1. **top-level workflow metadata**
-   - add workflow source metadata including `.swl` path and file stem
-   - derive the CWL workflow id from the `.swl` file stem
+   - no workflow name field is required for CWL transpilation
+   - packed CWL workflow id should simply be `#main`
 
 2. **top-level outputs**
    - change from raw binding only to:
@@ -823,6 +802,7 @@ Minimum strongly recommended changes:
    - preserve the variable name bound to each imported task
    - derive the packed `CommandLineTool` id from that import-bound variable name
    - keep per-call task ids separate from per-definition tool ids
+   - task/tool ids only need to be unique within the packed document; they do not need source file names
 
 5. **task execution metadata**
    - wrap `script` in an explicit execution object, or at least standardize script file metadata
