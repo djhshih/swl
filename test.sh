@@ -33,7 +33,8 @@ run_unit_tests() {
 		swl.semantic.wf.test_check \
 		swl.ir.test_lower \
 		swl.ir.test_force \
-		swl.ir.test_force_codec
+		swl.ir.test_force_codec \
+		swl.transpile.cwl.test_emit
 	printf "unit tests passed\n\n"
 }
 
@@ -172,6 +173,10 @@ else
 	done
 	compare_dags tests/dag/pipe.json tests/dag/function.json
 	compare_dags tests/dag/explicit.json tests/dag/function.json
+	mkdir -p tests/cwl
+	PYTHONPATH=python python -m swl.transpile.cwl.cli tests/dag/function.json -o tests/cwl/function.pack.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl.cli tests/dag/pipe.json -o tests/cwl/pipe.pack.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl.cli tests/dag/explicit.json -o tests/cwl/explicit.pack.cwl
 	print_summary
 fi
 
