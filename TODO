@@ -1,6 +1,7 @@
 Python:
 - Common Subexpression Elimination in lower.py
-- transpile to cwl
+- interpolation in bash command of task
+- expression evaluation (e.g. memory / cpu) in the task
 
 Rust:
 - worflow lexer
