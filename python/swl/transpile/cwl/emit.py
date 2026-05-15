@@ -6,27 +6,27 @@ from swl.ir.dag import DAG
 
 def transpile_dag_file(path):
     data = json.load(open(path))
-    workflow_id = os.path.splitext(os.path.basename(path))[0]
-    return transpile_dag_dict(data, workflow_id=workflow_id)
+    return transpile_dag_dict(data, workflow_id='main')
 
 
 def transpile_dag_dict(data, workflow_id='main'):
     dag = DAG.from_dict(data)
+    _validate_supported(dag)
     tools = []
     tool_ids = {}
     for task in dag.tasks:
-        tool_id = task.name
+        tool_id = task.tool or task.id
         if tool_id not in tool_ids:
             tool_ids[tool_id] = f'#{tool_id}'
             tools.append(_tool_to_cwl(task, tool_ids[tool_id]))
 
     workflow = {
-        'id': f'#{workflow_id}',
+        'id': '#main',
         'class': 'Workflow',
         'inputs': [_workflow_input_to_cwl(workflow_id, name, spec) for name, spec in dag.inputs.items()],
         'outputs': [_workflow_output_to_cwl(workflow_id, name, value, dag) for name, value in dag.outputs.items()],
         'requirements': [],
-        'steps': [_step_to_cwl(workflow_id, task, tool_ids[task.name]) for task in dag.tasks],
+        'steps': [_step_to_cwl(workflow_id, task, tool_ids[task.tool or task.id]) for task in dag.tasks],
     }
     return {
         'cwlVersion': 'v1.0',
@@ -84,16 +84,22 @@ def _workflow_output_to_cwl(workflow_id, name, value, dag):
 
 def _step_to_cwl(workflow_id, task, tool_id):
     return {
-        'id': f'#{workflow_id}/{task.id}',
+        'id': f'#main/{task.id}',
         'run': tool_id,
-        'in': [
-            {
-                'id': f'#{workflow_id}/{task.id}/{name}',
-                'source': _binding_source(workflow_id, value),
-            }
-            for name, value in task.inputs.items()
-        ],
-        'out': [f'#{workflow_id}/{task.id}/{name}' for name in task.outputs],
+        'in': [_step_input_to_cwl(task.id, name, value) for name, value in task.inputs.items()],
+        'out': [f'#main/{task.id}/{name}' for name in task.outputs],
+    }
+
+
+def _step_input_to_cwl(task_id, name, value):
+    if value.__class__.__name__ == 'Literal':
+        return {
+            'id': f'#main/{task_id}/{name}',
+            'default': value.value,
+        }
+    return {
+        'id': f'#main/{task_id}/{name}',
+        'source': _binding_source('main', value),
     }
 
 
@@ -134,17 +140,42 @@ def _docker_requirement(run):
     return {'class': 'DockerRequirement', 'dockerPull': image}
 
 
+def _validate_supported(dag):
+    for value in dag.outputs.values():
+        if not _is_supported_workflow_output(value):
+            raise ValueError(f'Unsupported workflow output for CWL transpilation: {value!r}')
+    for task in dag.tasks:
+        for value in task.inputs.values():
+            if not _is_supported_step_input(value):
+                raise ValueError(f'Unsupported task input binding for CWL transpilation: {value!r}')
+        for name, spec in task.task.get('outputs', {}).items():
+            _interp_to_cwl_glob(spec.get('default'))
+
+
+def _is_supported_step_input(value):
+    kind = value.__class__.__name__
+    return kind in {'Input', 'Literal'} or (kind == 'Field' and value.source.__class__.__name__ == 'TaskCall')
+
+
+def _is_supported_workflow_output(value):
+    return value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'TaskCall'
+
+
 def _binding_source(workflow_id, value):
     if hasattr(value, 'name') and value.__class__.__name__ == 'Input':
-        return f'#{workflow_id}/{value.name}'
+        return f'#main/{value.name}'
     if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'TaskCall':
-        return f'#{workflow_id}/{value.source.id}/{value.name}'
+        return f'#main/{value.source.id}/{value.name}'
+    if value.__class__.__name__ == 'Literal':
+        return value.value
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
 
 
 def _infer_output_type(name, value, dag):
     if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'TaskCall':
         return _cwl_type(value.source.task['outputs'][name]['type'])
+    if value.__class__.__name__ == 'Literal':
+        return _cwl_type(type(value.value).__name__)
     return 'string'
 
 
@@ -152,9 +183,11 @@ def _cwl_type(value):
     return {
         'file': 'File',
         'str': 'string',
+        'string': 'string',
         'int': 'int',
         'float': 'float',
         'bool': 'boolean',
+        'boolean': 'boolean',
     }.get(value, 'string')
 
 

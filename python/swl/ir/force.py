@@ -34,6 +34,7 @@ class Forcer:
         self.task_cache = {}
         self.task_defs = {}
         self.call_counter = 0
+        self.task_name_counts = {}
         self.lowerer = Lowerer(files=files)
         self.variables = {}
         self.forced_variables = {}
@@ -270,10 +271,11 @@ class Forcer:
             return self.task_cache[key]
         self.call_counter += 1
         outputs = list(function.signature.outputs.keys())
+        call_id = self._task_id(function.name)
         call = TaskCall(
-            id=f't{self.call_counter}',
-            name=function.name,
+            id=call_id,
             path=function.path,
+            tool=function.name,
             inputs=inputs,
             outputs=outputs,
             run=self._normalize_task_run(function, bound),
@@ -284,6 +286,13 @@ class Forcer:
         result = Record({name: Field(call, name) for name in outputs})
         self.task_cache[key] = result
         return result
+
+    def _task_id(self, name):
+        count = self.task_name_counts.get(name, 0) + 1
+        self.task_name_counts[name] = count
+        if count == 1:
+            return name
+        return f'{name}_{count}'
 
     def _force_workflow(self, function, bound):
         body = function.body

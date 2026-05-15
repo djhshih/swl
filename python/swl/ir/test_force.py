@@ -167,10 +167,10 @@ class TestForce(ut.TestCase):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'pipe.swl'), files)
         data = dag.to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align', 'sort'])
+        self.assertEqual([task['id'] for task in data['tasks']], ['align', 'sort'])
         bam = data['tasks'][1]['inputs']['bam']
         self.assertEqual(bam['source'], 'task')
-        self.assertEqual(bam['task'], 't1')
+        self.assertEqual(bam['task'], 'align')
         self.assertIn('fastq1', data['inputs'])
         self.assertIn('outbase', data['inputs'])
         self.assertEqual(data['inputs']['fastq1']['type'], 'file')
@@ -181,14 +181,14 @@ class TestForce(ut.TestCase):
         self.assertIn('outputs', data['tasks'][0])
         self.assertEqual(data['tasks'][0]['outputs']['bam']['default']['kind'], 'word')
         self.assertEqual(data['tasks'][0]['deps'], [])
-        self.assertEqual(data['tasks'][1]['deps'], ['t1'])
+        self.assertEqual(data['tasks'][1]['deps'], ['align'])
         self.assertEqual(sorted(data['outputs'].keys()), ['bai', 'bam'])
 
     def test_force_partial_workflow_emits_task_with_remaining_inputs(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'partial.swl'), files)
         data = dag.to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
+        self.assertEqual([task['id'] for task in data['tasks']], ['align'])
         self.assertEqual(sorted(data['inputs'].keys()), ['fastq1', 'fastq2', 'outbase'])
         self.assertEqual(sorted(data['outputs'].keys()), ['bam'])
 
@@ -203,11 +203,11 @@ class TestForce(ut.TestCase):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'chain.swl'), files)
         data = dag.to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align', 'sort', 'call'])
+        self.assertEqual([task['id'] for task in data['tasks']], ['align', 'sort', 'call'])
         self.assertIn('fastq1', data['inputs'])
         self.assertIn('ref_fai', data['inputs'])
         self.assertEqual(data['inputs']['ref_fai']['type'], 'file')
-        self.assertEqual(data['tasks'][2]['deps'], ['t2'])
+        self.assertEqual(data['tasks'][2]['deps'], ['sort'])
         self.assertEqual(sorted(data['outputs'].keys()), ['bai', 'bam', 'bcf'])
         self.assertEqual(data['outputs']['bam']['source'], 'task')
         self.assertEqual(data['outputs']['bai']['source'], 'task')
@@ -231,51 +231,51 @@ class TestForce(ut.TestCase):
         self.assertEqual(chain['inputs'], function['inputs'])
         self.assertEqual(chain['outputs'], function['outputs'])
         self.assertEqual(
-            [(task['name'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in chain['tasks']],
-            [(task['name'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in function['tasks']],
+            [(task['id'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in chain['tasks']],
+            [(task['id'], task['deps'], sorted(task['inputs'].keys()), sorted(task['outputs'].keys())) for task in function['tasks']],
         )
 
     def test_reused_variable_forces_once(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'reuse.swl'), files).to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
-        self.assertEqual(data['outputs']['bam']['task'], 't1')
-        self.assertEqual(data['outputs']['bam2']['task'], 't1')
+        self.assertEqual([task['id'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 'align')
+        self.assertEqual(data['outputs']['bam2']['task'], 'align')
 
     def test_reused_computation_across_imported_workflow_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'shadow.swl'), files).to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
-        self.assertEqual(data['outputs']['bam']['task'], 't1')
-        self.assertEqual(data['outputs']['bam2']['task'], 't1')
+        self.assertEqual([task['id'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 'align')
+        self.assertEqual(data['outputs']['bam2']['task'], 'align')
 
     def test_partial_application_reuse_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'partial_reuse.swl'), files).to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
-        self.assertEqual(data['outputs']['bam']['task'], 't1')
-        self.assertEqual(data['outputs']['bam2']['task'], 't1')
+        self.assertEqual([task['id'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 'align')
+        self.assertEqual(data['outputs']['bam2']['task'], 'align')
 
     def test_workflow_partial_application_reuse_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'workflow_partial_reuse.swl'), files).to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
-        self.assertEqual(data['outputs']['bam']['task'], 't1')
-        self.assertEqual(data['outputs']['bam2']['task'], 't1')
+        self.assertEqual([task['id'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 'align')
+        self.assertEqual(data['outputs']['bam2']['task'], 'align')
 
     def test_nested_workflow_value_reuse_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'nested_lambda_reuse.swl'), files).to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align'])
-        self.assertEqual(data['outputs']['bam']['task'], 't1')
-        self.assertEqual(data['outputs']['bam2']['task'], 't1')
+        self.assertEqual([task['id'] for task in data['tasks']], ['align'])
+        self.assertEqual(data['outputs']['bam']['task'], 'align')
+        self.assertEqual(data['outputs']['bam2']['task'], 'align')
 
     def test_partial_application_with_different_args_is_not_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'partial_different.swl'), files).to_dict()
-        self.assertEqual([task['name'] for task in data['tasks']], ['align', 'align'])
-        self.assertEqual(data['outputs']['bam']['task'], 't1')
-        self.assertEqual(data['outputs']['bam2']['task'], 't2')
+        self.assertEqual([task['id'] for task in data['tasks']], ['align', 'align_2'])
+        self.assertEqual(data['outputs']['bam']['task'], 'align')
+        self.assertEqual(data['outputs']['bam2']['task'], 'align_2')
 
     def test_force_rejects_unsupported_ir_node(self):
         with self.assertRaisesRegex(ValueError, 'Unsupported IR node during forcing: object'):
@@ -308,8 +308,8 @@ class TestForce(ut.TestCase):
     def test_dependency_extraction_walks_merged_record_inputs(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'chain.swl'), files).to_dict()
-        self.assertEqual(data['tasks'][1]['deps'], ['t1'])
-        self.assertEqual(data['tasks'][2]['deps'], ['t2'])
+        self.assertEqual(data['tasks'][1]['deps'], ['align'])
+        self.assertEqual(data['tasks'][2]['deps'], ['sort'])
 
     def test_output_flattening_handles_nested_merged_records(self):
         outputs = Forcer()._final_outputs(

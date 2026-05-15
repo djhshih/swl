@@ -35,10 +35,10 @@ class Merge:
 @dataclass
 class TaskCall:
     id: str
-    name: str
     path: str
     inputs: Dict[str, object]
     outputs: List[str]
+    tool: Optional[str] = None
     run: Dict[str, object] = field(default_factory=dict)
     task: Optional[dict] = None
     deps: List[str] = field(default_factory=list)
@@ -75,10 +75,18 @@ class DAG:
             'tasks': [
                 {
                     'id': task.id,
-                    'name': task.name,
+                    'tool': task.tool or task.id,
                     'path': task.path,
                     'deps': list(task.deps),
                     'inputs': {name: _binding_to_dict(value) for name, value in task.inputs.items()},
+                    'interface': {
+                        'inputs': dict(task.task.get('inputs', {})),
+                        'outputs': {
+                            name: task.task['outputs'][name]
+                            for name in task.outputs
+                        },
+                        'run': dict(task.task.get('run', {})),
+                    },
                     'outputs': {
                         name: task.task['outputs'][name]
                         for name in task.outputs
@@ -103,25 +111,25 @@ class DAG:
         tasks = []
         task_by_id = {}
         for item in data.get('tasks', []):
-            task_outputs = item.get('outputs', {})
-            task_run = item.get('run', {})
+            interface = item.get('interface', {})
+            task_outputs = interface.get('outputs', item.get('outputs', {}))
+            task_run = interface.get('run', item.get('run', {}))
+            task_inputs = interface.get('inputs', {})
             task = TaskCall(
                 id=item['id'],
-                name=item['name'],
                 path=item['path'],
+                tool=item.get('tool', item['id']),
                 inputs={},
                 outputs=list(task_outputs.keys()),
                 run={
-                    name: _binding_from_dict(spec['value'], inputs, task_by_id)
-                    for name, spec in task_run.items()
-                    if isinstance(spec, dict)
-                    and isinstance(spec.get('value'), dict)
-                    and spec['value'].get('source') is not None
+                    name: _run_value_from_dict(name, spec, task_run, inputs, task_by_id)
+                    for name, spec in item.get('run', {}).items()
+                    if _run_value_from_dict(name, spec, task_run, inputs, task_by_id) is not None
                 },
                 task={
                     'doc': None,
                     'body': item.get('script', ''),
-                    'inputs': {},
+                    'inputs': task_inputs,
                     'outputs': task_outputs,
                     'run': task_run,
                 },
@@ -208,3 +216,17 @@ def _run_param_to_dict(spec, value):
         return data
     data['value'] = _binding_to_dict(value)
     return data
+
+
+def _run_value_from_dict(name, spec, defaults, inputs, tasks):
+    if not isinstance(spec, dict) or 'value' not in spec:
+        return None
+    value = spec['value']
+    default = None
+    if name in defaults and isinstance(defaults[name], dict):
+        default = defaults[name].get('value')
+    if isinstance(value, dict) and value.get('source') is not None:
+        return _binding_from_dict(value, inputs, tasks)
+    if value != default:
+        return Literal(value)
+    return None

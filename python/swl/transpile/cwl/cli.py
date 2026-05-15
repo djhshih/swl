@@ -4,7 +4,7 @@ import json
 from swl.transpile.cwl.emit import transpile_dag_file
 
 
-if __name__ == '__main__':
+def main():
     ap = argparse.ArgumentParser('Transpile compiled DAG JSON to packed CWL')
     ap.add_argument('input', help='compiled DAG json path')
     ap.add_argument('-o', '--output', help='output CWL path')
@@ -18,3 +18,7 @@ if __name__ == '__main__':
             f.write('\n')
     else:
         print(payload)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,6 +1,7 @@
 import os
 import unittest
 
+from swl.ir.dag import DAG, Input, Literal, Merge, Record, TaskCall
 from swl.ir.force import force_file
 from swl.transpile.cwl.emit import transpile_dag_dict
 
@@ -74,29 +75,74 @@ call  = import "call.sh"
     def test_transpile_function_workflow(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'function.swl'), files)
-        cwl = transpile_dag_dict(dag.to_dict(), workflow_id='function')
+        cwl = transpile_dag_dict(dag.to_dict())
         self.assertEqual(cwl['cwlVersion'], 'v1.0')
-        self.assertEqual(cwl['$graph'][-1]['id'], '#function')
+        self.assertEqual(cwl['$graph'][-1]['id'], '#main')
         tools = [item for item in cwl['$graph'] if item['class'] == 'CommandLineTool']
         self.assertEqual([item['id'] for item in tools], ['#align', '#sort', '#call'])
         workflow = cwl['$graph'][-1]
         outputs = {item['id']: item for item in workflow['outputs']}
-        self.assertEqual(outputs['#function/bam']['outputSource'], '#function/t2/bam')
-        self.assertEqual(outputs['#function/bai']['outputSource'], '#function/t2/bai')
-        self.assertEqual(outputs['#function/bcf']['outputSource'], '#function/t3/bcf')
+        self.assertEqual(outputs['#main/bam']['outputSource'], '#main/sort/bam')
+        self.assertEqual(outputs['#main/bai']['outputSource'], '#main/sort/bai')
+        self.assertEqual(outputs['#main/bcf']['outputSource'], '#main/call/bcf')
         align = tools[0]
         self.assertEqual(align['baseCommand'], ['bash', 'script.sh'])
         self.assertEqual(align['requirements'][0]['class'], 'InitialWorkDirRequirement')
         self.assertIn('bwa mem', align['requirements'][0]['listing'][0]['entry'])
         self.assertEqual(align['requirements'][1]['coresMin'], 2)
         self.assertEqual(align['requirements'][2]['dockerPull'], 'djhshih/seqkit:0.1')
+        self.assertEqual([item['id'] for item in align['inputs']][:2], ['#align/fastq1', '#align/fastq2'])
+        self.assertFalse(any('name' in task for task in dag.to_dict()['tasks']))
 
     def test_output_glob_uses_cwl_expression(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'function.swl'), files)
-        cwl = transpile_dag_dict(dag.to_dict(), workflow_id='function')
+        cwl = transpile_dag_dict(dag.to_dict())
         align = next(item for item in cwl['$graph'] if item.get('id') == '#align')
         self.assertEqual(align['outputs'][0]['outputBinding']['glob'], "$(inputs.outbase + '.bam')")
+
+    def test_rejects_non_task_workflow_output(self):
+        dag = DAG(inputs={}, tasks=[], outputs={'x': Literal(1)})
+        with self.assertRaisesRegex(ValueError, 'Unsupported workflow output'):
+            transpile_dag_dict(dag.to_dict())
+
+    def test_rejects_merged_task_input_binding(self):
+        task = TaskCall(
+            id='align',
+            path='/tmp/align.sh',
+            inputs={'x': Merge(Input('a'), Input('b'))},
+            outputs=['bam'],
+            tool='align',
+            task={
+                'body': 'echo hi\n',
+                'inputs': {'x': {'type': 'str', 'desc': None}},
+                'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
+                'run': {},
+            },
+        )
+        bad = {
+            'inputs': {'a': {'type': None, 'desc': None}, 'b': {'type': None, 'desc': None}},
+            'tasks': [
+                {
+                    'id': 'align',
+                    'tool': 'align',
+                    'path': '/tmp/align.sh',
+                    'deps': [],
+                    'interface': {
+                        'inputs': {'x': {'type': 'str', 'desc': None}},
+                        'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
+                        'run': {},
+                    },
+                    'inputs': {'x': {'source': 'merge', 'left': {'source': 'input', 'name': 'a'}, 'right': {'source': 'input', 'name': 'b'}}},
+                    'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
+                    'run': {},
+                    'script': 'echo hi\n',
+                }
+            ],
+            'outputs': {'bam': {'source': 'task', 'task': 'align', 'output': 'bam'}},
+        }
+        with self.assertRaisesRegex(ValueError, 'Unsupported task input binding'):
+            transpile_dag_dict(bad)
 
 
 if __name__ == '__main__':

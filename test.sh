@@ -5,6 +5,7 @@ set -e
 TASK_COUNT=0
 WF_COUNT=0
 COMPARE_COUNT=0
+CWL_COMPARE_COUNT=0
 
 EXPECT_COMPILE_FAIL=(
 	tests/bad_explicit.swl
@@ -148,12 +149,23 @@ PY
 	echo
 }
 
+compare_files() {
+	local left="$1"
+	local right="$2"
+	CWL_COMPARE_COUNT=$((CWL_COMPARE_COUNT + 1))
+	echo "compare: $left == $right"
+	diff -u "$left" "$right" >/dev/null
+	echo "result: ok"
+	echo
+}
+
 print_summary() {
 	echo "summary:"
 	echo "  unit tests: passed"
 	echo "  task files checked: $TASK_COUNT"
 	echo "  workflow files checked: $WF_COUNT"
 	echo "  dag equality checks: $COMPARE_COUNT"
+	echo "  cwl golden checks: $CWL_COMPARE_COUNT"
 }
 
 if (( $# > 0 )); then
@@ -174,9 +186,12 @@ else
 	compare_dags tests/dag/pipe.json tests/dag/function.json
 	compare_dags tests/dag/explicit.json tests/dag/function.json
 	mkdir -p tests/cwl
-	PYTHONPATH=python python -m swl.transpile.cwl.cli tests/dag/function.json -o tests/cwl/function.pack.cwl
-	PYTHONPATH=python python -m swl.transpile.cwl.cli tests/dag/pipe.json -o tests/cwl/pipe.pack.cwl
-	PYTHONPATH=python python -m swl.transpile.cwl.cli tests/dag/explicit.json -o tests/cwl/explicit.pack.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/function.json -o tests/cwl/function.pack.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/pipe.json -o tests/cwl/pipe.pack.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/explicit.json -o tests/cwl/explicit.pack.cwl
+	compare_files tests/cwl/pipe.pack.cwl tests/cwl/function.pack.cwl
+	compare_files tests/cwl/explicit.pack.cwl tests/cwl/function.pack.cwl
+	compare_files tests/cwl/function.pack.cwl tests/cwl/function.pack.expected.cwl
 	print_summary
 fi
 
