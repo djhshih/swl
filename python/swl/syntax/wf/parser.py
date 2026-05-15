@@ -343,6 +343,12 @@ class TestParser(ut.TestCase):
         result = p.parse(src)
         self.assertIsNotNone(result)
 
+    def test_escaped_quote_and_hash_inside_string_parses(self):
+        src = 'x = "a \\\"quoted\\\" # string"\nx'
+        p = Parser()
+        result = p.parse(src)
+        self.assertIsNotNone(result)
+
     def test_trailing_comment_after_final_expr_parses(self):
         src = "x = 1\nx\n# done"
         p = Parser()

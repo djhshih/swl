@@ -145,7 +145,7 @@ class Lexer:
 
             # string literal
             if s1 == '"':
-                value = self._match(self.i, '"')
+                value = self._match_until_end_of_str(self.i)
                 return Token(TokenType.str, value)
 
             # identifier
@@ -295,6 +295,27 @@ class Lexer:
         else:
             self.i = end
             return self.s[start:end]
+
+    def _match_until_end_of_str(self, start: int) -> str:
+        '''Advance until the closing quote for a string beginning at start and
+           return substring not including that quote. Escaped quotes do not
+           terminate the string. Cursor position will be one past the closing
+           quote.'''
+        end = self.s.find('"', start)
+        while end != -1:
+            if end == start or self.s[end - 1] != '\\':
+                self.i = end + 1
+                return self.s[start:end]
+            backslashes = 1
+            i = end - 2
+            while i >= start and self.s[i] == '\\':
+                backslashes += 1
+                i -= 1
+            if backslashes % 2 == 0:
+                self.i = end + 1
+                return self.s[start:end]
+            end = self.s.find('"', end + 1)
+        raise Exception('Unexpected EOF when searching for string terminator')
         
 
 import unittest as ut
@@ -339,6 +360,16 @@ class TestLexer(ut.TestCase):
             [Token(TokenType.id, 'x'),
             Token(TokenType.equal),
             Token(TokenType.str, '# not comment'),
+            Token(TokenType.eof)]
+        )
+
+    def test_escaped_quote_inside_string_is_not_terminator(self):
+        lexer = Lexer('x = "a \\\"quoted\\\" # string" # real comment')
+        self.assertEqual(
+            [x for x in lexer],
+            [Token(TokenType.id, 'x'),
+            Token(TokenType.equal),
+            Token(TokenType.str, 'a \\\"quoted\\\" # string'),
             Token(TokenType.eof)]
         )
 
