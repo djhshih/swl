@@ -100,6 +100,9 @@ class Lexer:
                         # entire line is blank: advance and ignore line
                         self.i += 1
                         return self.__next__()
+                    if self.i < len(self.s) and self.s[self.i] == '#':
+                        self._jump(self.i, '\n')
+                        return self.__next__()
                     else:
                         self.new_line = False
                         # tab is equivalent to 4 spaces
@@ -313,6 +316,29 @@ class TestLexer(ut.TestCase):
         self.assertEqual(
             [x for x in lexer],
             [Token(TokenType.id, 'name'),
+            Token(TokenType.eof)]
+        )
+
+    def test_indented_comment_line(self):
+        lexer = Lexer('\\x ->\n    # ignored\n    y')
+        self.assertEqual(
+            [x for x in lexer],
+            [Token(TokenType.bslash),
+            Token(TokenType.id, 'x'),
+            Token(TokenType.arrow),
+            Token(TokenType.bstart),
+            Token(TokenType.id, 'y'),
+            Token(TokenType.bend),
+            Token(TokenType.eof)]
+        )
+
+    def test_hash_inside_string_is_not_comment(self):
+        lexer = Lexer('x = "# not comment" # real comment')
+        self.assertEqual(
+            [x for x in lexer],
+            [Token(TokenType.id, 'x'),
+            Token(TokenType.equal),
+            Token(TokenType.str, '# not comment'),
             Token(TokenType.eof)]
         )
 

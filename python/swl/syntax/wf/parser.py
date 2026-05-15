@@ -319,4 +319,40 @@ class TestParser(ut.TestCase):
         with self.assertRaises(ValueError):
             p.parse(src)
 
+    def test_leading_comment_parses(self):
+        src = "# hello\nx = 1\ny"
+        p = Parser()
+        result = p.parse(src)
+        self.assertIsNotNone(result)
+
+    def test_trailing_comment_parses(self):
+        src = "x = 1 # note\nx"
+        p = Parser()
+        result = p.parse(src)
+        self.assertIsNotNone(result)
+
+    def test_hash_inside_string_parses(self):
+        src = 'x = "# not comment"\nx'
+        p = Parser()
+        result = p.parse(src)
+        self.assertIsNotNone(result)
+
+    def test_indented_comment_in_block_parses(self):
+        src = "\\x ->\n    # note\n    y = x\n    y"
+        p = Parser()
+        result = p.parse(src)
+        self.assertIsNotNone(result)
+
+    def test_trailing_comment_after_final_expr_parses(self):
+        src = "x = 1\nx\n# done"
+        p = Parser()
+        result = p.parse(src)
+        self.assertIsNotNone(result)
+
+    def test_final_binding_with_only_comment_after_still_fails(self):
+        src = "x = 1\n# no final expr"
+        p = Parser()
+        with self.assertRaises(ValueError):
+            p.parse(src)
+
 
