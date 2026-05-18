@@ -128,6 +128,20 @@ merge = import "merge.sh"
     ys = map f xs
     merge { bam: ys.bam, outbase: "merged" }
 ''',
+            os.path.join(root, 'sub_lambda.swl'): '''align = import "align.sh"
+
+\\x ->
+    a = align x
+    { bam2: a.bam }
+''',
+            os.path.join(root, 'batch_lambda_task.swl'): '''sub = import "sub_lambda.swl"
+merge = import "merge.sh"
+
+\\xs ->
+    f = \\x -> sub x
+    ys = map f xs
+    merge { bam: ys.bam2, outbase: "merged" }
+''',
         }, root
 
     def test_transpile_function_workflow(self):
@@ -244,6 +258,17 @@ merge = import "merge.sh"
         workflow = cwl['$graph'][-1]
         generated = [item for item in cwl['$graph'] if item.get('class') == 'Workflow' and item.get('id', '').startswith('#map_lambda')]
         self.assertTrue(generated)
+        step = next(step for step in workflow['steps'] if step['run'].startswith('#map_lambda'))
+        self.assertEqual(step['scatterMethod'], 'dotproduct')
+
+    def test_batch_mapped_lambda_with_inner_task_emits_generated_scattered_subworkflow(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'batch_lambda_task.swl'), files)
+        cwl = transpile_dag_dict(dag.to_dict())
+        workflow = cwl['$graph'][-1]
+        generated = next(item for item in cwl['$graph'] if item.get('class') == 'Workflow' and item.get('id', '').startswith('#map_lambda'))
+        self.assertTrue(generated['steps'])
+        self.assertEqual(generated['steps'][0]['run'], '#sub')
         step = next(step for step in workflow['steps'] if step['run'].startswith('#map_lambda'))
         self.assertEqual(step['scatterMethod'], 'dotproduct')
 

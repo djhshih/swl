@@ -323,26 +323,22 @@ class Lowerer:
         return node
 
     def _generated_callable_from_lambda(self, node):
-        outputs = self._record_field_names(node.body.result) if isinstance(node, ir.Lambda) else None
-        if outputs is None:
+        if not isinstance(node, ir.Lambda):
+            return None
+        helper = ir.Lambda(node.param, self.normalize(node.body), node.signature)
+        generated_dag = self._generated_dag_from_lambda(helper)
+        if generated_dag is None:
             return None
         from swl.semantic.task.type import Param, TaskSignature
         name = f'map_lambda_{self.next_generated_id}'
         self.next_generated_id += 1
-        generated_dag = {
-            'inputs': {'x': {'type': None, 'desc': None}},
-            'steps': [],
-            'outputs': {
-                out: {'source': 'field', 'field': out, 'value': {'source': 'input', 'name': 'x'}}
-                for out in outputs
-            },
-        }
+        outputs = list(generated_dag.get('outputs', {}).keys())
         return ir.Function(
             name,
             'workflow',
-            TaskSignature({'x': Param('x', None)}, {out: Param(out, None) for out in outputs}, {}),
+            TaskSignature({node.param: Param(node.param, None)}, {out: Param(out, None) for out in outputs}, {}),
             f'<generated:{name}>',
-            body=ir.Lambda('x', ir.Block([], node.body.result)),
+            body=helper,
             generated_dag=generated_dag,
         )
 
@@ -368,7 +364,7 @@ class Lowerer:
             if in_name in remaining:
                 step_bindings[in_name] = {'source': 'field', 'field': in_name, 'value': {'source': 'input', 'name': 'x'}}
             elif in_name in arg.fields:
-                step_bindings[in_name] = self._generated_binding_dict(arg.fields[in_name])
+                step_bindings[in_name] = self._generated_binding_dict(arg.fields[in_name], 'x')
             else:
                 return None
         generated_dag = {
@@ -405,15 +401,99 @@ class Lowerer:
             generated_dag=generated_dag,
         )
 
-    def _generated_binding_dict(self, node):
+    def _generated_binding_dict(self, node, param_name):
         if isinstance(node, ir.Name):
-            return {'source': 'field', 'field': node.name, 'value': {'source': 'input', 'name': 'x'}}
+            if node.name == param_name:
+                return {'source': 'input', 'name': param_name}
+            return {'source': 'field', 'field': node.name, 'value': {'source': 'input', 'name': param_name}}
         if isinstance(node, ir.Field):
-            if isinstance(node.record, ir.Name) and node.record.name == 'x':
-                return {'source': 'field', 'field': node.name, 'value': {'source': 'input', 'name': 'x'}}
+            if isinstance(node.record, ir.Name) and node.record.name == param_name:
+                return {'source': 'field', 'field': node.name, 'value': {'source': 'input', 'name': param_name}}
         if isinstance(node, ir.Literal):
             return {'source': 'literal', 'value': node.value}
-        return {'source': 'field', 'field': getattr(node, 'name', 'x'), 'value': {'source': 'input', 'name': 'x'}}
+        return {'source': 'field', 'field': getattr(node, 'name', param_name), 'value': {'source': 'input', 'name': param_name}}
+
+    def _generated_dag_from_lambda(self, node):
+        direct = self._generated_direct_apply_dag_from_lambda(node)
+        if direct is not None:
+            return direct
+        from swl.ir.force import Forcer, ForceEnv
+        try:
+            forcer = Forcer(files=self.checker.files)
+            env = ForceEnv()
+            env.bind(node.param, forcer._input(node.param))
+            value = forcer.force_value(self.normalize(node.body), env)
+            dag = forcer._finalize_dag(value)
+            data = dag.to_dict()
+            if not data.get('outputs'):
+                return None
+            if list(data.get('outputs', {}).keys()) == ['result'] and data['outputs']['result'].get('source') == 'function':
+                return None
+            return data
+        except Exception:
+            return None
+
+    def _generated_direct_apply_dag_from_lambda(self, node):
+        if not isinstance(node, ir.Lambda):
+            return None
+        body = node.body.result if isinstance(node.body, ir.Block) and not node.body.bindings else None
+        if not isinstance(body, ir.Apply):
+            return None
+        function = body.function
+        if not isinstance(function, ir.Function):
+            return None
+        outputs = list(function.signature.outputs.keys())
+        if not outputs:
+            return None
+        bindings = self._generated_step_bindings_from_arg(node.param, body.arg)
+        if bindings is None:
+            return None
+        step = {
+            'id': function.name,
+            'type': function.kind,
+            'path': function.path,
+            'deps': [],
+            'inputs': {name: {'type': None, 'desc': None} for name in function.signature.inputs.keys()},
+            'bindings': bindings,
+            'outputs': {name: {'type': None, 'desc': None} for name in outputs},
+            'run': {},
+            'script': '',
+        }
+        if function.kind == 'workflow':
+            step['definition'] = {
+                'class': 'Workflow',
+                'dag': self._workflow_dag_dict(function),
+                'inputs': {name: {'type': None, 'desc': None} for name in function.signature.inputs.keys()},
+                'outputs': {name: {'type': None, 'desc': None} for name in function.signature.outputs.keys()},
+                'body': '',
+                'run': {},
+            }
+        return {
+            'inputs': {node.param: {'type': None, 'desc': None}},
+            'steps': [step],
+            'outputs': {name: {'source': 'step', 'step': function.name, 'output': name} for name in outputs},
+        }
+
+    def _workflow_dag_dict(self, function):
+        if function.generated_dag is not None:
+            return function.generated_dag
+        if function.body is None:
+            return None
+        from swl.ir.force import Forcer
+        try:
+            return Forcer(files=self.checker.files).force(function.body).to_dict()
+        except Exception:
+            return None
+
+    def _generated_step_bindings_from_arg(self, param_name, arg):
+        if isinstance(arg, ir.Name) and arg.name == param_name:
+            return {}
+        if not isinstance(arg, ir.Record):
+            return None
+        return {
+            name: self._generated_binding_dict(value, param_name)
+            for name, value in arg.fields.items()
+        }
 
     def _record_field_names(self, node):
         if isinstance(node, ir.Record):

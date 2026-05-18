@@ -157,6 +157,14 @@ _MAP_LAMBDA = '''merge = import "merge.sh"
     merge { bam: ys.bam, outbase: "merged" }
 '''
 
+_MAP_LAMBDA_TASK = '''sub = import "sub.swl"
+merge = import "merge.sh"
+\\xs ->
+    f = \\x -> sub x
+    ys = map f xs
+    merge { bam: ys.bam2, outbase: "merged" }
+'''
+
 _MAP_PARTIAL = '''align = import "align.sh"
 merge = import "merge.sh"
 \\xs ->
@@ -215,6 +223,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'merge.sh'): _MERGE,
             os.path.join(root, 'batch.swl'): _BATCH,
             os.path.join(root, 'map_lambda.swl'): _MAP_LAMBDA,
+            os.path.join(root, 'map_lambda_task.swl'): _MAP_LAMBDA_TASK,
             os.path.join(root, 'map_partial.swl'): _MAP_PARTIAL,
             os.path.join(root, 'map_workflow.swl'): _MAP_WORKFLOW,
             os.path.join(root, 'map_workflow_partial.swl'): _MAP_WORKFLOW_PARTIAL,
@@ -350,6 +359,16 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['steps'][0]['type'], 'workflow')
         self.assertEqual(data['steps'][1]['bindings']['bam']['kind'], 'array_field')
         self.assertIn('xs', data['inputs'])
+
+    def test_map_lambda_with_inner_task_forces_as_generated_mapped_workflow(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'map_lambda_task.swl'), files).to_dict()
+        self.assertEqual([step['id'] for step in data['steps']], ['map_lambda_1', 'merge'])
+        self.assertEqual(data['steps'][0]['type'], 'workflow')
+        definition = data['steps'][0]['definition']
+        self.assertEqual(definition['class'], 'Workflow')
+        self.assertEqual([step['id'] for step in definition['dag']['steps']], ['sub'])
+        self.assertEqual(data['steps'][1]['bindings']['bam']['kind'], 'array_field')
 
     def test_map_partial_task_application_produces_mapped_step(self):
         files, root = self._files()
