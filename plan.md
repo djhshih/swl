@@ -1,143 +1,47 @@
-# Implementation Plan
+# Batch workflow / CWL generalization plan
 
-Completed implementation notes have been moved to `done.md`.
-This file tracks only the remaining work and the next implementation steps.
+## Goal
+Make CWL emission work from a general canonical binding model instead of ad hoc shape checks, while keeping forcing as the single workflow definition builder.
 
-## Current state
+## Problem observed
+Nested/generated workflow helpers can currently reach CWL emission with raw internal binding shapes that the emitter does not understand, e.g. unresolved function outputs serialized as dict-like payloads. The emitter currently validates and emits by matching a small set of concrete Python classes, which is too narrow.
 
-Already implemented in `python/`:
-- workflow parser
-- task syntax parser/interpolation/bash analysis split
-- task semantic typing and duplicate checks
-- explicit semantic validation/normalization for `run` params (`cpu`, `memory`, `time`, `image`)
-- workflow semantic checking with imports, scope checks, and basic lazy/partial-application approximation
-- semantic IR lowering under `python/swl/ir/`
-- canonical lowering to `Lambda(Block(...))`
-- force-to-DAG compilation
-- DAG JSON codec
-- compiled task `run` metadata using normalized `type` + `value`
-- diagnostics and test integration
+## Direction
+1. Keep a single workflow definition builder in `python/swl/ir/force.py`.
+2. Improve force/materialization so supported workflow bodies lower to concrete DAG values.
+3. Make the CWL emitter more general by normalizing bindings to a canonical wireable subset before validation/emission.
 
-The remaining work is now mostly about semantic precision, cleanup, and executor-oriented polish.
+## Canonical wireable binding subset
+The emitter should normalize raw DAG bindings/outputs into one of:
+- `input(name)`
+- `step_output(step_id, output_name)`
+- `array_step_output(step_id, output_name)`
+- `input_field(input_name, field_name)`
+- `literal(value)`
 
-## Phase 1: tighten workflow semantics
+Anything else should be either:
+- normalized into one of those forms, or
+- rejected before/at emission with a precise error.
 
-### Goal
-Make workflow semantic checking less approximate around lazy application, closures, and record provenance.
+## Emitter refactor
+In `python/swl/transpile/cwl/emit.py`:
+- add `_canonical_binding(value)`
+- rewrite:
+  - `_workflow_output_error()`
+  - `_step_input_error()`
+  - `_binding_source()`
+  - `_infer_output_type()`
+  to use `_canonical_binding()`
+- keep workflow steps as first-class CWL `Workflow` runs in the `steps` block
+- support input-field workflow outputs generically
 
-### Remaining issues
-- closure semantics have improved, but computation values are still more signature-oriented than provenance-oriented
-- imported workflow application is still only partially semantic and does not yet model a full lazy value graph
-- some semantic conclusions are still inferred from field sets instead of preserved value flow
-- compatibility aliases (`chain_errors`, `issues`) still exist even though `errors` is now the primary semantic error surface
+## Force/materialization follow-up
+In `python/swl/ir/force.py`:
+- make `_materialize_workflow_dag()` guarantee that supported workflow outputs are concrete wireable values
+- reject unresolved function outputs earlier with a clearer error if materialization still fails
 
-### Planned files
-- modify `python/swl/semantic/wf/check.py`
-- modify `python/swl/semantic/wf/test_check.py`
-- optionally update `python/swl/eval_wf_semantic.py`
-
-### Next steps
-1. Make computation modeling more provenance-aware.
-   - preserve more value-flow information after saturated application, not just signatures
-   - continue improving imported workflow application so nested workflow calls retain semantic structure where possible
-
-2. Tighten partial-application semantics.
-   - keep distinguishing function/closure values from computation/record-like values
-   - continue rejecting field access on function values early
-   - reduce remaining approximation gaps for nested applications
-
-3. Simplify semantic error reporting further.
-   - `errors` is now the primary surface
-   - remove compatibility shims (`chain_errors`, `issues`) once tests/tools no longer rely on them
-
-## Phase 2: clean up semantic IR
-
-### Goal
-Keep semantic IR minimal, canonical, and closely aligned with what forcing expects.
-
-### Remaining issues
-- some older plan assumptions in code/comments still refer to superseded IR shapes
-- `force.py` is still structurally large and mixes multiple concerns
-
-### Planned files
-- modify `python/swl/ir/node.py`
-- modify `python/swl/ir/lower.py`
-- modify `python/swl/ir/force.py`
-- modify `python/swl/ir/test_lower.py`
-- modify `python/swl/ir/test_force.py`
-
-### Next steps
-1. Refactor `python/swl/ir/force.py`.
-   - separate forcing logic, task-definition shaping, normalization helpers, dependency extraction, and codec-related helpers more clearly
-   - keep behavior unchanged while improving readability and maintainability
-
-2. Tighten invariants around canonical IR.
-   - keep failing loudly on unsupported/non-normalized forms
-   - add direct regression tests where useful
-
-## Phase 3: improve executor-facing compiled metadata
-
-### Goal
-Make compiled DAG JSON more directly usable by an executor, with less need to reinterpret raw syntax.
-
-### Remaining issues
-- task `run` metadata is normalized, but `inputs` / `outputs` may still expose more syntax-oriented structure than necessary
-- compiled metadata shape should be reviewed for consistency across inputs, outputs, and run params
-- compiled task `run` fields should expose one executor-facing `value`, chosen by precedence task default < workflow-bound value < runtime user override
-- current executor-facing JSON behavior should be covered more explicitly by tests
-
-### Planned files
-- modify `python/swl/ir/force.py`
-- modify `python/swl/ir/dag.py`
-- modify `python/swl/ir/test_force.py`
-- modify `python/swl/ir/test_force_codec.py`
-
-### Next steps
-1. Fix forcing for partially applied root functions.
-   - when compiling workflows like `partial.swl`, external DAG inputs should exclude parameters already satisfied by bound literals/records in the workflow
-   - forcing should derive root required inputs from the remaining unsatisfied function signature, not the original imported task signature
-
-2. Preserve `run` value precedence clearly in compiled DAG JSON.
-   - compiled artifacts should expose one executor-facing `value`
-   - that value should represent the compile-time best choice: task default overridden by any workflow-bound value
-   - runtime user-provided values should remain the highest-precedence layer for the eventual executor
-
-3. Review whether task `inputs` and `outputs` should carry more normalized semantic metadata.
-   - keep enough information for execution
-   - avoid unnecessary raw-syntax leakage where possible
-
-4. Add regression tests for compiled metadata shape.
-   - especially `run[*].type`
-   - `run[*].value`
-   - and partial-workflow external input reduction
-
-5. Keep the compiled artifact self-contained.
-   - executors should not need to reread original `.swl` / `.sh` files
-
-## Phase 4: optional task/bash follow-up
-
-### Goal
-Decide whether to deepen task body validation beyond the current conservative syntax pass.
-
-### Remaining issues
-- bash-body analysis is intentionally conservative
-- two-stage validation (pre-runtime vs runtime after interpolation) is still mostly a design direction, not a completed subsystem
-
-### Planned files
-- modify `python/swl/syntax/task/bash.py`
-- optionally add new semantic/runtime validation helpers under `python/swl/semantic/task/`
-- modify `python/swl/syntax/task/test_bash.py`
-
-### Next steps
-1. Decide whether pre-runtime bash validation should become a real semantic/compiler phase.
-2. If yes, validate concrete task-call environments after interpolation becomes sufficiently known.
-3. Keep this work separate from the core workflow/IR cleanup unless it becomes blocking.
-
-## Recommended immediate next step
-
-Work on **Phase 1: tighten workflow semantics**.
-
-Why this is next:
-- parser, lowering, forcing, codec, and normalized run metadata are already in place
-- the biggest remaining source of incorrectness is semantic approximation around closures and partial application
-- improving that layer should make both diagnostics and later executor behavior more trustworthy
+## Why this is general
+This avoids adding a special emitter case per function structure. Instead:
+- forcing materializes workflow bodies
+- emitter only needs to understand a small canonical set of wireable bindings
+- nested workflows, generated helpers, and mapped workflows all go through the same emission model
