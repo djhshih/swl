@@ -12,3 +12,4 @@
 
 bcftools mpileup -Ou -f ${ref} ${bam} | 
 	bcftools call -mv -Ob -o ${outbase}.bcf
+bcftools index ${outbase}.bcf
