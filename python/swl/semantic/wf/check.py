@@ -83,10 +83,6 @@ class ArrayValue:
     def __init__(self, element=None):
         self.element = element
 
-    @property
-    def signature(self):
-        return self.function.signature
-
 
 class UnknownValue:
     pass
@@ -460,13 +456,17 @@ class Checker:
     def _apply_map(self, fun, arg, issues):
         target = fun.function if isinstance(fun, ClosureValue) else fun
         if not isinstance(target, FunctionValue):
-            issues.append('map requires a function of type rec -> rec')
+            issues.append('map requires a function value')
             return UnknownValue()
         if target.batch:
             issues.append('map on batch workflow is not supported')
             return UnknownValue()
-        if not isinstance(arg, ArrayValue) and not (isinstance(arg, OpenRecord) and getattr(target, 'batch', False)):
-            return ArrayValue(ClosedRecord({name: UnknownValue() for name in target.signature.outputs.keys()}))
+        if len(target.signature.outputs) == 0:
+            issues.append('map requires a function with record output')
+            return UnknownValue()
+        if not isinstance(arg, ArrayValue):
+            issues.append('map requires an array argument')
+            return UnknownValue()
         return ArrayValue(ClosedRecord({name: UnknownValue() for name in target.signature.outputs.keys()}))
 
     def _apply(self, fun, arg, demanded, issues):

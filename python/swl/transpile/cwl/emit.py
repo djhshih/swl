@@ -177,6 +177,8 @@ def _step_input_error(value):
         return None
     if kind == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return None
+    if kind == 'MappedValue':
+        return None
     if kind == 'Merge':
         return 'merge values are not supported'
     if kind == 'Record':
@@ -214,6 +216,8 @@ def _binding_source(workflow_id, value):
         return f'#main/{value.source.id}/{value.name}'
     if value.__class__.__name__ == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return f'#main/{value.source.id}/{value.name}'
+    if value.__class__.__name__ == 'MappedValue':
+        return _mapped_value_source(value)
     if value.__class__.__name__ == 'Literal':
         return value.value
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
@@ -224,8 +228,32 @@ def _infer_output_type(name, value, dag):
         return _cwl_type(value.source.task['outputs'][name]['type'])
     if value.__class__.__name__ == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return _cwl_type('[' + value.source.task['outputs'][name]['type'] + ']')
+    if value.__class__.__name__ == 'MappedValue':
+        return _mapped_value_type(value)
     if value.__class__.__name__ == 'Literal':
         return _cwl_type(type(value.value).__name__)
+    return 'string'
+
+
+def _mapped_value_source(value):
+    mapped = getattr(value, 'source', None)
+    element = getattr(value, 'element', None)
+    if mapped is not None and getattr(mapped, '__class__', type(None)).__name__ == 'Input':
+        if getattr(element, '__class__', type(None)).__name__ == 'Field':
+            inner = getattr(element, 'value', None)
+            if getattr(inner, '__class__', type(None)).__name__ == 'Record':
+                fields = getattr(inner, 'fields', {})
+                if len(fields) == 1:
+                    only = next(iter(fields.values()))
+                    if getattr(only, '__class__', type(None)).__name__ == 'Input':
+                        return f'#main/{element.name}'
+    raise ValueError(f'Unsupported mapped value for CWL transpilation: {value!r}')
+
+
+def _mapped_value_type(value):
+    mapped = getattr(value, 'source', None)
+    if mapped is not None and getattr(mapped, '__class__', type(None)).__name__ == 'Input':
+        return 'string'
     return 'string'
 
 

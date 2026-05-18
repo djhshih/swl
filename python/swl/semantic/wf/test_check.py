@@ -204,6 +204,51 @@ align {
 }
 '''
 
+_MERGE = '''# @ Merge
+# in
+#   bam [file]
+#   outbase str
+# out
+#   bam file = ${outbase}.bam
+echo merge
+'''
+
+_BATCH_OK = '''align = import "align.sh"
+merge = import "merge.sh"
+\\xs ->
+    calls = map align xs
+    merge { bam: calls.bam, outbase: "merged" }
+'''
+
+_BATCH_BAD_FIELD = '''align = import "align.sh"
+\\xs ->
+    calls = map align xs
+    { x: calls.nope }
+'''
+
+_BATCH_NON_ARRAY = '''align = import "align.sh"
+\\x ->
+    calls = map align x
+    { bam: calls.bam }
+'''
+
+_BATCH_INNER = '''align = import "align.sh"
+\\xs ->
+    calls = map align xs
+    { bam: calls.bam }
+'''
+
+_BATCH_ON_BATCH = '''inner = import "batch_inner.swl"
+\\xs ->
+    ys = map inner xs
+    { bam: ys.bam }
+'''
+
+_BATCH_NON_FUNCTION = '''\\xs ->
+    ys = map { foo: xs } xs
+    { y: ys.foo }
+'''
+
 
 class TestWorkflowCheck(ut.TestCase):
     def _write(self, root, name, content):
@@ -220,6 +265,7 @@ class TestWorkflowCheck(ut.TestCase):
         self._write(root, 'sort.sh', _SORT)
         self._write(root, 'call.sh', _CALL)
         self._write(root, 'bad_outbase.sh', _BAD_OUTBASE)
+        self._write(root, 'merge.sh', _MERGE)
         return root
 
     def test_load_pipe_workflow(self):
@@ -441,6 +487,39 @@ class TestWorkflowCheck(ut.TestCase):
         path = self._write(root, 'lambda_body_shadow.swl', _LAMBDA_BODY_SHADOW)
         result = Checker().load(path)
         self.assertNotIn('Duplicate binding in scope: x', result.errors)
+
+    def test_batch_map_workflow_infers_xs_input(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'batch_ok.swl', _BATCH_OK)
+        result = Checker().load(path)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(sorted(result.signature.inputs.keys()), ['xs'])
+        self.assertIn('bam', result.signature.outputs)
+
+    def test_batch_map_missing_field_reports_compile_time_error(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'batch_bad_field.swl', _BATCH_BAD_FIELD)
+        result = Checker().load(path)
+        self.assertTrue(any('Missing field on mapped result: nope' in err for err in result.errors))
+
+    def test_batch_map_requires_array_argument(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'batch_non_array.swl', _BATCH_NON_ARRAY)
+        result = Checker().load(path)
+        self.assertTrue(any('map requires an array argument' in err for err in result.errors))
+
+    def test_batch_map_on_batch_workflow_reports_error(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'batch_inner.swl', _BATCH_INNER)
+        path = self._write(root, 'batch_on_batch.swl', _BATCH_ON_BATCH)
+        result = Checker().load(path)
+        self.assertTrue(any('map on batch workflow is not supported' in err for err in result.errors))
+
+    def test_batch_map_requires_function_value(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'batch_non_function.swl', _BATCH_NON_FUNCTION)
+        result = Checker().load(path)
+        self.assertTrue(any('map requires a function value' in err for err in result.errors))
 
     def test_workflow_saturated_task_application_reports_not_a_function(self):
         root = self._make_fixture_dir()
