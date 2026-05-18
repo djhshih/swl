@@ -329,12 +329,12 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['steps'][1]['bindings']['bam']['kind'], 'array_field')
         self.assertEqual(data['steps'][1]['deps'], ['align'])
 
-    def test_map_lambda_forces_symbolically(self):
+    def test_map_lambda_forces_as_generated_mapped_workflow(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_lambda.swl'), files).to_dict()
-        self.assertEqual([step['id'] for step in data['steps']], ['merge'])
-        self.assertEqual(data['steps'][0]['bindings']['bam']['kind'], 'mapped_value')
-        self.assertEqual(data['steps'][0]['bindings']['bam']['value']['source'], 'mapped_value')
+        self.assertEqual([step['id'] for step in data['steps']], ['map_lambda_2', 'merge'])
+        self.assertEqual(data['steps'][0]['type'], 'workflow')
+        self.assertEqual(data['steps'][1]['bindings']['bam']['kind'], 'array_field')
         self.assertIn('xs', data['inputs'])
 
     def test_map_partial_task_application_produces_mapped_step(self):
@@ -347,9 +347,9 @@ class TestForce(ut.TestCase):
     def test_map_imported_workflow_produces_mapped_step(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_workflow.swl'), files).to_dict()
-        self.assertEqual([step['id'] for step in data['steps']], ['mk', 'merge'])
-        self.assertEqual(data['steps'][0]['type'], 'workflow')
-        self.assertEqual(data['steps'][0]['map']['source']['source'], 'input')
+        self.assertEqual([step['id'] for step in data['steps']], ['align', 'mk', 'merge'])
+        self.assertEqual(data['steps'][1]['type'], 'workflow')
+        self.assertEqual(data['steps'][1]['map']['source']['source'], 'input')
 
     def test_force_rejects_unsupported_ir_node(self):
         with self.assertRaisesRegex(ValueError, 'Unsupported IR node during forcing: object'):

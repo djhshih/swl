@@ -109,6 +109,25 @@ merge = import "merge.sh"
     calls = map align xs
     merge { bam: calls.bam, outbase: "merged" }
 ''',
+            os.path.join(root, 'mk_align.swl'): '''align = import "align.sh"
+
+\\x ->
+    align x
+''',
+            os.path.join(root, 'batch_workflow.swl'): '''mk = import "mk_align.swl"
+merge = import "merge.sh"
+
+\\xs ->
+    ys = map mk xs
+    merge { bam: ys.bam, outbase: "merged" }
+''',
+            os.path.join(root, 'batch_lambda.swl'): '''merge = import "merge.sh"
+
+\\xs ->
+    f = \\x -> { bam: x.bam }
+    ys = map f xs
+    merge { bam: ys.bam, outbase: "merged" }
+''',
         }, root
 
     def test_transpile_function_workflow(self):
@@ -207,6 +226,26 @@ merge = import "merge.sh"
         merge_tool = next(item for item in cwl['$graph'] if item.get('id') == '#merge')
         bam_input = next(item for item in merge_tool['inputs'] if item['id'] == '#merge/bam')
         self.assertEqual(bam_input['type'], {'type': 'array', 'items': 'File'})
+
+    def test_batch_mapped_workflow_emits_scattered_subworkflow(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'batch_workflow.swl'), files)
+        cwl = transpile_dag_dict(dag.to_dict())
+        workflow = cwl['$graph'][-1]
+        mk = next(step for step in workflow['steps'] if step['id'] == '#main/mk')
+        self.assertEqual(mk['scatterMethod'], 'dotproduct')
+        subwf = next(item for item in cwl['$graph'] if item.get('id') == '#mk')
+        self.assertEqual(subwf['class'], 'Workflow')
+
+    def test_batch_mapped_simple_lambda_emits_generated_scattered_subworkflow(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'batch_lambda.swl'), files)
+        cwl = transpile_dag_dict(dag.to_dict())
+        workflow = cwl['$graph'][-1]
+        generated = [item for item in cwl['$graph'] if item.get('class') == 'Workflow' and item.get('id', '').startswith('#map_lambda')]
+        self.assertTrue(generated)
+        step = next(step for step in workflow['steps'] if step['run'].startswith('#map_lambda'))
+        self.assertEqual(step['scatterMethod'], 'dotproduct')
 
     def test_rejects_output_expr_interpolation(self):
         files, root = self._files()

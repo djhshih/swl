@@ -18,7 +18,7 @@ def transpile_dag_dict(data, workflow_id='main'):
         tool_id = step.id
         if tool_id not in tool_ids:
             tool_ids[tool_id] = f'#{tool_id}'
-            tools.append(_tool_to_cwl(step, tool_ids[tool_id]))
+            tools.extend(_tool_to_cwl(step, tool_ids[tool_id]))
 
     workflow = {
         'id': '#main',
@@ -36,6 +36,17 @@ def transpile_dag_dict(data, workflow_id='main'):
 
 def _tool_to_cwl(step, tool_id):
     definition = step.task or {}
+    if definition.get('class') == 'Workflow':
+        packed = transpile_dag_dict(definition['dag'], workflow_id=tool_id[1:])
+        graph = []
+        for item in packed.get('$graph', []):
+            copied = dict(item)
+            if copied.get('id') == '#main':
+                copied['id'] = tool_id
+            elif copied.get('id', '').startswith('#main/'):
+                copied['id'] = copied['id'].replace('#main/', f'{tool_id}/', 1)
+            graph.append(copied)
+        return graph
     requirements = [
         {
             'class': 'InitialWorkDirRequirement',
@@ -53,14 +64,14 @@ def _tool_to_cwl(step, tool_id):
     docker = _docker_requirement(definition.get('run', {}))
     if docker is not None:
         requirements.append(docker)
-    return {
+    return [{
         'id': tool_id,
         'class': 'CommandLineTool',
         'baseCommand': ['bash', 'script.sh'],
         'inputs': [_tool_input_to_cwl(tool_id, name, spec) for name, spec in definition.get('inputs', {}).items()],
         'outputs': [_tool_output_to_cwl(tool_id, name, spec) for name, spec in definition.get('outputs', {}).items()],
         'requirements': requirements,
-    }
+    }]
 
 
 def _workflow_input_to_cwl(workflow_id, name, spec):
@@ -194,6 +205,8 @@ def _workflow_output_error(value):
     kind = value.__class__.__name__
     if kind == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
         return None
+    if kind == 'Field' and value.source.__class__.__name__ == 'Input':
+        return None
     if kind == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return None
     if kind == 'Literal':
@@ -214,6 +227,8 @@ def _binding_source(workflow_id, value):
         return f'#main/{value.name}'
     if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
         return f'#main/{value.source.id}/{value.name}'
+    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'Input':
+        return f'#main/{value.source.name}/{value.name}'
     if value.__class__.__name__ == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return f'#main/{value.source.id}/{value.name}'
     if value.__class__.__name__ == 'MappedValue':
@@ -226,6 +241,8 @@ def _binding_source(workflow_id, value):
 def _infer_output_type(name, value, dag):
     if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
         return _cwl_type(value.source.task['outputs'][name]['type'])
+    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'Input':
+        return 'string'
     if value.__class__.__name__ == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return _cwl_type('[' + value.source.task['outputs'][name]['type'] + ']')
     if value.__class__.__name__ == 'MappedValue':

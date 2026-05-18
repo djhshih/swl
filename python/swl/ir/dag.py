@@ -132,6 +132,7 @@ class DAG:
                         for name, spec in step.task.get('run', {}).items()
                     },
                     'script': step.task['body'],
+                    **({'definition': step.task} if step.task.get('class') == 'Workflow' else {}),
                 }
                 for step in self.steps
             ],
@@ -162,13 +163,13 @@ class DAG:
                     for name, spec in item.get('run', {}).items()
                     if _run_value_from_dict(name, spec, step_run, inputs, step_by_id) is not None
                 },
-                task={
+                task=item.get('definition', {
                     'doc': None,
                     'body': item.get('script', ''),
                     'inputs': step_inputs,
                     'outputs': step_outputs,
                     'run': step_run,
-                },
+                }),
                 deps=list(item.get('deps', [])),
                 type=item.get('type', 'task'),
                 **({'source': _binding_from_dict(item['map']['source'], inputs, step_by_id), 'map': item.get('map')} if item.get('map') is not None else {}),
