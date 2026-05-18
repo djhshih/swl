@@ -273,6 +273,8 @@ def _binding_to_binding_dict(value):
         return {'value': value.value}
     if isinstance(value, Field) and isinstance(value.source, (StepCall, MappedStep)):
         return {'source': value.source.id, 'output': value.name}
+    if isinstance(value, Field) and isinstance(value.source, Input):
+        return {'kind': 'field', 'source': {'source': 'input', 'name': value.source.name}, 'field': value.name}
     if isinstance(value, ArrayField) and isinstance(value.source, (StepCall, MappedStep)):
         return {'source': value.source.id, 'output': value.name, 'kind': 'array_field'}
     if isinstance(value, MappedValue):
@@ -287,6 +289,8 @@ def _binding_from_binding_dict(name, data, inputs, steps):
         return Literal(data.get('value'))
     if data.get('kind') == 'array_field':
         return ArrayField(steps[data['source']], data['output'])
+    if data.get('kind') == 'field':
+        return Field(_binding_from_dict(data['source'], inputs, steps), data['field'])
     source = data.get('source')
     if source is None:
         if 'output' in data or any(key not in {'source'} for key in data.keys()):

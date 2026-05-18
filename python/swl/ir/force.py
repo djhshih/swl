@@ -430,14 +430,25 @@ class Forcer:
         self.task_defs[path] = definition
         return definition
 
+    def _materialize_workflow_dag(self, function):
+        forcer = Forcer(files=self.lowerer.checker.files)
+        signature = function.signature
+        if signature is None:
+            return forcer.force(function.body)
+        arg = Record({name: forcer._input(name, spec) for name, spec in signature.inputs.items()})
+        if isinstance(function.body, ir.Lambda):
+            value = forcer._apply(ForcedFunction(function.body, None, signature), arg)
+        else:
+            value = forcer.force_value(function.body, ForceEnv())
+            if isinstance(value, ForcedFunction):
+                value = forcer._apply(value, arg)
+        return forcer._finalize_dag(value)
+
     def _workflow_definition(self, function):
         key = ('workflow', function.path)
         if key in self.task_defs:
             return self.task_defs[key]
-        body_dag = function.generated_dag if getattr(function, 'generated_dag', None) is not None else self.task_defs.get(('generated-dag', function.path))
-        if body_dag is None:
-            body = self.force(function.body)
-            body_dag = body.to_dict()
+        body_dag = self._materialize_workflow_dag(function).to_dict()
         definition = {
             'class': 'Workflow',
             'dag': body_dag,
@@ -706,6 +717,13 @@ def _normalize_output_value(value):
         return result
     if isinstance(value, Record):
         return Record({name: _normalize_output_value(item) for name, item in value.fields.items()})
+    if isinstance(value, Field):
+        source = _normalize_output_value(value.source)
+        if isinstance(source, Record) and len(source.fields) == 1:
+            only = next(iter(source.fields.values()))
+            if isinstance(only, Input):
+                return Field(only, value.name)
+        return Field(source, value.name)
     return value
 
 
