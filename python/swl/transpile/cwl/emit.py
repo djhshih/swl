@@ -178,77 +178,94 @@ def _validate_supported(dag):
                 raise ValueError(f'Unsupported task output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
 
 
-def _step_input_error(value):
+def _canonical_binding(value):
     kind = value.__class__.__name__
     if kind == 'Input':
-        return None
+        return ('input', value.name)
     if kind == 'Literal':
-        return None
+        return ('literal', value.value)
     if kind == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
-        return None
+        return ('step_output', value.source, value.name)
     if kind == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
-        return None
+        return ('array_step_output', value.source, value.name)
+    if kind == 'Field' and value.source.__class__.__name__ == 'Input':
+        return ('input_field', value.source.name, value.name)
     if kind == 'MappedValue':
+        return ('mapped_value', value)
+    raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
+
+
+def _step_input_error(value):
+    try:
+        _canonical_binding(value)
         return None
-    if kind == 'Merge':
-        return 'merge values are not supported'
-    if kind == 'Record':
-        return 'record values are not supported'
-    if kind == 'Field':
-        return f'field source {value.source.__class__.__name__} is not supported'
-    if kind == 'ForcedFunction':
-        return 'function values are not supported'
-    return f'{kind} values are not supported'
+    except ValueError as exc:
+        text = str(exc)
+        kind = value.__class__.__name__
+        if kind == 'Merge':
+            return 'merge values are not supported'
+        if kind == 'Record':
+            return 'record values are not supported'
+        if kind == 'ForcedFunction':
+            return 'function values are not supported'
+        if kind == 'Field':
+            return f'field source {value.source.__class__.__name__} is not supported'
+        return text.removeprefix('Unsupported binding for CWL transpilation: ').strip()
 
 
 def _workflow_output_error(value):
-    kind = value.__class__.__name__
-    if kind == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
+    try:
+        kind = _canonical_binding(value)[0]
+        if kind == 'literal':
+            return 'literal outputs are not supported'
         return None
-    if kind == 'Field' and value.source.__class__.__name__ == 'Input':
-        return None
-    if kind == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
-        return None
-    if kind == 'Literal':
-        return 'literal outputs are not supported'
-    if kind == 'Merge':
-        return 'merge outputs are not supported'
-    if kind == 'Record':
-        return 'record outputs are not supported'
-    if kind == 'ForcedFunction':
-        return 'function outputs are not supported'
-    if kind == 'Field':
-        return f'field source {value.source.__class__.__name__} is not supported'
-    return f'{kind} outputs are not supported'
+    except ValueError:
+        kind = value.__class__.__name__
+        if kind == 'Merge':
+            return 'merge outputs are not supported'
+        if kind == 'Record':
+            return 'record outputs are not supported'
+        if kind == 'ForcedFunction':
+            return 'function outputs are not supported'
+        if kind == 'Field':
+            return f'field source {value.source.__class__.__name__} is not supported'
+        return f'{kind} outputs are not supported'
 
 
 def _binding_source(workflow_id, value):
-    if hasattr(value, 'name') and value.__class__.__name__ == 'Input':
-        return f'#main/{value.name}'
-    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
-        return f'#main/{value.source.id}/{value.name}'
-    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'Input':
-        return f'#main/{value.source.name}/{value.name}'
-    if value.__class__.__name__ == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
-        return f'#main/{value.source.id}/{value.name}'
-    if value.__class__.__name__ == 'MappedValue':
-        return _mapped_value_source(value)
-    if value.__class__.__name__ == 'Literal':
-        return value.value
+    kind, *rest = _canonical_binding(value)
+    if kind == 'input':
+        return f'#main/{rest[0]}'
+    if kind == 'step_output':
+        step, output = rest
+        return f'#main/{step.id}/{output}'
+    if kind == 'array_step_output':
+        step, output = rest
+        return f'#main/{step.id}/{output}'
+    if kind == 'input_field':
+        input_name, field_name = rest
+        return f'#main/{input_name}/{field_name}'
+    if kind == 'mapped_value':
+        return _mapped_value_source(rest[0])
+    if kind == 'literal':
+        return rest[0]
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
 
 
 def _infer_output_type(name, value, dag):
-    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
-        return _cwl_type(value.source.task['outputs'][name]['type'])
-    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'Input':
+    kind, *rest = _canonical_binding(value)
+    if kind == 'step_output':
+        step, output = rest
+        return _cwl_type(step.task['outputs'][output]['type'])
+    if kind == 'array_step_output':
+        step, output = rest
+        return _cwl_type('[' + step.task['outputs'][output]['type'] + ']')
+    if kind == 'input_field':
         return 'string'
-    if value.__class__.__name__ == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
-        return _cwl_type('[' + value.source.task['outputs'][name]['type'] + ']')
-    if value.__class__.__name__ == 'MappedValue':
-        return _mapped_value_type(value)
-    if value.__class__.__name__ == 'Literal':
-        return _cwl_type(type(value.value).__name__)
+    if kind == 'mapped_value':
+        return _mapped_value_type(rest[0])
+    if kind == 'literal':
+        return _cwl_type(type(rest[0]).__name__)
     return 'string'
 
 
