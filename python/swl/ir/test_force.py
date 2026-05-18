@@ -385,14 +385,14 @@ class TestForce(ut.TestCase):
     def test_map_imported_workflow_produces_mapped_step(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_workflow.swl'), files).to_dict()
-        self.assertEqual([step['id'] for step in data['steps']], ['align', 'mk', 'merge'])
+        self.assertEqual([step['id'] for step in data['steps']], ['mk', 'merge'])
         self.assertEqual(data['steps'][1]['type'], 'workflow')
         self.assertEqual(data['steps'][1]['map']['source']['source'], 'input')
 
     def test_map_imported_workflow_with_partial_task_inside_produces_mapped_step(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_workflow_partial.swl'), files).to_dict()
-        self.assertEqual([step['id'] for step in data['steps']], ['align', 'mkp', 'merge'])
+        self.assertEqual([step['id'] for step in data['steps']], ['mkp', 'merge'])
         self.assertEqual(data['steps'][1]['type'], 'workflow')
         self.assertEqual(data['steps'][1]['map']['source']['source'], 'input')
 
