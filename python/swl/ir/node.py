@@ -98,6 +98,7 @@ class Function(Node):
     signature: TaskSignature
     path: Optional[str] = None
     body: Optional[Node] = None
+    generated_dag: Optional[dict] = None
 
     def __repr__(self):
         return (
@@ -107,6 +108,7 @@ class Function(Node):
             f'  signature={self.signature!r},\n'
             f'  path={self.path!r},\n'
             f'  body={self.body!r},\n'
+            f'  generated_dag={self.generated_dag!r},\n'
             f')'
         )
 

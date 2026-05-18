@@ -332,7 +332,7 @@ class TestForce(ut.TestCase):
     def test_map_lambda_forces_as_generated_mapped_workflow(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_lambda.swl'), files).to_dict()
-        self.assertEqual([step['id'] for step in data['steps']], ['map_lambda_2', 'merge'])
+        self.assertEqual([step['id'] for step in data['steps']], ['map_lambda_1', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
         self.assertEqual(data['steps'][1]['bindings']['bam']['kind'], 'array_field')
         self.assertIn('xs', data['inputs'])

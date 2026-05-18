@@ -341,10 +341,6 @@ class Forcer:
             raise ValueError(f'Cannot map non-function value during forcing: {fn!r}')
         if self._is_batch_function(fn):
             raise ValueError('map on batch workflow is not supported during forcing')
-        helper = self._mapped_helper_function(fn)
-        if helper is not None:
-            wrapped = ForcedFunction(helper, None, helper.signature)
-            return self._emit_mapped_step(wrapped, source)
         if isinstance(fn.function, ir.Function) and fn.function.kind in ('task', 'workflow'):
             return self._emit_mapped_step(fn, source)
         element_arg = self._mapped_element_input(source)
@@ -352,39 +348,6 @@ class Forcer:
         if isinstance(element_value, Field):
             element_value = Record({element_value.name: element_value})
         return MappedValue(source, element_value)
-
-    def _mapped_helper_function(self, fn):
-        if not isinstance(fn.function, ir.Lambda):
-            return None
-        body = fn.function.body
-        if not isinstance(body, ir.Block):
-            return None
-        local = ForceEnv()
-        local.bind(fn.function.param, Record({fn.function.param: Input(fn.function.param)}))
-        value = self.force_value(body.result, local)
-        fields = self._collect_output_fields(value)
-        if fields is None:
-            return None
-        outputs = {}
-        for name in fields.keys():
-            outputs[name] = {'type': 'file'}
-        helper_id = self._task_id('map_lambda')
-        from swl.semantic.task.type import Param, TaskSignature
-        helper = ir.Function(
-            helper_id,
-            'workflow',
-            TaskSignature({'x': Param('x', None)}, {name: Param(name, None) for name in fields.keys()}, {}),
-            f'<generated:{helper_id}>',
-            ir.Lambda('x', ir.Block([], fn.function.body.result)),
-        )
-        self.task_defs[('generated-dag', helper.path)] = {
-            'inputs': {
-                'x': {'type': None, 'desc': None},
-            },
-            'steps': [],
-            'outputs': {name: {'source': 'field', 'field': name, 'value': {'source': 'input', 'name': 'x'}} for name in fields.keys()},
-        }
-        return helper
 
     def _emit_mapped_step(self, fn, source):
         target = fn.function
@@ -475,7 +438,7 @@ class Forcer:
         key = ('workflow', function.path)
         if key in self.task_defs:
             return self.task_defs[key]
-        body_dag = self.task_defs.get(('generated-dag', function.path))
+        body_dag = function.generated_dag if getattr(function, 'generated_dag', None) is not None else self.task_defs.get(('generated-dag', function.path))
         if body_dag is None:
             body = self.force(function.body)
             body_dag = body.to_dict()

@@ -12,6 +12,7 @@ class Lowerer:
         self.workflow_cache = {}
         self.function_cache = {}
         self.next_var_id = 1
+        self.next_generated_id = 1
 
     def lower_file(self, path: str):
         result = self.checker.load(path)
@@ -41,10 +42,10 @@ class Lowerer:
             if signature is not None:
                 result = ir.Lambda(result.param, result.body, signature)
             if not bindings:
-                return self.normalize(result)
+                return self.normalize(self.normalize(result))
         if not bindings:
-            return self.normalize(result)
-        return self.normalize(ir.Block(bindings, result))
+            return self.normalize(self.normalize(result))
+        return self.normalize(self.normalize(ir.Block(bindings, result)))
 
     def lower_binding(self, expr, env, imports):
         if expr.type == wf_node.NodeType.bind and expr.id.name in imports:
@@ -174,8 +175,11 @@ class Lowerer:
             return ir.Lambda(node.param, body, node.signature)
 
         if isinstance(node, ir.Block):
-            bindings = [ir.Variable(bind.id, bind.name, self.normalize(bind.value)) for bind in node.bindings]
-            result = self.normalize(node.result)
+            raw_bindings = [ir.Variable(bind.id, bind.name, self.normalize(bind.value)) for bind in node.bindings]
+            binding_map = {bind.id: bind.value for bind in raw_bindings}
+            bindings = [ir.Variable(bind.id, bind.name, self._normalize_with_bindings(bind.value, binding_map)) for bind in raw_bindings]
+            binding_map = {bind.id: bind.value for bind in bindings}
+            result = self._normalize_with_bindings(node.result, binding_map)
             return ir.Block(bindings, result)
 
         if isinstance(node, ir.Variable):
@@ -185,7 +189,10 @@ class Lowerer:
             return ir.Apply(self.normalize(node.function), self.normalize(node.arg), node.signature)
 
         if isinstance(node, ir.Map):
-            return ir.Map(self.normalize(node.function), self.normalize(node.arg))
+            fn = self.normalize(node.function)
+            arg = self.normalize(node.arg)
+            fn = self._materialize_mappable_callable(fn)
+            return ir.Map(fn, arg)
 
         if isinstance(node, ir.Ref):
             return node
@@ -273,6 +280,98 @@ class Lowerer:
             sig = signature if signature is not None else node.signature
             return ir.Lambda(node.param, body, sig)
         return node
+
+    def _normalize_with_bindings(self, node, binding_map):
+        if isinstance(node, ir.Map):
+            fn = self._normalize_with_bindings(node.function, binding_map)
+            if isinstance(fn, ir.Ref) and fn.id in binding_map:
+                fn = binding_map[fn.id]
+            fn = self._materialize_mappable_callable(fn)
+            arg = self._normalize_with_bindings(node.arg, binding_map)
+            return ir.Map(fn, arg)
+        if isinstance(node, ir.Apply):
+            return ir.Apply(self._normalize_with_bindings(node.function, binding_map), self._normalize_with_bindings(node.arg, binding_map), node.signature)
+        if isinstance(node, ir.Record):
+            return ir.Record({name: self._normalize_with_bindings(value, binding_map) for name, value in node.fields.items()})
+        if isinstance(node, ir.Field):
+            return ir.Field(self._normalize_with_bindings(node.record, binding_map), node.name)
+        if isinstance(node, ir.ArrayField):
+            return ir.ArrayField(self._normalize_with_bindings(node.record_array, binding_map), node.name)
+        if isinstance(node, ir.Update):
+            return ir.Update(self._normalize_with_bindings(node.left, binding_map), self._normalize_with_bindings(node.right, binding_map))
+        if isinstance(node, ir.Block):
+            inner = {bind.id: bind.value for bind in node.bindings}
+            merged = dict(binding_map)
+            merged.update(inner)
+            return ir.Block(node.bindings, self._normalize_with_bindings(node.result, merged))
+        return node
+
+    def _materialize_mappable_callable(self, node):
+        if isinstance(node, ir.Function):
+            return node
+        if isinstance(node, ir.Apply):
+            function = self._materialize_mappable_callable(node.function)
+            if isinstance(function, ir.Function):
+                helper = self._generated_callable_from_apply(function, node.arg)
+                if helper is not None:
+                    return helper
+            return ir.Apply(function, node.arg, node.signature)
+        if isinstance(node, ir.Lambda):
+            helper = self._generated_callable_from_lambda(node)
+            if helper is not None:
+                return helper
+        return node
+
+    def _generated_callable_from_lambda(self, node):
+        outputs = self._record_field_names(node.body.result) if isinstance(node, ir.Lambda) else None
+        if outputs is None:
+            return None
+        from swl.semantic.task.type import Param, TaskSignature
+        name = f'map_lambda_{self.next_generated_id}'
+        self.next_generated_id += 1
+        generated_dag = {
+            'inputs': {'x': {'type': None, 'desc': None}},
+            'steps': [],
+            'outputs': {
+                out: {'source': 'field', 'field': out, 'value': {'source': 'input', 'name': 'x'}}
+                for out in outputs
+            },
+        }
+        return ir.Function(
+            name,
+            'workflow',
+            TaskSignature({'x': Param('x', None)}, {out: Param(out, None) for out in outputs}, {}),
+            f'<generated:{name}>',
+            body=ir.Lambda('x', ir.Block([], node.body.result)),
+            generated_dag=generated_dag,
+        )
+
+    def _generated_callable_from_apply(self, function, arg):
+        if not isinstance(function, ir.Function):
+            return None
+        remaining = list(function.signature.inputs.keys())
+        if len(remaining) != 1:
+            return None
+        from swl.semantic.task.type import Param, TaskSignature
+        name = f'map_partial_{self.next_generated_id}'
+        self.next_generated_id += 1
+        param = remaining[0]
+        if isinstance(arg, ir.Record):
+            applied_arg = ir.Update(ir.Record({param: ir.Name('x')}), arg)
+        else:
+            applied_arg = ir.Name('x')
+        return ir.Function(
+            name,
+            'workflow',
+            TaskSignature({'x': Param('x', None)}, dict(function.signature.outputs), {}),
+            f'<generated:{name}>',
+            body=ir.Lambda('x', ir.Block([], ir.Apply(function, applied_arg))),
+        )
+
+    def _record_field_names(self, node):
+        if isinstance(node, ir.Record):
+            return list(node.fields.keys())
+        return None
 
     def _alloc_var_id(self):
         current = self.next_var_id
