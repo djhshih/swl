@@ -2,6 +2,7 @@ Python:
 - Common Subexpression Elimination in lower.py
 - interpolation in bash command of task
 - expression evaluation (e.g. memory / cpu) in the task
+- eta reduction (e.g. \x -> f x -> f)
 
 Rust:
 - worflow lexer
