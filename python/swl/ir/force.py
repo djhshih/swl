@@ -1,7 +1,7 @@
 from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
-from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, TaskCall
+from swl.ir.dag import DAG, ArrayField, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import signature_from_task
 from swl.syntax.task import interpolation as interp
@@ -30,8 +30,8 @@ class ForceEnv:
 class Forcer:
     def __init__(self, files=None):
         self.inputs = {}
-        self.tasks = []
-        self.task_cache = {}
+        self.steps = []
+        self.step_cache = {}
         self.task_defs = {}
         self.call_counter = 0
         self.task_name_counts = {}
@@ -50,7 +50,7 @@ class Forcer:
         self._refine_input_metadata()
         outputs = self._final_outputs(value)
         self._prune_unused_inputs(value, outputs)
-        return DAG(dict(self.inputs), list(self.tasks), outputs)
+        return DAG(dict(self.inputs), list(self.steps), outputs)
 
     def _assert_canonical(self, node):
         if isinstance(node, ir.Lambda):
@@ -74,6 +74,13 @@ class Forcer:
             return
         if isinstance(node, ir.Field):
             self._assert_canonical(node.record)
+            return
+        if isinstance(node, ir.ArrayField):
+            self._assert_canonical(node.record_array)
+            return
+        if isinstance(node, ir.Map):
+            self._assert_canonical(node.function)
+            self._assert_canonical(node.arg)
             return
         if isinstance(node, ir.Update):
             self._assert_canonical(node.left)
@@ -103,7 +110,19 @@ class Forcer:
             projected = self._project_field(source, node.name)
             if projected is not _SENTINEL:
                 return projected
+            if isinstance(source, MappedStep):
+                if node.name not in source.outputs:
+                    raise ValueError(f'Missing field on mapped result: {node.name}')
+                return ArrayField(source, node.name)
             return Field(source, node.name)
+
+        if isinstance(node, ir.ArrayField):
+            source = self.force_value(node.record_array, env)
+            if isinstance(source, MappedStep):
+                if node.name not in source.outputs:
+                    raise ValueError(f'Missing field on mapped result: {node.name}')
+                return ArrayField(source, node.name)
+            return ArrayField(source, node.name)
 
         if isinstance(node, ir.Update):
             return self._merge_values(self.force_value(node.left, env), self.force_value(node.right, env))
@@ -116,6 +135,11 @@ class Forcer:
 
         if isinstance(node, ir.Apply):
             return self._force_apply(node, env)
+
+        if isinstance(node, ir.Map):
+            fn = self.force_value(node.function, env)
+            arg = self.force_value(node.arg, env)
+            return self._force_map(fn, arg)
 
         if isinstance(node, ir.Block):
             local = ForceEnv(env)
@@ -216,9 +240,11 @@ class Forcer:
             return set(value.fields.keys())
         if isinstance(value, Merge):
             return self._available_inputs(value.left).union(self._available_inputs(value.right))
-        if isinstance(value, TaskCall):
+        if isinstance(value, StepCall):
             return set(value.outputs)
         if isinstance(value, Field):
+            return set()
+        if isinstance(value, ArrayField):
             return set()
         if isinstance(value, Literal):
             return set()
@@ -266,25 +292,55 @@ class Forcer:
 
     def _emit_task_call(self, function, bound):
         inputs = self._normalize_task_inputs(function, bound)
-        key = self._task_call_key(function, inputs)
-        if key in self.task_cache:
-            return self.task_cache[key]
+        key = self._step_call_key(function, inputs)
+        if key in self.step_cache:
+            return self.step_cache[key]
         self.call_counter += 1
         outputs = list(function.signature.outputs.keys())
         call_id = self._task_id(function.name)
-        call = TaskCall(
+        call = StepCall(
             id=call_id,
             path=function.path,
             bindings=inputs,
             outputs=outputs,
             run=self._normalize_task_run(function, bound),
             task=self._task_definition(function.path),
-            deps=sorted(self._task_dependencies(inputs)),
+            deps=sorted(self._step_dependencies(inputs)),
         )
-        self.tasks.append(call)
+        self.steps.append(call)
         result = Record({name: Field(call, name) for name in outputs})
-        self.task_cache[key] = result
+        self.step_cache[key] = result
         return result
+
+    def _force_map(self, fn, arg):
+        if not isinstance(fn, ForcedFunction):
+            raise ValueError(f'Cannot map non-function value during forcing: {fn!r}')
+        target = fn.function
+        source = arg
+        if isinstance(arg, Record) and 'xs' in arg.fields:
+            source = arg.fields['xs']
+        if isinstance(target, ir.Function) and getattr(target.signature, 'inputs', None) is not None:
+            outputs = list(target.signature.outputs.keys())
+            step_id = self._task_id(target.name)
+            step = MappedStep(
+                id=step_id,
+                path=target.path,
+                source=source,
+                outputs=outputs,
+                task=self._task_definition(target.path) if target.kind == 'task' else {
+                    'doc': None,
+                    'body': '',
+                    'inputs': {name: {'type': param.type.value if param.type is not None else None, 'desc': param.desc} for name, param in target.signature.inputs.items()},
+                    'outputs': {name: {'type': param.type.value if param.type is not None else None, 'desc': param.desc} for name, param in target.signature.outputs.items()},
+                    'run': {},
+                },
+                deps=sorted(self._step_dependencies({'source': source})),
+                type=target.kind,
+                map={'source': _binding_to_public_dict(source)},
+            )
+            self.steps.append(step)
+            return step
+        raise ValueError('map currently requires an imported task or workflow during forcing')
 
     def _task_id(self, name):
         count = self.task_name_counts.get(name, 0) + 1
@@ -299,7 +355,7 @@ class Forcer:
             return self._force_lambda(body, bound)
         return self.force_value(body, ForceEnv())
 
-    def _task_call_key(self, function, inputs):
+    def _step_call_key(self, function, inputs):
         return (
             function.path,
             tuple(sorted((name, _value_key(value)) for name, value in inputs.items())),
@@ -372,8 +428,8 @@ class Forcer:
         refined = {}
         for name, current in self.inputs.items():
             candidates = []
-            for task in self.tasks:
-                spec = task.task.get('inputs', {}).get(name)
+            for step in self.steps:
+                spec = step.task.get('inputs', {}).get(name)
                 if spec is not None:
                     candidates.append(spec)
             best = current
@@ -412,9 +468,14 @@ class Forcer:
             signature = self._forced_signature(root_value)
             if signature is not None:
                 used.update(signature.inputs.keys())
-        for task in self.tasks:
-            for value in task.bindings.values():
+        for step in self.steps:
+            for value in step.bindings.values():
                 for item in self._walk_values(value):
+                    if isinstance(item, Input):
+                        used.add(item.name)
+            mapped_source = getattr(step, 'source', None)
+            if mapped_source is not None:
+                for item in self._walk_values(mapped_source):
                     if isinstance(item, Input):
                         used.add(item.name)
         for value in outputs.values():
@@ -425,7 +486,7 @@ class Forcer:
 
     # dependency and reachability helpers ----------------------------------
 
-    def _task_dependencies(self, inputs):
+    def _step_dependencies(self, inputs):
         deps = set()
         for value in inputs.values():
             deps.update(self._value_dependencies(value))
@@ -434,6 +495,8 @@ class Forcer:
     def _walk_values(self, value):
         yield value
         if isinstance(value, Field):
+            yield from self._walk_values(value.source)
+        elif isinstance(value, ArrayField):
             yield from self._walk_values(value.source)
         elif isinstance(value, Merge):
             yield from self._walk_values(value.left)
@@ -445,7 +508,9 @@ class Forcer:
     def _value_dependencies(self, value):
         deps = set()
         for item in self._walk_values(value):
-            if isinstance(item, Field) and isinstance(item.source, TaskCall):
+            if isinstance(item, Field) and isinstance(item.source, (StepCall, MappedStep)):
+                deps.add(item.source.id)
+            if isinstance(item, ArrayField) and isinstance(item.source, (StepCall, MappedStep)):
                 deps.add(item.source.id)
         return deps
 
@@ -576,12 +641,14 @@ def _value_key(value):
         return ('lit', value.value)
     if isinstance(value, Field):
         return ('field', _value_key(value.source), value.name)
+    if isinstance(value, ArrayField):
+        return ('array_field', _value_key(value.source), value.name)
     if isinstance(value, Merge):
         return _merge_key(value)
     if isinstance(value, Record):
         return ('record', _record_fields_key(value.fields))
-    if isinstance(value, TaskCall):
-        return ('task', value.path, value.id)
+    if isinstance(value, (StepCall, MappedStep)):
+        return ('step', value.path, value.id)
     return ('other', type(value).__name__, repr(value))
 
 
@@ -595,6 +662,16 @@ def _interp_to_dict(value):
     if isinstance(value, interp.Expr):
         return {'kind': 'expr', 'text': value.text}
     return None
+
+
+def _binding_to_public_dict(value):
+    if isinstance(value, Input):
+        return {'source': 'input', 'name': value.name}
+    if isinstance(value, Field) and isinstance(value.source, (StepCall, MappedStep)):
+        return {'source': 'step', 'step': value.source.id, 'output': value.name}
+    if isinstance(value, ArrayField) and isinstance(value.source, (StepCall, MappedStep)):
+        return {'source': 'array_field', 'step': value.source.id, 'output': value.name}
+    return {'source': 'value'}
 
 
 def force_file(path: str, files=None):

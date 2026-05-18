@@ -32,7 +32,7 @@ class ClosedRecord:
 
 
 class FunctionValue:
-    def __init__(self, name: str, signature: TaskSignature, kind: str, first_input: str = None, param=None, body=None, env=None, imports=None, imported_check=None):
+    def __init__(self, name: str, signature: TaskSignature, kind: str, first_input: str = None, param=None, body=None, env=None, imports=None, imported_check=None, batch=False, mapped_from=None):
         self.name = name
         self.signature = signature
         self.kind = kind
@@ -42,6 +42,8 @@ class FunctionValue:
         self.env = dict(env or {})
         self.imports = dict(imports or {})
         self.imported_check = imported_check
+        self.batch = batch
+        self.mapped_from = mapped_from
 
     def _first_input_name(self):
         for name in self.signature.inputs.keys():
@@ -71,6 +73,15 @@ class ComputationValue:
         self.output_value = output_value or ClosedRecord({
             name: UnknownValue() for name in function.signature.outputs.keys()
         })
+
+    @property
+    def signature(self):
+        return self.function.signature
+
+
+class ArrayValue:
+    def __init__(self, element=None):
+        self.element = element
 
     @property
     def signature(self):
@@ -234,7 +245,10 @@ class Checker:
                     if self._match_import(expr.value) is not None:
                         continue
                     env[expr.id.name] = self._eval_expr(expr.value, imports, env, demanded, issues)
-            env[final.param.name] = OpenRecord()
+            if final.param.name == 'xs':
+                env[final.param.name] = ArrayValue(OpenRecord())
+            else:
+                env[final.param.name] = OpenRecord()
             self._eval_function_body(final, imports, env, demanded, issues)
             return demanded, issues
 
@@ -261,12 +275,18 @@ class Checker:
                     if self._match_import(expr.value) is not None:
                         continue
                     env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
-            env[final.param.name] = OpenRecord(inferred_inputs)
+            if final.param.name == 'xs':
+                env[final.param.name] = ArrayValue(OpenRecord(inferred_inputs))
+            else:
+                env[final.param.name] = OpenRecord(inferred_inputs)
             result = self._eval_function_body(final, imports, env, set(), issues)
-            inputs = {
-                name: Param(name, None)
-                for name in sorted(inferred_inputs)
-            }
+            if final.param.name == 'xs':
+                inputs = {final.param.name: Param(final.param.name, None)}
+            else:
+                inputs = {
+                    name: Param(name, None)
+                    for name in sorted(inferred_inputs)
+                }
             outputs = self._signature_outputs(result)
             return TaskSignature(inputs, outputs, {})
 
@@ -323,6 +343,7 @@ class Checker:
                     imported.kind,
                     imports=imported.check.imports if imported.check is not None else None,
                     imported_check=imported.check,
+                    batch=self._import_is_batch(imported),
                 )
             return UnknownValue()
 
@@ -344,6 +365,12 @@ class Checker:
                 if field in rec.fields:
                     return rec.fields[field]
                 return UnknownValue()
+            if isinstance(rec, ArrayValue):
+                fields = self._field_map(rec.element)
+                if fields is None or field not in fields:
+                    issues.append(f'Missing field on mapped result: {field}')
+                    return UnknownValue()
+                return ArrayValue(fields[field])
             if isinstance(rec, ComputationValue):
                 outputs = self._field_map(rec.output_value)
                 if outputs is not None and field in outputs:
@@ -365,6 +392,11 @@ class Checker:
             path = self._match_import(expr)
             if path is not None:
                 return UnknownValue()
+            map_parts = self._match_map(expr)
+            if map_parts is not None:
+                mapped_fun = self._eval_expr(map_parts[0], imports, env, demanded, issues)
+                mapped_arg = self._eval_expr(map_parts[1], imports, env, demanded, issues)
+                return self._apply_map(mapped_fun, mapped_arg, issues)
             fun = self._eval_expr(expr.fun, imports, env, demanded, issues)
             arg = self._eval_expr(expr.arg, imports, env, demanded, issues)
             return self._apply(fun, arg, demanded, issues)
@@ -401,12 +433,41 @@ class Checker:
                 body=expr.body,
                 env=env,
                 imports=imports,
+                batch=expr.param.name == 'xs',
             )
 
         if expr.type == wf_node.NodeType.chain:
             return self._eval_chain(expr, imports)
 
         return UnknownValue()
+
+    def _match_map(self, expr):
+        if expr.type != wf_node.NodeType.apply:
+            return None
+        left = expr.fun
+        if left.type != wf_node.NodeType.apply:
+            return None
+        if left.fun.type != wf_node.NodeType.id or left.fun.name != 'map':
+            return None
+        return left.arg, expr.arg
+
+    def _import_is_batch(self, imported):
+        if imported.check is None or imported.check.tree.type != wf_node.NodeType.block or not imported.check.tree.body:
+            return False
+        final = imported.check.tree.body[-1]
+        return final.type == wf_node.NodeType.fun and final.param.name == 'xs'
+
+    def _apply_map(self, fun, arg, issues):
+        target = fun.function if isinstance(fun, ClosureValue) else fun
+        if not isinstance(target, FunctionValue):
+            issues.append('map requires a function of type rec -> rec')
+            return UnknownValue()
+        if target.batch:
+            issues.append('map on batch workflow is not supported')
+            return UnknownValue()
+        if not isinstance(arg, ArrayValue) and not (isinstance(arg, OpenRecord) and getattr(target, 'batch', False)):
+            return ArrayValue(ClosedRecord({name: UnknownValue() for name in target.signature.outputs.keys()}))
+        return ArrayValue(ClosedRecord({name: UnknownValue() for name in target.signature.outputs.keys()}))
 
     def _apply(self, fun, arg, demanded, issues):
         if isinstance(fun, ClosureValue):

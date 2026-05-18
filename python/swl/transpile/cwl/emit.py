@@ -14,11 +14,11 @@ def transpile_dag_dict(data, workflow_id='main'):
     _validate_supported(dag)
     tools = []
     tool_ids = {}
-    for task in dag.tasks:
-        tool_id = task.id
+    for step in dag.steps:
+        tool_id = step.id
         if tool_id not in tool_ids:
             tool_ids[tool_id] = f'#{tool_id}'
-            tools.append(_tool_to_cwl(task, tool_ids[tool_id]))
+            tools.append(_tool_to_cwl(step, tool_ids[tool_id]))
 
     workflow = {
         'id': '#main',
@@ -26,7 +26,7 @@ def transpile_dag_dict(data, workflow_id='main'):
         'inputs': [_workflow_input_to_cwl(workflow_id, name, spec) for name, spec in dag.inputs.items()],
         'outputs': [_workflow_output_to_cwl(workflow_id, name, value, dag) for name, value in dag.outputs.items()],
         'requirements': [],
-        'steps': [_step_to_cwl(workflow_id, task, tool_ids[task.id]) for task in dag.tasks],
+        'steps': [_step_to_cwl(workflow_id, step, tool_ids[step.id]) for step in dag.steps],
     }
     return {
         'cwlVersion': 'v1.0',
@@ -34,8 +34,8 @@ def transpile_dag_dict(data, workflow_id='main'):
     }
 
 
-def _tool_to_cwl(task, tool_id):
-    definition = task.task or {}
+def _tool_to_cwl(step, tool_id):
+    definition = step.task or {}
     requirements = [
         {
             'class': 'InitialWorkDirRequirement',
@@ -82,13 +82,22 @@ def _workflow_output_to_cwl(workflow_id, name, value, dag):
     }
 
 
-def _step_to_cwl(workflow_id, task, tool_id):
-    return {
-        'id': f'#main/{task.id}',
+def _step_to_cwl(workflow_id, step, tool_id):
+    data = {
+        'id': f'#main/{step.id}',
         'run': tool_id,
-        'in': [_step_input_to_cwl(task.id, name, value) for name, value in task.bindings.items()],
-        'out': [f'#main/{task.id}/{name}' for name in task.outputs],
+        'in': [_step_input_to_cwl(step.id, name, value) for name, value in step.bindings.items()],
+        'out': [f'#main/{step.id}/{name}' for name in step.outputs],
     }
+    if getattr(step, 'map', None) is not None:
+        source = step.map.get('source', {})
+        if source.get('source') == 'input' and 'name' in source:
+            port = source['name']
+            if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
+                data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
+            data['scatter'] = [f'#main/{step.id}/{port}']
+            data['scatterMethod'] = 'dotproduct'
+    return data
 
 
 def _step_input_to_cwl(task_id, name, value):
@@ -146,16 +155,16 @@ def _validate_supported(dag):
         if error is not None:
             raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: {error}')
 
-    for task in dag.tasks:
-        for name, value in task.bindings.items():
+    for step in dag.steps:
+        for name, value in step.bindings.items():
             error = _step_input_error(value)
             if error is not None:
-                raise ValueError(f'Unsupported task input binding for CWL transpilation: {task.id}.{name}: {error}')
-        for name, spec in task.task.get('outputs', {}).items():
+                raise ValueError(f'Unsupported task input binding for CWL transpilation: {step.id}.{name}: {error}')
+        for name, spec in step.task.get('outputs', {}).items():
             try:
                 _interp_to_cwl_glob(spec.get('default'))
             except ValueError as exc:
-                raise ValueError(f'Unsupported task output path for CWL transpilation: {task.id}.{name}: {exc}') from exc
+                raise ValueError(f'Unsupported task output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
 
 
 def _step_input_error(value):
@@ -164,7 +173,9 @@ def _step_input_error(value):
         return None
     if kind == 'Literal':
         return None
-    if kind == 'Field' and value.source.__class__.__name__ == 'TaskCall':
+    if kind == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
+        return None
+    if kind == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return None
     if kind == 'Merge':
         return 'merge values are not supported'
@@ -179,7 +190,9 @@ def _step_input_error(value):
 
 def _workflow_output_error(value):
     kind = value.__class__.__name__
-    if kind == 'Field' and value.source.__class__.__name__ == 'TaskCall':
+    if kind == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
+        return None
+    if kind == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return None
     if kind == 'Literal':
         return 'literal outputs are not supported'
@@ -197,7 +210,9 @@ def _workflow_output_error(value):
 def _binding_source(workflow_id, value):
     if hasattr(value, 'name') and value.__class__.__name__ == 'Input':
         return f'#main/{value.name}'
-    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'TaskCall':
+    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
+        return f'#main/{value.source.id}/{value.name}'
+    if value.__class__.__name__ == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return f'#main/{value.source.id}/{value.name}'
     if value.__class__.__name__ == 'Literal':
         return value.value
@@ -205,14 +220,24 @@ def _binding_source(workflow_id, value):
 
 
 def _infer_output_type(name, value, dag):
-    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ == 'TaskCall':
+    if value.__class__.__name__ == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
         return _cwl_type(value.source.task['outputs'][name]['type'])
+    if value.__class__.__name__ == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
+        return _cwl_type('[' + value.source.task['outputs'][name]['type'] + ']')
     if value.__class__.__name__ == 'Literal':
         return _cwl_type(type(value.value).__name__)
     return 'string'
 
 
 def _cwl_type(value):
+    if value == '[file]':
+        return {'type': 'array', 'items': 'File'}
+    if value == '[str]':
+        return {'type': 'array', 'items': 'string'}
+    if value == '[int]':
+        return {'type': 'array', 'items': 'int'}
+    if value == '[float]':
+        return {'type': 'array', 'items': 'float'}
     return {
         'file': 'File',
         'str': 'string',

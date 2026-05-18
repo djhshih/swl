@@ -64,6 +64,20 @@ class Field(Node):
 
 
 @dataclass(frozen=True)
+class ArrayField(Node):
+    record_array: Node
+    name: str
+
+    def __repr__(self):
+        return (
+            f'ArrayField(\n'
+            f'  record_array={self.record_array!r},\n'
+            f'  name={self.name!r},\n'
+            f')'
+        )
+
+
+@dataclass(frozen=True)
 class Update(Node):
     left: Node
     right: Node
@@ -132,6 +146,20 @@ class Apply(Node):
             f'  function={self.function!r},\n'
             f'  arg={self.arg!r},\n'
             f'  signature={self.signature!r},\n'
+            f')'
+        )
+
+
+@dataclass(frozen=True)
+class Map(Node):
+    function: Node
+    arg: Node
+
+    def __repr__(self):
+        return (
+            f'Map(\n'
+            f'  function={self.function!r},\n'
+            f'  arg={self.arg!r},\n'
             f')'
         )
 

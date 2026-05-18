@@ -82,6 +82,13 @@ class Lowerer:
             )
 
         if expr.type == wf_node.NodeType.apply:
+            map_parts = self._match_map(expr)
+            if map_parts is not None:
+                function_expr, arg_expr = map_parts
+                return ir.Map(
+                    self.lower_expr(function_expr, env, imports),
+                    self.lower_expr(arg_expr, env, imports),
+                )
             return ir.Apply(
                 self.lower_expr(expr.fun, env, imports),
                 self.lower_expr(expr.arg, env, imports),
@@ -142,6 +149,17 @@ class Lowerer:
         self.workflow_cache[path] = body
         return body
 
+    def _match_map(self, expr):
+        if expr.type != wf_node.NodeType.apply:
+            return None
+        left = expr.fun
+        arg = expr.arg
+        if left.type != wf_node.NodeType.apply:
+            return None
+        if left.fun.type != wf_node.NodeType.id or left.fun.name != 'map':
+            return None
+        return left.arg, arg
+
     def _lower_chain_items(self, expr, env, imports):
         if expr.type == wf_node.NodeType.chain:
             return self._lower_chain_items(expr.left, env, imports) + self._lower_chain_items(expr.right, env, imports)
@@ -166,6 +184,9 @@ class Lowerer:
         if isinstance(node, ir.Apply):
             return ir.Apply(self.normalize(node.function), self.normalize(node.arg), node.signature)
 
+        if isinstance(node, ir.Map):
+            return ir.Map(self.normalize(node.function), self.normalize(node.arg))
+
         if isinstance(node, ir.Ref):
             return node
 
@@ -174,6 +195,9 @@ class Lowerer:
 
         if isinstance(node, ir.Field):
             return ir.Field(self.normalize(node.record), node.name)
+
+        if isinstance(node, ir.ArrayField):
+            return ir.ArrayField(self.normalize(node.record_array), node.name)
 
         if isinstance(node, ir.Update):
             return self._normalize_update(self.normalize(node.left), self.normalize(node.right))

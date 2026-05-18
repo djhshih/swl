@@ -93,6 +93,22 @@ align_hg38
 echo hi
 ''',
             os.path.join(root, 'bad_expr.swl'): 'bad = import "bad_expr.sh"\nbad\n',
+            os.path.join(root, 'merge.sh'): '''#@  Merge bam
+# in
+#   bam [file]
+#   outbase str
+# out
+#   bam file = ${outbase}.bam
+
+echo merge
+''',
+            os.path.join(root, 'batch.swl'): '''align = import "align.sh"
+merge = import "merge.sh"
+
+\\xs ->
+    calls = map align xs
+    merge { bam: calls.bam, outbase: "merged" }
+''',
         }, root
 
     def test_transpile_function_workflow(self):
@@ -115,7 +131,7 @@ echo hi
         self.assertEqual(align['requirements'][1]['coresMin'], 2)
         self.assertEqual(align['requirements'][2]['dockerPull'], 'djhshih/seqkit:0.1')
         self.assertEqual([item['id'] for item in align['inputs']][:2], ['#align/fastq1', '#align/fastq2'])
-        self.assertFalse(any('name' in task for task in dag.to_dict()['tasks']))
+        self.assertFalse(any('name' in task for task in dag.to_dict()['steps']))
 
     def test_output_glob_uses_cwl_expression(self):
         files, root = self._files()
@@ -175,10 +191,22 @@ echo hi
                     'script': 'echo hi\n',
                 }
             ],
-            'outputs': {'bam': {'source': 'task', 'task': 'align', 'output': 'bam'}},
+            'outputs': {'bam': {'source': 'step', 'task': 'align', 'output': 'bam'}},
         }
         with self.assertRaisesRegex(ValueError, 'Unsupported task binding during deserialization: x'):
             transpile_dag_dict(bad)
+
+    def test_batch_mapped_task_emits_scatter_and_array_input_type(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'batch.swl'), files)
+        cwl = transpile_dag_dict(dag.to_dict())
+        workflow = cwl['$graph'][-1]
+        align = next(step for step in workflow['steps'] if step['id'] == '#main/align')
+        self.assertEqual(align['scatterMethod'], 'dotproduct')
+        self.assertEqual(align['scatter'], ['#main/align/xs'])
+        merge_tool = next(item for item in cwl['$graph'] if item.get('id') == '#merge')
+        bam_input = next(item for item in merge_tool['inputs'] if item['id'] == '#merge/bam')
+        self.assertEqual(bam_input['type'], {'type': 'array', 'items': 'File'})
 
     def test_rejects_output_expr_interpolation(self):
         files, root = self._files()

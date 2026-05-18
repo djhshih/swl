@@ -27,13 +27,19 @@ class Field:
 
 
 @dataclass(frozen=True)
+class ArrayField:
+    source: object
+    name: str
+
+
+@dataclass(frozen=True)
 class Merge:
     left: object
     right: object
 
 
 @dataclass
-class TaskCall:
+class StepCall:
     id: str
     path: str
     bindings: Dict[str, object]
@@ -41,6 +47,24 @@ class TaskCall:
     run: Dict[str, object] = field(default_factory=dict)
     task: Optional[dict] = None
     deps: List[str] = field(default_factory=list)
+    type: str = 'task'
+
+
+TaskCall = StepCall
+
+
+@dataclass
+class MappedStep:
+    id: str
+    path: str
+    source: object
+    bindings: Dict[str, object] = field(default_factory=dict)
+    outputs: List[str] = field(default_factory=list)
+    run: Dict[str, object] = field(default_factory=dict)
+    task: Optional[dict] = None
+    deps: List[str] = field(default_factory=list)
+    type: str = 'task'
+    map: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -56,11 +80,20 @@ class ForcedFunction:
     signature: Optional[object] = None
 
 
-@dataclass
+@dataclass(init=False)
 class DAG:
     inputs: Dict[str, Input]
-    tasks: List[TaskCall]
+    steps: List[StepCall]
     outputs: Dict[str, object]
+
+    def __init__(self, inputs, steps=None, outputs=None, tasks=None):
+        self.inputs = inputs
+        self.steps = steps if steps is not None else (tasks if tasks is not None else [])
+        self.outputs = outputs if outputs is not None else {}
+
+    @property
+    def tasks(self):
+        return self.steps
 
     def to_dict(self):
         return {
@@ -71,28 +104,30 @@ class DAG:
                 }
                 for name, value in self.inputs.items()
             },
-            'tasks': [
+            'steps': [
                 {
-                    'id': task.id,
-                    'path': task.path,
-                    'deps': list(task.deps),
-                    'inputs': dict(task.task.get('inputs', {})),
+                    'id': step.id,
+                    'type': step.type,
+                    'path': step.path,
+                    **({'map': step.map} if getattr(step, 'map', None) is not None else {}),
+                    'deps': list(step.deps),
+                    'inputs': dict(step.task.get('inputs', {})),
                     'bindings': {
                         name: _binding_to_binding_dict(value)
-                        for name, value in task.bindings.items()
+                        for name, value in step.bindings.items()
                         if not (isinstance(value, Input) and value.name == name)
                     },
                     'outputs': {
-                        name: task.task['outputs'][name]
-                        for name in task.outputs
+                        name: step.task['outputs'][name]
+                        for name in step.outputs
                     },
                     'run': {
-                        name: _run_param_to_dict(spec, task.run.get(name))
-                        for name, spec in task.task.get('run', {}).items()
+                        name: _run_param_to_dict(spec, step.run.get(name))
+                        for name, spec in step.task.get('run', {}).items()
                     },
-                    'script': task.task['body'],
+                    'script': step.task['body'],
                 }
-                for task in self.tasks
+                for step in self.steps
             ],
             'outputs': {name: _binding_to_dict(value) for name, value in self.outputs.items()},
         }
@@ -103,48 +138,52 @@ class DAG:
             name: Input(name, item.get('type'), item.get('desc'))
             for name, item in data.get('inputs', {}).items()
         }
-        tasks = []
-        task_by_id = {}
-        for item in data.get('tasks', []):
-            task_outputs = item.get('outputs', {})
-            task_run = item.get('run', {})
-            task_inputs = item.get('inputs', {})
-            task = TaskCall(
+        steps_data = data.get('steps', data.get('tasks', []))
+        steps = []
+        step_by_id = {}
+        for item in steps_data:
+            step_outputs = item.get('outputs', {})
+            step_run = item.get('run', {})
+            step_inputs = item.get('inputs', {})
+            step_cls = MappedStep if item.get('map') is not None else StepCall
+            step = step_cls(
                 id=item['id'],
                 path=item['path'],
                 bindings={},
-                outputs=list(task_outputs.keys()),
+                outputs=list(step_outputs.keys()),
                 run={
-                    name: _run_value_from_dict(name, spec, task_run, inputs, task_by_id)
+                    name: _run_value_from_dict(name, spec, step_run, inputs, step_by_id)
                     for name, spec in item.get('run', {}).items()
-                    if _run_value_from_dict(name, spec, task_run, inputs, task_by_id) is not None
+                    if _run_value_from_dict(name, spec, step_run, inputs, step_by_id) is not None
                 },
                 task={
                     'doc': None,
                     'body': item.get('script', ''),
-                    'inputs': task_inputs,
-                    'outputs': task_outputs,
-                    'run': task_run,
+                    'inputs': step_inputs,
+                    'outputs': step_outputs,
+                    'run': step_run,
                 },
                 deps=list(item.get('deps', [])),
+                type=item.get('type', 'task'),
+                **({'source': _binding_from_dict(item['map']['source'], inputs, step_by_id), 'map': item.get('map')} if item.get('map') is not None else {}),
             )
-            tasks.append(task)
-            task_by_id[task.id] = task
-        for task, item in zip(tasks, data.get('tasks', [])):
-            task.bindings.update({
+            steps.append(step)
+            step_by_id[step.id] = step
+        for step, item in zip(steps, steps_data):
+            step.bindings.update({
                 name: inputs[name]
-                for name in task.task.get('inputs', {}).keys()
+                for name in step.task.get('inputs', {}).keys()
                 if name in inputs and name not in item.get('bindings', {})
             })
-            task.bindings.update({
-                name: _binding_from_binding_dict(name, value, inputs, task_by_id)
+            step.bindings.update({
+                name: _binding_from_binding_dict(name, value, inputs, step_by_id)
                 for name, value in item.get('bindings', {}).items()
             })
         outputs = {
-            name: _binding_from_dict(value, inputs, task_by_id)
+            name: _binding_from_dict(value, inputs, step_by_id)
             for name, value in data.get('outputs', {}).items()
         }
-        return cls(inputs, tasks, outputs)
+        return cls(inputs, steps, outputs)
 
     def write(self, path):
         with open(path, 'w') as f:
@@ -162,42 +201,52 @@ def _binding_to_dict(value):
     if isinstance(value, Literal):
         return {'source': 'literal', 'value': value.value}
     if isinstance(value, Field):
-        if isinstance(value.source, TaskCall):
-            return {'source': 'task', 'task': value.source.id, 'output': value.name}
+        if isinstance(value.source, (StepCall, MappedStep)):
+            return {'source': 'step', 'step': value.source.id, 'output': value.name}
         return {'source': 'field', 'field': value.name, 'value': _binding_to_dict(value.source)}
+    if isinstance(value, ArrayField):
+        if isinstance(value.source, (StepCall, MappedStep)):
+            return {'source': 'array_field', 'step': value.source.id, 'output': value.name}
+        raise ValueError(f'Unsupported array field source for serialization: {type(value.source).__name__}')
     if isinstance(value, Merge):
         return {'source': 'merge', 'left': _binding_to_dict(value.left), 'right': _binding_to_dict(value.right)}
     if isinstance(value, Record):
         return {'source': 'record', 'fields': {name: _binding_to_dict(v) for name, v in value.fields.items()}}
-    if isinstance(value, TaskCall):
-        return {'source': 'task_call', 'task': value.id}
+    if isinstance(value, StepCall):
+        return {'source': 'step_call', 'step': value.id}
     if isinstance(value, ForcedFunction):
         return {'source': 'function'}
     raise ValueError(f'Unsupported forced value for serialization: {type(value).__name__}')
 
 
-def _binding_from_dict(data, inputs, tasks):
+def _binding_from_dict(data, inputs, steps):
     source = data.get('source')
     if source == 'input':
         return inputs[data['name']]
     if source == 'literal':
         return Literal(data.get('value'))
     if source == 'task':
-        return Field(tasks[data['task']], data['output'])
+        return Field(steps[data['task']], data['output'])
+    if source == 'step':
+        return Field(steps[data['step']], data['output'])
+    if source == 'array_field':
+        return ArrayField(steps[data['step']], data['output'])
     if source == 'field':
-        return Field(_binding_from_dict(data['value'], inputs, tasks), data['field'])
+        return Field(_binding_from_dict(data['value'], inputs, steps), data['field'])
     if source == 'merge':
         return Merge(
-            _binding_from_dict(data['left'], inputs, tasks),
-            _binding_from_dict(data['right'], inputs, tasks),
+            _binding_from_dict(data['left'], inputs, steps),
+            _binding_from_dict(data['right'], inputs, steps),
         )
     if source == 'record':
         return Record({
-            name: _binding_from_dict(value, inputs, tasks)
+            name: _binding_from_dict(value, inputs, steps)
             for name, value in data.get('fields', {}).items()
         })
     if source == 'task_call':
-        return tasks[data['task']]
+        return steps[data['task']]
+    if source == 'step_call':
+        return steps[data['step']]
     if source == 'function':
         return {'kind': 'function'}
     raise ValueError(f'Unsupported binding source during deserialization: {source!r}')
@@ -208,14 +257,18 @@ def _binding_to_binding_dict(value):
         return {}
     if isinstance(value, Literal):
         return {'value': value.value}
-    if isinstance(value, Field) and isinstance(value.source, TaskCall):
+    if isinstance(value, Field) and isinstance(value.source, (StepCall, MappedStep)):
         return {'source': value.source.id, 'output': value.name}
+    if isinstance(value, ArrayField) and isinstance(value.source, (StepCall, MappedStep)):
+        return {'source': value.source.id, 'output': value.name, 'kind': 'array_field'}
     raise ValueError(f'Unsupported task binding for serialization: {type(value).__name__}')
 
 
-def _binding_from_binding_dict(name, data, inputs, tasks):
+def _binding_from_binding_dict(name, data, inputs, steps):
     if 'value' in data:
         return Literal(data.get('value'))
+    if data.get('kind') == 'array_field':
+        return ArrayField(steps[data['source']], data['output'])
     source = data.get('source')
     if source is None:
         if 'output' in data or any(key not in {'source'} for key in data.keys()):
@@ -223,7 +276,7 @@ def _binding_from_binding_dict(name, data, inputs, tasks):
         return inputs[name]
     if 'output' not in data:
         raise ValueError(f'Unsupported task binding during deserialization: {name}: {data!r}')
-    return Field(tasks[source], data['output'])
+    return Field(steps[source], data['output'])
 
 
 def _run_param_to_dict(spec, value):
@@ -239,7 +292,7 @@ def _run_param_to_dict(spec, value):
     return data
 
 
-def _run_value_from_dict(name, spec, defaults, inputs, tasks):
+def _run_value_from_dict(name, spec, defaults, inputs, steps):
     if not isinstance(spec, dict) or 'value' not in spec:
         return None
     value = spec['value']
@@ -247,7 +300,7 @@ def _run_value_from_dict(name, spec, defaults, inputs, tasks):
     if name in defaults and isinstance(defaults[name], dict):
         default = defaults[name].get('value')
     if isinstance(value, dict) and value.get('source') is not None:
-        return _binding_from_dict(value, inputs, tasks)
+        return _binding_from_dict(value, inputs, steps)
     if value != default:
         return Literal(value)
     return None

@@ -64,6 +64,20 @@ align_hg38
 sort = import "sort.sh"
 align | sort
 ''',
+            os.path.join(root, 'merge.sh'): '''# @ Merge
+# in
+#   bam [file]
+#   outbase str
+# out
+#   bam file = ${outbase}.bam
+echo merge
+''',
+            os.path.join(root, 'batch.swl'): '''align = import "align.sh"
+merge = import "merge.sh"
+\\xs ->
+    calls = map align xs
+    merge { bam: calls.bam, outbase: "merged" }
+''',
         }, root
 
     def test_dag_round_trip_dict(self):
@@ -128,12 +142,19 @@ call  = import "call.sh"
         function = force_file(os.path.join(root, 'function.swl'), files).to_dict()
         self.assertEqual(function, pipe)
 
+    def test_mapped_step_round_trip(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'batch.swl'), files)
+        data = dag.to_dict()
+        restored = DAG.from_dict(data)
+        self.assertEqual(restored.to_dict(), data)
+
     def test_run_value_round_trip(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'partial.swl'), files)
         data = dag.to_dict()
-        self.assertNotIn('default', data['tasks'][0]['run']['cpu'])
-        self.assertEqual(data['tasks'][0]['run']['cpu']['value'], 4)
+        self.assertNotIn('default', data['steps'][0]['run']['cpu'])
+        self.assertEqual(data['steps'][0]['run']['cpu']['value'], 4)
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
 
