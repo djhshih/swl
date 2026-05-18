@@ -3,7 +3,8 @@ import unittest as ut
 
 from swl.ir import node as ir
 from swl.ir.dag import Literal, Merge, Record
-from swl.ir.force import Forcer, force_file
+from swl.ir.force import Forcer, ForceEnv, force_file
+from swl.ir.lower import lower_file
 
 
 _ALIGN = '''# @ Align
@@ -171,6 +172,13 @@ merge = import "merge.sh"
     merge { bam: ys.bam, outbase: "merged" }
 '''
 
+_MAP_WORKFLOW_PARTIAL = '''mkp = import "mk_align_partial.swl"
+merge = import "merge.sh"
+\\xs ->
+    ys = map mkp xs
+    merge { bam: ys.bam, outbase: "merged" }
+'''
+
 
 class TestForce(ut.TestCase):
     def _files(self):
@@ -194,6 +202,11 @@ class TestForce(ut.TestCase):
 \\x ->
     align x
 ''',
+            os.path.join(root, 'mk_align_partial.swl'): '''align = import "align.sh"
+\\x ->
+    f = align { ref: "hg38.fa", ref_fai: "hg38.fa.fai" }
+    f x
+''',
             os.path.join(root, 'shadow.swl'): _SHADOW,
             os.path.join(root, 'partial_reuse.swl'): _PARTIAL_REUSE,
             os.path.join(root, 'workflow_partial_reuse.swl'): _WORKFLOW_PARTIAL_REUSE,
@@ -204,6 +217,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'map_lambda.swl'): _MAP_LAMBDA,
             os.path.join(root, 'map_partial.swl'): _MAP_PARTIAL,
             os.path.join(root, 'map_workflow.swl'): _MAP_WORKFLOW,
+            os.path.join(root, 'map_workflow_partial.swl'): _MAP_WORKFLOW_PARTIAL,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -339,8 +353,13 @@ class TestForce(ut.TestCase):
 
     def test_map_partial_task_application_produces_mapped_step(self):
         files, root = self._files()
+        lowered = lower_file(os.path.join(root, 'map_partial.swl'), files)
+        mapped = lowered.body.bindings[1].value
+        self.assertIsInstance(mapped.function, ir.Function)
+        self.assertEqual(mapped.function.kind, 'workflow')
         data = force_file(os.path.join(root, 'map_partial.swl'), files).to_dict()
-        self.assertEqual([step['id'] for step in data['steps']], ['align', 'merge'])
+        self.assertEqual([step['id'] for step in data['steps']], ['map_partial_1', 'merge'])
+        self.assertEqual(data['steps'][0]['type'], 'workflow')
         self.assertEqual(data['steps'][0]['map']['source']['source'], 'input')
         self.assertEqual(data['steps'][1]['bindings']['bam']['kind'], 'array_field')
 
@@ -350,6 +369,23 @@ class TestForce(ut.TestCase):
         self.assertEqual([step['id'] for step in data['steps']], ['align', 'mk', 'merge'])
         self.assertEqual(data['steps'][1]['type'], 'workflow')
         self.assertEqual(data['steps'][1]['map']['source']['source'], 'input')
+
+    def test_map_imported_workflow_with_partial_task_inside_produces_mapped_step(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'map_workflow_partial.swl'), files).to_dict()
+        self.assertEqual([step['id'] for step in data['steps']], ['align', 'mkp', 'merge'])
+        self.assertEqual(data['steps'][1]['type'], 'workflow')
+        self.assertEqual(data['steps'][1]['map']['source']['source'], 'input')
+
+    def test_force_rejects_unnormalized_map_callable(self):
+        with self.assertRaisesRegex(ValueError, 'map requires normalized executable callable during forcing'):
+            Forcer().force_value(
+                ir.Map(
+                    ir.Lambda('x', ir.Block([], ir.Record({'bam': ir.Field(ir.Name('x'), 'bam')}))),
+                    ir.Name('xs'),
+                ),
+                ForceEnv(),
+            )
 
     def test_force_rejects_unsupported_ir_node(self):
         with self.assertRaisesRegex(ValueError, 'Unsupported IR node during forcing: object'):

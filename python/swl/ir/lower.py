@@ -349,24 +349,71 @@ class Lowerer:
     def _generated_callable_from_apply(self, function, arg):
         if not isinstance(function, ir.Function):
             return None
-        remaining = list(function.signature.inputs.keys())
-        if len(remaining) != 1:
+        if not isinstance(arg, ir.Record):
+            return None
+        bound_names = set(arg.fields.keys())
+        remaining = [name for name in function.signature.inputs.keys() if name not in bound_names]
+        if not remaining:
             return None
         from swl.semantic.task.type import Param, TaskSignature
         name = f'map_partial_{self.next_generated_id}'
         self.next_generated_id += 1
-        param = remaining[0]
-        if isinstance(arg, ir.Record):
-            applied_arg = ir.Update(ir.Record({param: ir.Name('x')}), arg)
-        else:
-            applied_arg = ir.Name('x')
+        outputs = list(function.signature.outputs.keys())
+        task_inputs = {
+            in_name: {'type': None, 'desc': None}
+            for in_name in function.signature.inputs.keys()
+        }
+        step_bindings = {}
+        for in_name in function.signature.inputs.keys():
+            if in_name in remaining:
+                step_bindings[in_name] = {'source': 'field', 'field': in_name, 'value': {'source': 'input', 'name': 'x'}}
+            elif in_name in arg.fields:
+                step_bindings[in_name] = self._generated_binding_dict(arg.fields[in_name])
+            else:
+                return None
+        generated_dag = {
+            'inputs': {'x': {'type': None, 'desc': None}},
+            'steps': [{
+                'id': function.name,
+                'type': function.kind,
+                'path': function.path,
+                'deps': [],
+                'inputs': task_inputs if function.kind == 'task' else {
+                    in_name: {'type': None, 'desc': None}
+                    for in_name in function.signature.inputs.keys()
+                },
+                'bindings': step_bindings,
+                'outputs': {
+                    out: {'type': None, 'desc': None}
+                    for out in outputs
+                },
+                'run': {},
+                'script': '',
+                **({'definition': {'class': 'Workflow', 'dag': function.generated_dag if function.generated_dag is not None else None, 'inputs': {}, 'outputs': {}, 'body': '', 'run': {}}} if function.kind == 'workflow' else {}),
+            }],
+            'outputs': {
+                out: {'source': 'step', 'step': function.name, 'output': out}
+                for out in outputs
+            },
+        }
         return ir.Function(
             name,
             'workflow',
             TaskSignature({'x': Param('x', None)}, dict(function.signature.outputs), {}),
             f'<generated:{name}>',
-            body=ir.Lambda('x', ir.Block([], ir.Apply(function, applied_arg))),
+            body=ir.Lambda('x', ir.Block([], ir.Apply(function, ir.Update(ir.Record({name: ir.Field(ir.Name('x'), name) for name in remaining}), arg)))),
+            generated_dag=generated_dag,
         )
+
+    def _generated_binding_dict(self, node):
+        if isinstance(node, ir.Name):
+            return {'source': 'field', 'field': node.name, 'value': {'source': 'input', 'name': 'x'}}
+        if isinstance(node, ir.Field):
+            if isinstance(node.record, ir.Name) and node.record.name == 'x':
+                return {'source': 'field', 'field': node.name, 'value': {'source': 'input', 'name': 'x'}}
+        if isinstance(node, ir.Literal):
+            return {'source': 'literal', 'value': node.value}
+        return {'source': 'field', 'field': getattr(node, 'name', 'x'), 'value': {'source': 'input', 'name': 'x'}}
 
     def _record_field_names(self, node):
         if isinstance(node, ir.Record):

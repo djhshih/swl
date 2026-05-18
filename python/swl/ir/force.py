@@ -343,11 +343,7 @@ class Forcer:
             raise ValueError('map on batch workflow is not supported during forcing')
         if isinstance(fn.function, ir.Function) and fn.function.kind in ('task', 'workflow'):
             return self._emit_mapped_step(fn, source)
-        element_arg = self._mapped_element_input(source)
-        element_value = self._apply(fn, element_arg)
-        if isinstance(element_value, Field):
-            element_value = Record({element_value.name: element_value})
-        return MappedValue(source, element_value)
+        raise ValueError(f'map requires normalized executable callable during forcing: {fn.function!r}')
 
     def _emit_mapped_step(self, fn, source):
         target = fn.function
