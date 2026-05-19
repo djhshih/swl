@@ -168,7 +168,7 @@ call  = import "call.sh"
         with self.assertRaisesRegex(ValueError, 'Unsupported binding source'):
             DAG.from_dict({
                 'inputs': {},
-                'tasks': [],
+                'steps': [],
                 'outputs': {'x': {'source': 'mystery'}},
             })
 

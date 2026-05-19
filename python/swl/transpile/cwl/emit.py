@@ -184,7 +184,7 @@ def _canonical_binding(value):
         return ('input', value.name)
     if kind == 'Literal':
         return ('literal', value.value)
-    if kind == 'Field' and value.source.__class__.__name__ in ('TaskCall', 'StepCall', 'MappedStep'):
+    if kind == 'Field' and value.source.__class__.__name__ in ('StepCall', 'MappedStep'):
         return ('step_output', value.source, value.name)
     if kind == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
         return ('array_step_output', value.source, value.name)

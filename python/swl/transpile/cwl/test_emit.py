@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from swl.ir.dag import DAG, Input, Literal, Merge, Record, TaskCall
+from swl.ir.dag import DAG, Input, Literal, Merge, Record, StepCall
 from swl.ir.force import force_file
 from swl.transpile.cwl.emit import transpile_dag_dict
 
@@ -174,7 +174,7 @@ merge = import "merge.sh"
         self.assertEqual(align['outputs'][0]['outputBinding']['glob'], "$(inputs.outbase + '.bam')")
 
     def test_rejects_non_task_workflow_output(self):
-        dag = DAG(inputs={}, tasks=[], outputs={'x': Literal(1)})
+        dag = DAG(inputs={}, steps=[], outputs={'x': Literal(1)})
         with self.assertRaisesRegex(ValueError, 'Unsupported workflow output'):
             transpile_dag_dict(dag.to_dict())
 
@@ -200,7 +200,7 @@ merge = import "merge.sh"
         self.assertEqual(steps['#main/partial']['run'], '#partial')
 
     def test_rejects_merged_task_input_binding(self):
-        task = TaskCall(
+        task = StepCall(
             id='align',
             path='/tmp/align.sh',
             bindings={'x': Merge(Input('a'), Input('b'))},
@@ -214,7 +214,7 @@ merge = import "merge.sh"
         )
         bad = {
             'inputs': {'a': {'type': None, 'desc': None}, 'b': {'type': None, 'desc': None}},
-            'tasks': [
+            'steps': [
                 {
                     'id': 'align',
                     'path': '/tmp/align.sh',
