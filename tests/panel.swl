@@ -1,0 +1,6 @@
+call_variant = import "pipe.swl"
+merge = import "merge_bcf.sh"
+
+\xs -> 
+   calls = map call_variant xs
+   merge { bcf: calls.bcf }
