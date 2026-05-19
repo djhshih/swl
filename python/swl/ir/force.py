@@ -1,7 +1,7 @@
 from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
-from swl.ir.dag import DAG, ArrayField, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep, MappedValue
+from swl.ir.dag import DAG, ArrayField, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import signature_from_task
 from swl.syntax.task import interpolation as interp
@@ -32,9 +32,9 @@ class Forcer:
         self.inputs = {}
         self.steps = []
         self.step_cache = {}
-        self.task_defs = {}
+        self.tool_defs = {}
         self.call_counter = 0
-        self.task_name_counts = {}
+        self.step_name_counts = {}
         self.lowerer = Lowerer(files=files)
         self.variables = {}
         self.forced_variables = {}
@@ -49,6 +49,8 @@ class Forcer:
     def _finalize_dag(self, value):
         self._refine_input_metadata()
         outputs = self._final_outputs(value)
+        for name, output in outputs.items():
+            self._assert_wireable_output(name, output)
         self._prune_unused_inputs(value, outputs)
         return DAG(dict(self.inputs), list(self.steps), outputs)
 
@@ -114,15 +116,6 @@ class Forcer:
                 if node.name not in source.outputs:
                     raise ValueError(f'Missing field on mapped result: {node.name}')
                 return ArrayField(source, node.name)
-            if isinstance(source, MappedValue):
-                projected = self._project_field(source.element, node.name)
-                if projected is _SENTINEL and isinstance(source.element, Field) and source.element.name == node.name:
-                    projected = source.element
-                if projected is _SENTINEL and isinstance(source.element, Record) and node.name in source.element.fields:
-                    projected = source.element.fields[node.name]
-                if projected is _SENTINEL:
-                    raise ValueError(f'Missing field on mapped result: {node.name}')
-                return MappedValue(source.source, projected)
             return Field(source, node.name)
 
         if isinstance(node, ir.ArrayField):
@@ -185,7 +178,7 @@ class Forcer:
         return result
 
     def _apply(self, fn, arg):
-        if isinstance(arg, (MappedStep, MappedValue)):
+        if isinstance(arg, MappedStep):
             return self._apply_mapped(fn, arg)
         if not isinstance(fn, ForcedFunction):
             raise ValueError(f'Cannot apply non-function value during forcing: {fn!r}')
@@ -259,9 +252,6 @@ class Forcer:
             return set(value.outputs)
         if isinstance(value, MappedStep):
             return set(value.outputs)
-        if isinstance(value, MappedValue):
-            projected = self._collect_output_fields(value.element)
-            return set(projected.keys()) if projected is not None else set()
         if isinstance(value, Field):
             return set()
         if isinstance(value, ArrayField):
@@ -336,14 +326,14 @@ class Forcer:
             return self.step_cache[key]
         self.call_counter += 1
         outputs = list(function.signature.outputs.keys())
-        call_id = self._task_id(function.name)
+        call_id = self._step_id(function.name)
         call = StepCall(
             id=call_id,
             path=function.path,
             bindings=inputs,
             outputs=outputs,
             run=self._normalize_task_run(function, bound),
-            task=self._task_definition(function.path),
+            task=self._tool_definition(function.path),
             deps=sorted(self._step_dependencies(inputs)),
         )
         self.steps.append(call)
@@ -371,13 +361,13 @@ class Forcer:
     def _emit_mapped_step(self, fn, source):
         target = fn.function
         outputs = list(target.signature.outputs.keys())
-        step_id = self._task_id(target.name)
+        step_id = self._step_id(target.name)
         step = MappedStep(
             id=step_id,
             path=target.path,
             source=source,
             outputs=outputs,
-            task=self._task_definition(target.path) if target.kind == 'task' else self._workflow_definition(target),
+            task=self._tool_definition(target.path) if target.kind == 'task' else self._workflow_definition(target),
             deps=sorted(self._step_dependencies({'source': source})),
             type=target.kind,
             map={'source': _binding_to_public_dict(source)},
@@ -385,9 +375,9 @@ class Forcer:
         self.steps.append(step)
         return step
 
-    def _task_id(self, name):
-        count = self.task_name_counts.get(name, 0) + 1
-        self.task_name_counts[name] = count
+    def _step_id(self, name):
+        count = self.step_name_counts.get(name, 0) + 1
+        self.step_name_counts[name] = count
         if count == 1:
             return name
         return f'{name}_{count}'
@@ -398,7 +388,7 @@ class Forcer:
         if key in self.step_cache:
             return self.step_cache[key]
         outputs = list(function.signature.outputs.keys())
-        call_id = self._task_id(function.name)
+        call_id = self._step_id(function.name)
         call = StepCall(
             id=call_id,
             path=function.path,
@@ -414,19 +404,11 @@ class Forcer:
         self.step_cache[key] = result
         return result
 
-    def _force_workflow(self, function, bound):
-        body = function.body
-        if isinstance(body, ir.Lambda):
-            return self._force_lambda(body, bound)
-        return self.force_value(body, ForceEnv())
-
     def _mapped_element_input(self, source):
         if isinstance(source, Input):
             return Record({source.name: Input(source.name)})
         if isinstance(source, ArrayField):
             return Field(source.source, source.name)
-        if isinstance(source, MappedValue):
-            return source.element
         if isinstance(source, MappedStep):
             return Record({name: Field(source, name) for name in source.outputs})
         return source
@@ -459,9 +441,9 @@ class Forcer:
             if self._project_field(bound, name) is not _SENTINEL
         }
 
-    def _task_definition(self, path):
-        if path in self.task_defs:
-            return self.task_defs[path]
+    def _tool_definition(self, path):
+        if path in self.tool_defs:
+            return self.tool_defs[path]
         src = self.lowerer.checker._read_file(path)
         task = TaskParser().parse(src)
         signature = signature_from_task(task)
@@ -472,7 +454,7 @@ class Forcer:
             'outputs': self._build_task_section(task, signature, 'out'),
             'run': self._build_task_section(task, signature, 'run'),
         }
-        self.task_defs[path] = definition
+        self.tool_defs[path] = definition
         return definition
 
     def _materialize_workflow_dag(self, function):
@@ -487,12 +469,14 @@ class Forcer:
             value = forcer.force_value(function.body, ForceEnv())
             if isinstance(value, ForcedFunction):
                 value = forcer._apply(value, arg)
+        if isinstance(value, ForcedFunction):
+            raise ValueError(f'Workflow materialization did not resolve to a concrete value: {function.path}')
         return forcer._finalize_dag(value)
 
     def _workflow_definition(self, function):
         key = ('workflow', function.path)
-        if key in self.task_defs:
-            return self.task_defs[key]
+        if key in self.tool_defs:
+            return self.tool_defs[key]
         body_dag = self._materialize_workflow_dag(function).to_dict()
         definition = {
             'class': 'Workflow',
@@ -502,7 +486,7 @@ class Forcer:
             'body': '',
             'run': {},
         }
-        self.task_defs[key] = definition
+        self.tool_defs[key] = definition
         return definition
 
     def _build_task_section(self, task, signature, kind):
@@ -626,9 +610,6 @@ class Forcer:
             yield from self._walk_values(value.source)
         elif isinstance(value, ArrayField):
             yield from self._walk_values(value.source)
-        elif isinstance(value, MappedValue):
-            yield from self._walk_values(value.source)
-            yield from self._walk_values(value.element)
         elif isinstance(value, Merge):
             yield from self._walk_values(value.left)
             yield from self._walk_values(value.right)
@@ -692,6 +673,16 @@ class Forcer:
         if fields is not None:
             return fields
         return {'result': value}
+
+    def _assert_wireable_output(self, name, value):
+        normalized = _normalize_output_value(value)
+        if isinstance(normalized, (Input, Literal)):
+            return
+        if isinstance(normalized, Field) and isinstance(normalized.source, (Input, StepCall, MappedStep)):
+            return
+        if isinstance(normalized, ArrayField) and isinstance(normalized.source, (StepCall, MappedStep)):
+            return
+        raise ValueError(f'Workflow output did not normalize to a wireable value: {name}: {normalized!r}')
 
     def _collect_output_fields(self, value):
         normalized = _normalize_output_value(value)
@@ -787,8 +778,6 @@ def _value_key(value):
         return ('record', _record_fields_key(value.fields))
     if isinstance(value, (StepCall, MappedStep)):
         return ('step', value.path, value.id)
-    if isinstance(value, MappedValue):
-        return ('mapped', _value_key(value.source), _value_key(value.element))
     return ('other', type(value).__name__, repr(value))
 
 

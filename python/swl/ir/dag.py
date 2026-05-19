@@ -50,9 +50,6 @@ class StepCall:
     type: str = 'task'
 
 
-TaskCall = StepCall
-
-
 @dataclass
 class MappedStep:
     id: str
@@ -65,12 +62,6 @@ class MappedStep:
     deps: List[str] = field(default_factory=list)
     type: str = 'task'
     map: Optional[dict] = None
-
-
-@dataclass(frozen=True)
-class MappedValue:
-    source: object
-    element: object
 
 
 @dataclass(frozen=True)
@@ -92,14 +83,10 @@ class DAG:
     steps: List[StepCall]
     outputs: Dict[str, object]
 
-    def __init__(self, inputs, steps=None, outputs=None, tasks=None):
+    def __init__(self, inputs, steps=None, outputs=None):
         self.inputs = inputs
-        self.steps = steps if steps is not None else (tasks if tasks is not None else [])
+        self.steps = steps if steps is not None else []
         self.outputs = outputs if outputs is not None else {}
-
-    @property
-    def tasks(self):
-        return self.steps
 
     def to_dict(self):
         return {
@@ -145,7 +132,7 @@ class DAG:
             name: Input(name, item.get('type'), item.get('desc'))
             for name, item in data.get('inputs', {}).items()
         }
-        steps_data = data.get('steps', data.get('tasks', []))
+        steps_data = data.get('steps', [])
         steps = []
         step_by_id = {}
         for item in steps_data:
@@ -221,8 +208,6 @@ def _binding_to_dict(value):
         return {'source': 'record', 'fields': {name: _binding_to_dict(v) for name, v in value.fields.items()}}
     if isinstance(value, StepCall):
         return {'source': 'step_call', 'step': value.id}
-    if isinstance(value, MappedValue):
-        return {'source': 'mapped_value', 'map': _binding_to_dict(value.source), 'element': _binding_to_dict(value.element)}
     if isinstance(value, ForcedFunction):
         return {'source': 'function'}
     raise ValueError(f'Unsupported forced value for serialization: {type(value).__name__}')
@@ -234,8 +219,6 @@ def _binding_from_dict(data, inputs, steps):
         return inputs[data['name']]
     if source == 'literal':
         return Literal(data.get('value'))
-    if source == 'task':
-        return Field(steps[data['task']], data['output'])
     if source == 'step':
         return Field(steps[data['step']], data['output'])
     if source == 'array_field':
@@ -252,15 +235,8 @@ def _binding_from_dict(data, inputs, steps):
             name: _binding_from_dict(value, inputs, steps)
             for name, value in data.get('fields', {}).items()
         })
-    if source == 'task_call':
-        return steps[data['task']]
     if source == 'step_call':
         return steps[data['step']]
-    if source == 'mapped_value':
-        return MappedValue(
-            _binding_from_dict(data['map'], inputs, steps),
-            _binding_from_dict(data['element'], inputs, steps),
-        )
     if source == 'function':
         return {'kind': 'function'}
     raise ValueError(f'Unsupported binding source during deserialization: {source!r}')
@@ -277,14 +253,10 @@ def _binding_to_binding_dict(value):
         return {'kind': 'field', 'source': {'source': 'input', 'name': value.source.name}, 'field': value.name}
     if isinstance(value, ArrayField) and isinstance(value.source, (StepCall, MappedStep)):
         return {'source': value.source.id, 'output': value.name, 'kind': 'array_field'}
-    if isinstance(value, MappedValue):
-        return {'kind': 'mapped_value', 'value': _binding_to_dict(value)}
-    raise ValueError(f'Unsupported task binding for serialization: {type(value).__name__}')
+    raise ValueError(f'Unsupported step binding for serialization: {type(value).__name__}')
 
 
 def _binding_from_binding_dict(name, data, inputs, steps):
-    if data.get('kind') == 'mapped_value':
-        return _binding_from_dict(data['value'], inputs, steps)
     if 'value' in data:
         return Literal(data.get('value'))
     if data.get('kind') == 'array_field':
@@ -294,10 +266,10 @@ def _binding_from_binding_dict(name, data, inputs, steps):
     source = data.get('source')
     if source is None:
         if 'output' in data or any(key not in {'source'} for key in data.keys()):
-            raise ValueError(f'Unsupported task binding during deserialization: {name}: {data!r}')
+            raise ValueError(f'Unsupported step binding during deserialization: {name}: {data!r}')
         return inputs[name]
     if 'output' not in data:
-        raise ValueError(f'Unsupported task binding during deserialization: {name}: {data!r}')
+        raise ValueError(f'Unsupported step binding during deserialization: {name}: {data!r}')
     return Field(steps[source], data['output'])
 
 

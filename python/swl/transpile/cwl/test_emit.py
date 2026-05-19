@@ -228,7 +228,7 @@ merge = import "merge.sh"
             ],
             'outputs': {'bam': {'source': 'step', 'task': 'align', 'output': 'bam'}},
         }
-        with self.assertRaisesRegex(ValueError, 'Unsupported task binding during deserialization: x'):
+        with self.assertRaisesRegex(ValueError, 'Unsupported step binding during deserialization: x'):
             transpile_dag_dict(bad)
 
     def test_batch_mapped_task_emits_scatter_and_array_input_type(self):
@@ -277,7 +277,7 @@ merge = import "merge.sh"
     def test_rejects_output_expr_interpolation(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'bad_expr.swl'), files)
-        with self.assertRaisesRegex(ValueError, 'Unsupported task output path for CWL transpilation: bad.bam: Unsupported interpolation'):
+        with self.assertRaisesRegex(ValueError, 'Unsupported step output path for CWL transpilation: bad.bam: Unsupported interpolation'):
             transpile_dag_dict(dag.to_dict())
 
 

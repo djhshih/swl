@@ -170,12 +170,12 @@ def _validate_supported(dag):
         for name, value in step.bindings.items():
             error = _step_input_error(value)
             if error is not None:
-                raise ValueError(f'Unsupported task input binding for CWL transpilation: {step.id}.{name}: {error}')
+                raise ValueError(f'Unsupported step input binding for CWL transpilation: {step.id}.{name}: {error}')
         for name, spec in step.task.get('outputs', {}).items():
             try:
                 _interp_to_cwl_glob(spec.get('default'))
             except ValueError as exc:
-                raise ValueError(f'Unsupported task output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
+                raise ValueError(f'Unsupported step output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
 
 
 def _canonical_binding(value):
@@ -190,8 +190,6 @@ def _canonical_binding(value):
         return ('array_step_output', value.source, value.name)
     if kind == 'Field' and value.source.__class__.__name__ == 'Input':
         return ('input_field', value.source.name, value.name)
-    if kind == 'MappedValue':
-        return ('mapped_value', value)
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
 
 
@@ -245,8 +243,6 @@ def _binding_source(workflow_id, value):
     if kind == 'input_field':
         input_name, field_name = rest
         return f'#main/{input_name}/{field_name}'
-    if kind == 'mapped_value':
-        return _mapped_value_source(rest[0])
     if kind == 'literal':
         return rest[0]
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
@@ -262,33 +258,10 @@ def _infer_output_type(name, value, dag):
         return _cwl_type('[' + step.task['outputs'][output]['type'] + ']')
     if kind == 'input_field':
         return 'string'
-    if kind == 'mapped_value':
-        return _mapped_value_type(rest[0])
     if kind == 'literal':
         return _cwl_type(type(rest[0]).__name__)
     return 'string'
 
-
-def _mapped_value_source(value):
-    mapped = getattr(value, 'source', None)
-    element = getattr(value, 'element', None)
-    if mapped is not None and getattr(mapped, '__class__', type(None)).__name__ == 'Input':
-        if getattr(element, '__class__', type(None)).__name__ == 'Field':
-            inner = getattr(element, 'value', None)
-            if getattr(inner, '__class__', type(None)).__name__ == 'Record':
-                fields = getattr(inner, 'fields', {})
-                if len(fields) == 1:
-                    only = next(iter(fields.values()))
-                    if getattr(only, '__class__', type(None)).__name__ == 'Input':
-                        return f'#main/{element.name}'
-    raise ValueError(f'Unsupported mapped value for CWL transpilation: {value!r}')
-
-
-def _mapped_value_type(value):
-    mapped = getattr(value, 'source', None)
-    if mapped is not None and getattr(mapped, '__class__', type(None)).__name__ == 'Input':
-        return 'string'
-    return 'string'
 
 
 def _cwl_type(value):
