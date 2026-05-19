@@ -99,6 +99,8 @@ merge = import "merge.sh"
         dag = force_file(os.path.join(root, 'batch.swl'), files)
         payload = json.dumps(dag.to_dict(), sort_keys=True)
         self.assertNotIn('mapped_value', payload)
+        self.assertNotIn('array_field', payload)
+        self.assertNotIn('"source": "step"', payload)
 
     def test_dag_write_and_read(self):
         files, root = self._files()

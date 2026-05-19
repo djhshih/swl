@@ -226,7 +226,7 @@ merge = import "merge.sh"
                     'script': 'echo hi\n',
                 }
             ],
-            'outputs': {'bam': {'source': 'step', 'task': 'align', 'output': 'bam'}},
+            'outputs': {'bam': {'step': 'align', 'output': 'bam'}},
         }
         with self.assertRaisesRegex(ValueError, 'Unsupported step binding during deserialization: x'):
             transpile_dag_dict(bad)

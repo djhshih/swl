@@ -196,11 +196,11 @@ def _binding_to_dict(value):
         return {'source': 'literal', 'value': value.value}
     if isinstance(value, Field):
         if isinstance(value.source, (StepCall, MappedStep)):
-            return {'source': 'step', 'step': value.source.id, 'output': value.name}
+            return {'step': value.source.id, 'output': value.name}
         return {'source': 'field', 'field': value.name, 'value': _binding_to_dict(value.source)}
     if isinstance(value, ArrayField):
         if isinstance(value.source, (StepCall, MappedStep)):
-            return {'source': 'array_field', 'step': value.source.id, 'output': value.name}
+            return {'step': value.source.id, 'output': value.name}
         raise ValueError(f'Unsupported array field source for serialization: {type(value.source).__name__}')
     if isinstance(value, Merge):
         return {'source': 'merge', 'left': _binding_to_dict(value.left), 'right': _binding_to_dict(value.right)}
@@ -214,16 +214,17 @@ def _binding_to_dict(value):
 
 
 def _binding_from_dict(data, inputs, steps):
+    if 'step' in data and 'output' in data:
+        step = steps[data['step']]
+        if isinstance(step, MappedStep):
+            return ArrayField(step, data['output'])
+        return Field(step, data['output'])
     source = data.get('source')
     if source == 'input':
         name = data['name']
         return inputs.get(name, Input(name))
     if source == 'literal':
         return Literal(data.get('value'))
-    if source == 'step':
-        return Field(steps[data['step']], data['output'])
-    if source == 'array_field':
-        return ArrayField(steps[data['step']], data['output'])
     if source == 'field':
         return Field(_binding_from_dict(data['value'], inputs, steps), data['field'])
     if source == 'merge':
@@ -253,15 +254,13 @@ def _binding_to_binding_dict(value):
     if isinstance(value, Field) and isinstance(value.source, Input):
         return {'kind': 'field', 'source': {'source': 'input', 'name': value.source.name}, 'field': value.name}
     if isinstance(value, ArrayField) and isinstance(value.source, (StepCall, MappedStep)):
-        return {'source': value.source.id, 'output': value.name, 'kind': 'array_field'}
+        return {'source': value.source.id, 'output': value.name}
     raise ValueError(f'Unsupported step binding for serialization: {type(value).__name__}')
 
 
 def _binding_from_binding_dict(name, data, inputs, steps):
     if 'value' in data:
         return Literal(data.get('value'))
-    if data.get('kind') == 'array_field':
-        return ArrayField(steps[data['source']], data['output'])
     if data.get('kind') == 'field':
         return Field(_binding_from_dict(data['source'], inputs, steps), data['field'])
     source = data.get('source')
@@ -271,7 +270,10 @@ def _binding_from_binding_dict(name, data, inputs, steps):
         return inputs[name]
     if 'output' not in data:
         raise ValueError(f'Unsupported step binding during deserialization: {name}: {data!r}')
-    return Field(steps[source], data['output'])
+    step = steps[source]
+    if isinstance(step, MappedStep):
+        return ArrayField(step, data['output'])
+    return Field(step, data['output'])
 
 
 def _run_param_to_dict(spec, value):
