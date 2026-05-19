@@ -238,7 +238,7 @@ merge = import "merge.sh"
         workflow = cwl['$graph'][-1]
         align = next(step for step in workflow['steps'] if step['id'] == '#main/align')
         self.assertEqual(align['scatterMethod'], 'dotproduct')
-        self.assertEqual(align['scatter'], ['#main/align/xs'])
+        self.assertEqual(sorted(align['scatter']), ['#main/align/fastq1', '#main/align/fastq2', '#main/align/outbase', '#main/align/ref', '#main/align/ref_amb', '#main/align/ref_ann', '#main/align/ref_bwt', '#main/align/ref_pac', '#main/align/ref_sa'])
         merge_tool = next(item for item in cwl['$graph'] if item.get('id') == '#merge')
         bam_input = next(item for item in merge_tool['inputs'] if item['id'] == '#merge/bam')
         self.assertEqual(bam_input['type'], {'type': 'array', 'items': 'File'})
@@ -250,6 +250,10 @@ merge = import "merge.sh"
         workflow = cwl['$graph'][-1]
         mk = next(step for step in workflow['steps'] if step['id'] == '#main/mk')
         self.assertEqual(mk['scatterMethod'], 'dotproduct')
+        self.assertEqual(sorted(mk['scatter']), ['#main/mk/fastq1', '#main/mk/fastq2', '#main/mk/outbase', '#main/mk/ref', '#main/mk/ref_amb', '#main/mk/ref_ann', '#main/mk/ref_bwt', '#main/mk/ref_pac', '#main/mk/ref_sa'])
+        inputs = {item['id']: item for item in workflow['inputs']}
+        self.assertIn('#main/fastq1', inputs)
+        self.assertNotIn('#main/xs', inputs)
         subwf = next(item for item in cwl['$graph'] if item.get('id') == '#mk')
         self.assertEqual(subwf['class'], 'Workflow')
 

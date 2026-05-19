@@ -101,13 +101,21 @@ def _step_to_cwl(workflow_id, step, tool_id):
         'out': [f'#main/{step.id}/{name}' for name in step.outputs],
     }
     if getattr(step, 'map', None) is not None:
-        source = step.map.get('source', {})
-        if source.get('source') == 'input' and 'name' in source:
-            port = source['name']
-            if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
-                data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
-            data['scatter'] = [f'#main/{step.id}/{port}']
+        ports = step.map.get('ports') or []
+        if ports:
+            for port in ports:
+                if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
+                    data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
+            data['scatter'] = [f'#main/{step.id}/{port}' for port in ports]
             data['scatterMethod'] = 'dotproduct'
+        else:
+            source = step.map.get('source', {})
+            if source.get('source') == 'input' and 'name' in source:
+                port = source['name']
+                if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
+                    data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
+                data['scatter'] = [f'#main/{step.id}/{port}']
+                data['scatterMethod'] = 'dotproduct'
     return data
 
 

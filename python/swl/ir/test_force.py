@@ -358,7 +358,7 @@ class TestForce(ut.TestCase):
         self.assertEqual([step['id'] for step in data['steps']], ['map_lambda_1', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
         self.assertEqual(data['steps'][1]['bindings']['bam']['kind'], 'array_field')
-        self.assertIn('xs', data['inputs'])
+        self.assertIn('x', data['inputs'])
 
     def test_map_lambda_with_inner_task_forces_as_generated_mapped_workflow(self):
         files, root = self._files()
@@ -369,6 +369,7 @@ class TestForce(ut.TestCase):
         self.assertEqual(definition['class'], 'Workflow')
         self.assertEqual([step['id'] for step in definition['dag']['steps']], ['sub'])
         self.assertEqual(data['steps'][1]['bindings']['bam']['kind'], 'array_field')
+        self.assertEqual(sorted(data['inputs'].keys()), ['x'])
 
     def test_map_partial_task_application_produces_mapped_step(self):
         files, root = self._files()
@@ -387,14 +388,16 @@ class TestForce(ut.TestCase):
         data = force_file(os.path.join(root, 'map_workflow.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['mk', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
-        self.assertEqual(data['steps'][0]['map']['source']['source'], 'input')
+        self.assertEqual(data['steps'][0]['map']['ports'], ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
+        self.assertEqual(sorted(data['inputs'].keys()), ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
+        self.assertIn('fastq1', data['inputs'])
 
     def test_map_imported_workflow_with_partial_task_inside_produces_mapped_step(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_workflow_partial.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['mkp', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
-        self.assertEqual(data['steps'][0]['map']['source']['source'], 'input')
+        self.assertEqual(data['steps'][0]['map']['ports'], ['fastq1', 'fastq2', 'outbase'])
 
     def test_force_rejects_unnormalized_map_callable(self):
         with self.assertRaisesRegex(ValueError, 'map requires normalized executable callable during forcing'):

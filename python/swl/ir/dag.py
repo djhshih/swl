@@ -159,7 +159,7 @@ class DAG:
                 }),
                 deps=list(item.get('deps', [])),
                 type=item.get('type', 'task'),
-                **({'source': _binding_from_dict(item['map']['source'], inputs, step_by_id), 'map': item.get('map')} if item.get('map') is not None else {}),
+                **({'source': _binding_from_dict(item['map']['source'], inputs, step_by_id) if item.get('map', {}).get('source') is not None else None, 'map': item.get('map')} if item.get('map') is not None else {}),
             )
             steps.append(step)
             step_by_id[step.id] = step
@@ -216,7 +216,8 @@ def _binding_to_dict(value):
 def _binding_from_dict(data, inputs, steps):
     source = data.get('source')
     if source == 'input':
-        return inputs[data['name']]
+        name = data['name']
+        return inputs.get(name, Input(name))
     if source == 'literal':
         return Literal(data.get('value'))
     if source == 'step':

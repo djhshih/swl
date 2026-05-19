@@ -362,18 +362,47 @@ class Forcer:
         target = fn.function
         outputs = list(target.signature.outputs.keys())
         step_id = self._step_id(target.name)
+        bindings, map_info = self._mapped_step_bindings(fn, source)
         step = MappedStep(
             id=step_id,
             path=target.path,
             source=source,
             outputs=outputs,
+            bindings=bindings,
             task=self._tool_definition(target.path) if target.kind == 'task' else self._workflow_definition(target),
-            deps=sorted(self._step_dependencies({'source': source})),
+            deps=sorted(self._step_dependencies(bindings or {'source': source})),
             type=target.kind,
-            map={'source': _binding_to_public_dict(source)},
+            map=map_info,
         )
         self.steps.append(step)
         return step
+
+    def _mapped_step_bindings(self, fn, source):
+        signature = self._forced_signature(fn)
+        if signature is None:
+            return {}, {'source': _binding_to_public_dict(source)}
+        if isinstance(source, Input) and source.name == 'xs':
+            bindings = {
+                name: self._input(name, self._array_input_spec(spec))
+                for name, spec in signature.inputs.items()
+            }
+            return bindings, {'source': _binding_to_public_dict(source), 'ports': list(bindings.keys())}
+        return {}, {'source': _binding_to_public_dict(source)}
+
+    def _array_input_spec(self, spec):
+        if spec is None:
+            return None
+        class _Spec:
+            pass
+        array = _Spec()
+        array.type = type('TypeValue', (), {'value': self._as_array_type(spec.type.value if getattr(spec, 'type', None) is not None else None)})() if spec is not None else None
+        array.desc = getattr(spec, 'desc', None)
+        return array
+
+    def _as_array_type(self, typ):
+        if typ is None or (isinstance(typ, str) and typ.startswith('[') and typ.endswith(']')):
+            return typ
+        return f'[{typ}]'
 
     def _step_id(self, name):
         count = self.step_name_counts.get(name, 0) + 1
@@ -553,6 +582,9 @@ class Forcer:
         if not unique:
             return None
         if len(unique) > 1:
+            array_unique = list(dict.fromkeys(self._as_array_type(value) for value in unique))
+            if len(array_unique) == 1:
+                return array_unique[0]
             raise ValueError(f'Conflicting input types during forcing: {name}: {unique}')
         return unique[0]
 
@@ -579,8 +611,9 @@ class Forcer:
                         used.add(item.name)
             mapped_source = getattr(step, 'source', None)
             if mapped_source is not None:
+                mapped_ports = getattr(step, 'map', {}).get('ports') if getattr(step, 'map', None) is not None else []
                 for item in self._walk_values(mapped_source):
-                    if isinstance(item, Input):
+                    if isinstance(item, Input) and not mapped_ports:
                         used.add(item.name)
         for value in outputs.values():
             for item in self._walk_values(value):
@@ -590,9 +623,10 @@ class Forcer:
             mapped = getattr(step, 'map', None)
             if mapped is not None:
                 source = mapped.get('source', {})
-                if source.get('source') == 'input' and source.get('name') not in self.inputs:
+                ports = mapped.get('ports') or []
+                if source.get('source') == 'input' and source.get('name') not in self.inputs and not ports:
                     self.inputs[source['name']] = Input(source['name'])
-                if source.get('source') == 'input':
+                if source.get('source') == 'input' and not ports:
                     used.add(source['name'])
         self.inputs = {name: value for name, value in self.inputs.items() if name in used}
 
