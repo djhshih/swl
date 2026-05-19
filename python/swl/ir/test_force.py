@@ -311,9 +311,9 @@ class TestForce(ut.TestCase):
     def test_reused_computation_across_imported_workflow_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'shadow.swl'), files).to_dict()
-        self.assertEqual([task['id'] for task in data['steps']], ['align'])
+        self.assertEqual([task['id'] for task in data['steps']], ['align', 'sub'])
         self.assertEqual(data['outputs']['bam']['step'], 'align')
-        self.assertEqual(data['outputs']['bam2']['step'], 'align')
+        self.assertEqual(data['outputs']['bam2']['step'], 'sub')
 
     def test_partial_application_reuse_is_deduped(self):
         files, root = self._files()
@@ -325,16 +325,16 @@ class TestForce(ut.TestCase):
     def test_workflow_partial_application_reuse_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'workflow_partial_reuse.swl'), files).to_dict()
-        self.assertEqual([task['id'] for task in data['steps']], ['align'])
-        self.assertEqual(data['outputs']['bam']['step'], 'align')
-        self.assertEqual(data['outputs']['bam2']['step'], 'align')
+        self.assertEqual([task['id'] for task in data['steps']], ['mk'])
+        self.assertEqual(data['outputs']['bam']['step'], 'mk')
+        self.assertEqual(data['outputs']['bam2']['step'], 'mk')
 
     def test_nested_workflow_value_reuse_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'nested_lambda_reuse.swl'), files).to_dict()
-        self.assertEqual([task['id'] for task in data['steps']], ['align'])
-        self.assertEqual(data['outputs']['bam']['step'], 'align')
-        self.assertEqual(data['outputs']['bam2']['step'], 'align')
+        self.assertEqual([task['id'] for task in data['steps']], ['sub'])
+        self.assertEqual(data['outputs']['bam']['step'], 'sub')
+        self.assertEqual(data['outputs']['bam2']['step'], 'sub')
 
     def test_partial_application_with_different_args_is_not_deduped(self):
         files, root = self._files()
@@ -386,15 +386,15 @@ class TestForce(ut.TestCase):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_workflow.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['mk', 'merge'])
-        self.assertEqual(data['steps'][1]['type'], 'workflow')
-        self.assertEqual(data['steps'][1]['map']['source']['source'], 'input')
+        self.assertEqual(data['steps'][0]['type'], 'workflow')
+        self.assertEqual(data['steps'][0]['map']['source']['source'], 'input')
 
     def test_map_imported_workflow_with_partial_task_inside_produces_mapped_step(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_workflow_partial.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['mkp', 'merge'])
-        self.assertEqual(data['steps'][1]['type'], 'workflow')
-        self.assertEqual(data['steps'][1]['map']['source']['source'], 'input')
+        self.assertEqual(data['steps'][0]['type'], 'workflow')
+        self.assertEqual(data['steps'][0]['map']['source']['source'], 'input')
 
     def test_force_rejects_unnormalized_map_callable(self):
         with self.assertRaisesRegex(ValueError, 'map requires normalized executable callable during forcing'):

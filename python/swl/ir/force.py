@@ -200,7 +200,7 @@ class Forcer:
             if fn.function.kind == 'workflow':
                 if not self._saturated_signature(fn.function, bound):
                     return ForcedFunction(fn.function, bound, fn.signature)
-                return self._force_workflow(fn.function, bound)
+                return self._emit_workflow_call(fn.function, bound)
 
         if isinstance(fn.function, ir.Lambda):
             if not isinstance(bound, Record):
@@ -233,10 +233,14 @@ class Forcer:
         return self._merge_values(old, new)
 
     def _saturated_signature(self, function, bound):
+        if self._is_opaque_record_carrier(bound):
+            return True
         available = self._available_inputs(bound)
         return all(name in available for name in function.signature.inputs.keys())
 
     def _saturated_task(self, function, bound):
+        if self._is_opaque_record_carrier(bound):
+            return True
         available = self._available_inputs(bound)
         if len(available) == 1 and function.signature.inputs:
             first = next(iter(function.signature.inputs.keys()))
@@ -272,17 +276,36 @@ class Forcer:
         names = list(function.signature.inputs.keys())
         if not names:
             return {}
-        if not self._looks_record_like(bound):
+        if not self._can_project_record_fields(bound):
             return {names[0]: bound}
         return {name: self._project_input(bound, name) for name in names}
 
     def _looks_record_like(self, value):
         return isinstance(value, (Record, Merge))
 
+    def _can_project_record_fields(self, value):
+        return isinstance(value, (Input, Field, Record, Merge))
+
+    def _is_opaque_record_carrier(self, value):
+        if isinstance(value, (Input, Field)):
+            return True
+        if isinstance(value, Record) and len(value.fields) == 1:
+            only = next(iter(value.fields.values()))
+            return isinstance(only, (Input, Field))
+        return False
+
     def _project_field(self, source, name):
+        if isinstance(source, Input):
+            return Field(source, name)
+        if isinstance(source, Field):
+            return Field(source, name)
         if isinstance(source, Record):
             if name in source.fields:
                 return source.fields[name]
+            if len(source.fields) == 1:
+                only = next(iter(source.fields.values()))
+                if isinstance(only, (Input, Field)):
+                    return Field(only, name)
             return _SENTINEL
         if isinstance(source, Merge):
             projected = self._project_field(source.right, name)
@@ -299,7 +322,7 @@ class Forcer:
         return Merge(left, right)
 
     def _project_input(self, value, name):
-        if isinstance(value, (Record, Merge)):
+        if self._can_project_record_fields(value):
             projected = self._project_field(value, name)
             if projected is not _SENTINEL:
                 return projected
@@ -369,6 +392,28 @@ class Forcer:
             return name
         return f'{name}_{count}'
 
+    def _emit_workflow_call(self, function, bound):
+        inputs = self._normalize_task_inputs(function, bound)
+        key = self._step_call_key(function, inputs)
+        if key in self.step_cache:
+            return self.step_cache[key]
+        outputs = list(function.signature.outputs.keys())
+        call_id = self._task_id(function.name)
+        call = StepCall(
+            id=call_id,
+            path=function.path,
+            bindings=inputs,
+            outputs=outputs,
+            run={},
+            task=self._workflow_definition(function),
+            deps=sorted(self._step_dependencies(inputs)),
+            type='workflow',
+        )
+        self.steps.append(call)
+        result = Record({name: Field(call, name) for name in outputs})
+        self.step_cache[key] = result
+        return result
+
     def _force_workflow(self, function, bound):
         body = function.body
         if isinstance(body, ir.Lambda):
@@ -406,7 +451,7 @@ class Forcer:
 
     def _normalize_task_run(self, function, bound):
         names = list(function.signature.run.keys())
-        if not names or not self._looks_record_like(bound):
+        if not names or not self._can_project_record_fields(bound):
             return {}
         return {
             name: self._project_input(bound, name)

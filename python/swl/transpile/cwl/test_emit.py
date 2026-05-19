@@ -191,11 +191,13 @@ merge = import "merge.sh"
         with self.assertRaisesRegex(ValueError, 'Workflow must evaluate to a function'):
             force_file(os.path.join(root, 'literal_output.swl'), files)
 
-    def test_rejects_imported_workflow_function_output(self):
+    def test_imported_workflow_output_transpiles_as_workflow_step(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'import_partial.swl'), files)
-        with self.assertRaisesRegex(ValueError, 'Unsupported workflow output'):
-            transpile_dag_dict(dag.to_dict())
+        cwl = transpile_dag_dict(dag.to_dict())
+        workflow = cwl['$graph'][-1]
+        steps = {item['id']: item for item in workflow['steps']}
+        self.assertEqual(steps['#main/partial']['run'], '#partial')
 
     def test_rejects_merged_task_input_binding(self):
         task = TaskCall(
