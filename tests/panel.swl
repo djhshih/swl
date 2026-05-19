@@ -3,4 +3,4 @@ merge = import "merge_bcf.sh"
 
 \xs -> 
    calls = map call_variant xs
-   merge { bcf: calls.bcf }
+   merge { bcf: calls.bcf, outbase: "merged" }
