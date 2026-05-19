@@ -194,6 +194,8 @@ else
 		-o tests/cwl/pipe.cwl
 	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/explicit.json \
 		-o tests/cwl/explicit.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/panel.json \
+		-o tests/cwl/panel.cwl
 
 	compare_files tests/cwl/pipe.cwl tests/cwl/function.cwl
 	compare_files tests/cwl/explicit.cwl tests/cwl/function.cwl
