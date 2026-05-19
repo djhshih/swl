@@ -1,4 +1,5 @@
 Python:
+- check that panel.cwl is transpiled correctly
 - Common Subexpression Elimination in lower.py
 - interpolation in bash command of task
 - expression evaluation (e.g. memory / cpu) in the task
