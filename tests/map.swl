@@ -1,4 +1,3 @@
 call_variant = import "pipe.swl"
 
-\xs ->
-   map call_variant xs
+map call_variant
