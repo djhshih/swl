@@ -32,7 +32,7 @@ class ClosedRecord:
 
 
 class FunctionValue:
-    def __init__(self, name: str, signature: TaskSignature, kind: str, first_input: str = None, param=None, body=None, env=None, imports=None, imported_check=None, batch=False, mapped_from=None):
+    def __init__(self, name: str, signature: TaskSignature, kind: str, first_input: str = None, param=None, body=None, env=None, imports=None, imported_check=None, batch=False):
         self.name = name
         self.signature = signature
         self.kind = kind
@@ -43,7 +43,6 @@ class FunctionValue:
         self.imports = dict(imports or {})
         self.imported_check = imported_check
         self.batch = batch
-        self.mapped_from = mapped_from
 
     def _first_input_name(self):
         for name in self.signature.inputs.keys():
@@ -79,9 +78,9 @@ class ComputationValue:
         return self.function.signature
 
 
-class ArrayValue:
-    def __init__(self, element=None):
-        self.element = element
+class TableValue:
+    def __init__(self, columns=None):
+        self.columns = dict(columns or {})
 
 
 class UnknownValue:
@@ -89,12 +88,13 @@ class UnknownValue:
 
 
 class WorkflowCheck:
-    def __init__(self, tree, imports, errors, inferred_inputs, signature=None):
+    def __init__(self, tree, imports, errors, inferred_inputs, signature=None, is_batch=False):
         self.tree = tree
         self.imports = imports
         self.errors = list(errors)
         self.inferred_inputs = inferred_inputs
         self.signature = signature
+        self.is_batch = is_batch
 
     @property
     def chain_errors(self):
@@ -125,11 +125,11 @@ class Checker:
                 checker.add_task(imported.name, imported.signature)
             errors.extend(self._check_chains(tree, checker))
             inferred_inputs, infer_errors = self._infer_inputs(tree, imports)
+            signature, is_batch = self._build_workflow_signature(tree, imports, inferred_inputs, errors)
             errors.extend(infer_errors)
-            signature = self._build_workflow_signature(tree, imports, inferred_inputs, errors)
             if signature is None:
                 errors.append('Workflow must evaluate to a function')
-            return WorkflowCheck(tree, imports, errors, inferred_inputs, signature)
+            return WorkflowCheck(tree, imports, errors, inferred_inputs, signature, is_batch)
         finally:
             self._loading.pop()
 
@@ -241,11 +241,17 @@ class Checker:
                     if self._match_import(expr.value) is not None:
                         continue
                     env[expr.id.name] = self._eval_expr(expr.value, imports, env, demanded, issues)
-            if final.param.name == 'xs':
-                env[final.param.name] = ArrayValue(OpenRecord())
-            else:
-                env[final.param.name] = OpenRecord()
+            env[final.param.name] = OpenRecord()
             self._eval_function_body(final, imports, env, demanded, issues)
+
+            if self._uses_map(final.body):
+                table_env = dict(env)
+                table_env[final.param.name] = TableValue({name: UnknownValue() for name in demanded})
+                table_issues = []
+                self._eval_function_body(final, imports, table_env, set(), table_issues)
+                if not issues:
+                    demanded = {final.param.name}
+                    issues.extend(table_issues)
             return demanded, issues
 
         env = {}
@@ -261,7 +267,7 @@ class Checker:
 
     def _build_workflow_signature(self, tree, imports, inferred_inputs, issues):
         if tree.type != wf_node.NodeType.block or not tree.body:
-            return None
+            return None, False
 
         final = tree.body[-1]
         if final.type == wf_node.NodeType.fun:
@@ -271,20 +277,31 @@ class Checker:
                     if self._match_import(expr.value) is not None:
                         continue
                     env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
-            if final.param.name == 'xs':
-                env[final.param.name] = ArrayValue(OpenRecord(inferred_inputs))
+
+            record_env = dict(env)
+            record_env[final.param.name] = self._initial_param_value(final, assume_batch=False, inferred_inputs=inferred_inputs)
+            record_result = self._eval_function_body(final, imports, record_env, set(), list(issues))
+
+            table_env = dict(env)
+            table_env[final.param.name] = self._initial_param_value(final, assume_batch=True, inferred_inputs=inferred_inputs)
+            table_result = self._eval_function_body(final, imports, table_env, set(), list(issues))
+
+            if self._value_is_table(table_result) or self._uses_map(final.body):
+                chosen_result = table_result
+                is_batch = True
             else:
-                env[final.param.name] = OpenRecord(inferred_inputs)
-            result = self._eval_function_body(final, imports, env, set(), issues)
-            if final.param.name == 'xs':
+                chosen_result = record_result
+                is_batch = False
+
+            if is_batch:
                 inputs = {final.param.name: Param(final.param.name, None)}
             else:
                 inputs = {
                     name: Param(name, None)
                     for name in sorted(inferred_inputs)
                 }
-            outputs = self._signature_outputs(result)
-            return TaskSignature(inputs, outputs, {})
+            outputs = self._signature_outputs(chosen_result)
+            return TaskSignature(inputs, outputs, {}), is_batch
 
         env = {}
         for expr in tree.body[:-1]:
@@ -294,10 +311,10 @@ class Checker:
                 env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
         result = self._eval_expr(final, imports, env, set(), issues)
         if isinstance(result, FunctionValue):
-            return result.signature
+            return result.signature, result.batch
         if isinstance(result, ClosureValue):
-            return result.signature
-        return None
+            return result.signature, result.function.batch
+        return None, False
 
     def _signature_outputs(self, value):
         if isinstance(value, ComputationValue):
@@ -339,7 +356,7 @@ class Checker:
                     imported.kind,
                     imports=imported.check.imports if imported.check is not None else None,
                     imported_check=imported.check,
-                    batch=self._import_is_batch(imported),
+                    batch=imported.check.is_batch if imported.check is not None else False,
                 )
             return UnknownValue()
 
@@ -351,7 +368,8 @@ class Checker:
             return ClosedRecord(fields)
 
         if expr.type == wf_node.NodeType.get:
-            rec = self._eval_expr(expr.rec, imports, env, demanded, issues)
+            rec_expr = expr.rec
+            rec = self._eval_expr(rec_expr, imports, env, demanded, issues)
             field = expr.member.name
             if isinstance(rec, OpenRecord):
                 demanded.add(field)
@@ -361,12 +379,13 @@ class Checker:
                 if field in rec.fields:
                     return rec.fields[field]
                 return UnknownValue()
-            if isinstance(rec, ArrayValue):
-                fields = self._field_map(rec.element)
-                if fields is None or field not in fields:
-                    issues.append(f'Missing field on mapped result: {field}')
-                    return UnknownValue()
-                return ArrayValue(fields[field])
+            if isinstance(rec, TableValue):
+                if field in rec.columns:
+                    return rec.columns[field]
+                if self._uses_map(rec_expr):
+                    issues.append(f'Missing field on tab: {field}')
+                rec.columns[field] = UnknownValue()
+                return rec.columns[field]
             if isinstance(rec, ComputationValue):
                 outputs = self._field_map(rec.output_value)
                 if outputs is not None and field in outputs:
@@ -416,6 +435,9 @@ class Checker:
             local_env[expr.param.name] = OpenRecord()
             body_value = self._eval_function_body(expr, imports, local_env, fn_demanded, fn_issues)
             body_outputs = self._signature_outputs(body_value)
+
+            if isinstance(body_value, (FunctionValue, ClosureValue)):
+                body_outputs = dict(body_value.signature.outputs)
             inputs = {
                 name: Param(name, None)
                 for name in sorted(fn_demanded)
@@ -429,7 +451,7 @@ class Checker:
                 body=expr.body,
                 env=env,
                 imports=imports,
-                batch=expr.param.name == 'xs',
+                batch=self._value_is_table(body_value),
             )
 
         if expr.type == wf_node.NodeType.chain:
@@ -447,11 +469,23 @@ class Checker:
             return None
         return left.arg, expr.arg
 
-    def _import_is_batch(self, imported):
-        if imported.check is None or imported.check.tree.type != wf_node.NodeType.block or not imported.check.tree.body:
-            return False
-        final = imported.check.tree.body[-1]
-        return final.type == wf_node.NodeType.fun and final.param.name == 'xs'
+    def _uses_map(self, expr):
+        if expr.type == wf_node.NodeType.apply and self._match_map(expr) is not None:
+            return True
+        return any(self._uses_map(child) for child in self._children(expr))
+
+    def _initial_param_value(self, fn, assume_batch=False, inferred_inputs=None):
+        if assume_batch:
+            columns = {}
+            if inferred_inputs is not None:
+                columns = {name: UnknownValue() for name in inferred_inputs}
+            return TableValue(columns)
+        if inferred_inputs is not None:
+            return OpenRecord(inferred_inputs)
+        return OpenRecord()
+
+    def _value_is_table(self, value):
+        return isinstance(value, TableValue)
 
     def _apply_map(self, fun, arg, issues):
         target = fun.function if isinstance(fun, ClosureValue) else fun
@@ -462,12 +496,12 @@ class Checker:
             issues.append('map on batch workflow is not supported')
             return UnknownValue()
         if len(target.signature.outputs) == 0:
-            issues.append('map requires a function with record output')
+            issues.append('map requires a function with rec output')
             return UnknownValue()
-        if not isinstance(arg, ArrayValue):
-            issues.append('map requires an array argument')
+        if not isinstance(arg, TableValue):
+            issues.append('map requires a tab argument')
             return UnknownValue()
-        return ArrayValue(ClosedRecord({name: UnknownValue() for name in target.signature.outputs.keys()}))
+        return TableValue({name: UnknownValue() for name in target.signature.outputs.keys()})
 
     def _apply(self, fun, arg, demanded, issues):
         if isinstance(fun, ClosureValue):
@@ -535,6 +569,8 @@ class Checker:
     def _required_missing(self, signature, available):
         missing = set()
         fields = self._field_map(available)
+        if fields is None:
+            return set(signature.inputs.keys())
         for name, param in signature.inputs.items():
             if name in fields:
                 continue
@@ -551,7 +587,11 @@ class Checker:
         if isinstance(arg, ClosureValue):
             return ClosedRecord({name: UnknownValue() for name in arg.signature.outputs.keys()})
         if isinstance(arg, FunctionValue):
+            if arg.kind == 'lambda':
+                return arg
             return ClosedRecord({name: UnknownValue() for name in arg.signature.outputs.keys()})
+        if isinstance(arg, TableValue):
+            return arg
         if fun.first_input is not None:
             return ClosedRecord({fun.first_input: arg})
         return ClosedRecord({})

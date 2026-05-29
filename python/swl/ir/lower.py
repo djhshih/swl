@@ -203,9 +203,6 @@ class Lowerer:
         if isinstance(node, ir.Field):
             return ir.Field(self.normalize(node.record), node.name)
 
-        if isinstance(node, ir.ArrayField):
-            return ir.ArrayField(self.normalize(node.record_array), node.name)
-
         if isinstance(node, ir.Update):
             return self._normalize_update(self.normalize(node.left), self.normalize(node.right))
 
@@ -295,8 +292,6 @@ class Lowerer:
             return ir.Record({name: self._normalize_with_bindings(value, binding_map) for name, value in node.fields.items()})
         if isinstance(node, ir.Field):
             return ir.Field(self._normalize_with_bindings(node.record, binding_map), node.name)
-        if isinstance(node, ir.ArrayField):
-            return ir.ArrayField(self._normalize_with_bindings(node.record_array, binding_map), node.name)
         if isinstance(node, ir.Update):
             return ir.Update(self._normalize_with_bindings(node.left, binding_map), self._normalize_with_bindings(node.right, binding_map))
         if isinstance(node, ir.Block):

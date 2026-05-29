@@ -1,7 +1,7 @@
 from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
-from swl.ir.dag import DAG, ArrayField, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep
+from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import signature_from_task
 from swl.syntax.task import interpolation as interp
@@ -77,9 +77,6 @@ class Forcer:
         if isinstance(node, ir.Field):
             self._assert_canonical(node.record)
             return
-        if isinstance(node, ir.ArrayField):
-            self._assert_canonical(node.record_array)
-            return
         if isinstance(node, ir.Map):
             self._assert_canonical(node.function)
             self._assert_canonical(node.arg)
@@ -114,17 +111,9 @@ class Forcer:
                 return projected
             if isinstance(source, MappedStep):
                 if node.name not in source.outputs:
-                    raise ValueError(f'Missing field on mapped result: {node.name}')
-                return ArrayField(source, node.name)
+                    raise ValueError(f'Missing field on tab: {node.name}')
+                return Field(source, node.name)
             return Field(source, node.name)
-
-        if isinstance(node, ir.ArrayField):
-            source = self.force_value(node.record_array, env)
-            if isinstance(source, MappedStep):
-                if node.name not in source.outputs:
-                    raise ValueError(f'Missing field on mapped result: {node.name}')
-                return ArrayField(source, node.name)
-            return ArrayField(source, node.name)
 
         if isinstance(node, ir.Update):
             return self._merge_values(self.force_value(node.left, env), self.force_value(node.right, env))
@@ -254,8 +243,6 @@ class Forcer:
             return set(value.outputs)
         if isinstance(value, Field):
             return set()
-        if isinstance(value, ArrayField):
-            return set()
         if isinstance(value, Literal):
             return set()
         return set()
@@ -344,10 +331,7 @@ class Forcer:
     def _force_map(self, fn, arg):
         if not isinstance(fn, ForcedFunction):
             raise ValueError(f'Cannot map non-function value during forcing: {fn!r}')
-        source = arg
-        if isinstance(arg, Record) and 'xs' in arg.fields:
-            source = arg.fields['xs']
-        return self._apply_mapped(fn, source)
+        return self._apply_mapped(fn, arg)
 
     def _apply_mapped(self, fn, source):
         if not isinstance(fn, ForcedFunction):
@@ -381,23 +365,23 @@ class Forcer:
         signature = self._forced_signature(fn)
         if signature is None:
             return {}, {'source': _binding_to_public_dict(source)}
-        if isinstance(source, Input) and source.name == 'xs':
+        if isinstance(source, Input):
             bindings = {
-                name: self._input(name, self._array_input_spec(spec))
+                name: self._input(name, self._tab_column_input_spec(spec))
                 for name, spec in signature.inputs.items()
             }
             return bindings, {'source': _binding_to_public_dict(source), 'ports': list(bindings.keys())}
         return {}, {'source': _binding_to_public_dict(source)}
 
-    def _array_input_spec(self, spec):
+    def _tab_column_input_spec(self, spec):
         if spec is None:
             return None
         class _Spec:
             pass
-        array = _Spec()
-        array.type = type('TypeValue', (), {'value': self._as_array_type(spec.type.value if getattr(spec, 'type', None) is not None else None)})() if spec is not None else None
-        array.desc = getattr(spec, 'desc', None)
-        return array
+        column = _Spec()
+        column.type = type('TypeValue', (), {'value': self._as_array_type(spec.type.value if getattr(spec, 'type', None) is not None else None)})() if spec is not None else None
+        column.desc = getattr(spec, 'desc', None)
+        return column
 
     def _as_array_type(self, typ):
         if typ is None or (isinstance(typ, str) and typ.startswith('[') and typ.endswith(']')):
@@ -433,21 +417,9 @@ class Forcer:
         self.step_cache[key] = result
         return result
 
-    def _mapped_element_input(self, source):
-        if isinstance(source, Input):
-            return Record({source.name: Input(source.name)})
-        if isinstance(source, ArrayField):
-            return Field(source.source, source.name)
-        if isinstance(source, MappedStep):
-            return Record({name: Field(source, name) for name in source.outputs})
-        return source
-
     def _is_batch_function(self, fn):
-        signature = self._forced_signature(fn)
-        if signature is None:
-            return False
-        input_names = list(signature.inputs.keys())
-        return input_names == ['xs']
+        function = fn.function if isinstance(fn, ForcedFunction) else fn
+        return bool(getattr(function, 'is_batch', False))
 
     def _step_call_key(self, function, inputs):
         return (
@@ -642,8 +614,6 @@ class Forcer:
         yield value
         if isinstance(value, Field):
             yield from self._walk_values(value.source)
-        elif isinstance(value, ArrayField):
-            yield from self._walk_values(value.source)
         elif isinstance(value, Merge):
             yield from self._walk_values(value.left)
             yield from self._walk_values(value.right)
@@ -655,8 +625,6 @@ class Forcer:
         deps = set()
         for item in self._walk_values(value):
             if isinstance(item, Field) and isinstance(item.source, (StepCall, MappedStep)):
-                deps.add(item.source.id)
-            if isinstance(item, ArrayField) and isinstance(item.source, (StepCall, MappedStep)):
                 deps.add(item.source.id)
         return deps
 
@@ -713,8 +681,6 @@ class Forcer:
         if isinstance(normalized, (Input, Literal)):
             return
         if isinstance(normalized, Field) and isinstance(normalized.source, (Input, StepCall, MappedStep)):
-            return
-        if isinstance(normalized, ArrayField) and isinstance(normalized.source, (StepCall, MappedStep)):
             return
         raise ValueError(f'Workflow output did not normalize to a wireable value: {name}: {normalized!r}')
 
@@ -804,8 +770,6 @@ def _value_key(value):
         return ('lit', value.value)
     if isinstance(value, Field):
         return ('field', _value_key(value.source), value.name)
-    if isinstance(value, ArrayField):
-        return ('array_field', _value_key(value.source), value.name)
     if isinstance(value, Merge):
         return _merge_key(value)
     if isinstance(value, Record):
@@ -832,8 +796,6 @@ def _binding_to_public_dict(value):
         return {'source': 'input', 'name': value.name}
     if isinstance(value, Field) and isinstance(value.source, (StepCall, MappedStep)):
         return {'source': 'step', 'step': value.source.id, 'output': value.name}
-    if isinstance(value, ArrayField) and isinstance(value.source, (StepCall, MappedStep)):
-        return {'source': 'array_field', 'step': value.source.id, 'output': value.name}
     return {'source': 'value'}
 
 

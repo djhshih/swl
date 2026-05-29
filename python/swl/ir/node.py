@@ -64,20 +64,6 @@ class Field(Node):
 
 
 @dataclass(frozen=True)
-class ArrayField(Node):
-    record_array: Node
-    name: str
-
-    def __repr__(self):
-        return (
-            f'ArrayField(\n'
-            f'  record_array={self.record_array!r},\n'
-            f'  name={self.name!r},\n'
-            f')'
-        )
-
-
-@dataclass(frozen=True)
 class Update(Node):
     left: Node
     right: Node

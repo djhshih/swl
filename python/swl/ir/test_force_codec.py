@@ -94,7 +94,7 @@ merge = import "merge.sh"
         restored = DAG.from_dict(json.loads(payload))
         self.assertEqual(restored.to_dict(), dag.to_dict())
 
-    def test_forced_dag_json_contains_no_mapped_value_encoding(self):
+    def test_forced_dag_json_contains_no_legacy_array_field_encoding(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'batch.swl'), files)
         payload = json.dumps(dag.to_dict(), sort_keys=True)

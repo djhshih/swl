@@ -192,10 +192,10 @@ def _canonical_binding(value):
         return ('input', value.name)
     if kind == 'Literal':
         return ('literal', value.value)
-    if kind == 'Field' and value.source.__class__.__name__ in ('StepCall', 'MappedStep'):
+    if kind == 'Field' and value.source.__class__.__name__ == 'MappedStep':
+        return ('tab_column_step_output', value.source, value.name)
+    if kind == 'Field' and value.source.__class__.__name__ == 'StepCall':
         return ('step_output', value.source, value.name)
-    if kind == 'ArrayField' and value.source.__class__.__name__ == 'MappedStep':
-        return ('array_step_output', value.source, value.name)
     if kind == 'Field' and value.source.__class__.__name__ == 'Input':
         return ('input_field', value.source.name, value.name)
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
@@ -245,7 +245,7 @@ def _binding_source(workflow_id, value):
     if kind == 'step_output':
         step, output = rest
         return f'#main/{step.id}/{output}'
-    if kind == 'array_step_output':
+    if kind == 'tab_column_step_output':
         step, output = rest
         return f'#main/{step.id}/{output}'
     if kind == 'input_field':
@@ -261,7 +261,7 @@ def _infer_output_type(name, value, dag):
     if kind == 'step_output':
         step, output = rest
         return _cwl_type(step.task['outputs'][output]['type'])
-    if kind == 'array_step_output':
+    if kind == 'tab_column_step_output':
         step, output = rest
         return _cwl_type('[' + step.task['outputs'][output]['type'] + ']')
     if kind == 'input_field':

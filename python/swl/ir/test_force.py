@@ -346,7 +346,7 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['outputs']['bam']['step'], 'align')
         self.assertEqual(data['outputs']['bam2']['step'], 'align_2')
 
-    def test_map_force_produces_mapped_step_and_array_field(self):
+    def test_map_force_produces_mapped_step_and_tab_column_binding(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'batch.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['align', 'merge'])
