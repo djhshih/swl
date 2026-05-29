@@ -78,14 +78,32 @@ A block is one or more statements, each ending with `\n` (newline).
 
 - The **final line in a block must be an `expr`** (not a binding).
 
+#### Types
+
+- **record** (`rec`): A collection of key-value pairs where values are scalars, functions, or other records: `{ str: str|file|num|rec, ... }`
+- **table** (`tab`): A specialized record whose top-level fields are homogeneous arrays of equal length: `{ str: [t], ... }`
+- A `tab` is the canonical batch value in SWL. It is record-shaped, but type-distinct from plain `rec` for workflow typing.
+- If a table contains fields with uneven array lengths, it triggers a static validation error.
+- Row semantics for a table are derived by zipping aligned array positions across all fields; rows are not a separate surface type.
+
+- **task**: `rec -> rec`
+- **simple workflow**: `rec -> rec`
+- **batch workflow**: `tab -> tab` or `tab -> rec`
+
 #### Built-in functions
-- `import` imports a task or workflow as a function
+
+- `import: str -> fun` imports a task or workflow as a function
+- `map: (rec -> rec) -> tab -> tab` maps a `rec -> rec` function over the logical rows of a table and returns a table
+- `map_by: (rec -> rec) -> str -> tab -> tab` maps a function over table, grouping the rows
+  of the table by a key, to return a table
 
 #### Workflow well-formedness
+
 - A workflow must evaluate to a function.
 - A workflow whose final value is a scalar, record, or saturated computation is invalid.
 
 #### Name binding rules
+
 - Variable names are unique within their immediate scope.
 - A variable name cannot be bound twice in the same scope.
 - Import bindings follow the same rule; duplicate import names in the same scope are errors.
@@ -280,15 +298,29 @@ Upon providing inputs to a workflow ...
 ### Records
 - Collection of key-value pairs
 - Keys are field names
-- Values are numbers, strings, or records
+- Values are numbers, strings, records, functions, or arrays where the type system permits them
+
+### Tables
+- A table is the canonical batch value
+- A table is columnar: each field is an array, and all top-level arrays have the same length
+- A table has derived row semantics: row `i` is formed by taking element `i` from each field array
+- Field access on a table is ordinary record field access; if `xs : tab` and `field : [t]`, then `xs.field : [t]`
+- SWL does not define a separate array-of-record batch type for workflow semantics
 
 ### Functions
 - Importing a task or a workflow returns a function
 - Functions can defined using a lambda
 
 ### Function Application
-- `f r` applies function `f` to record `r`
+- `f r` applies function `f` to a record or table argument of the required type
 - Partial application returns a new function
+
+### Map
+- `map` is a builtin
+- If `f : rec -> rec`, then `map f : tab -> tab`
+- `map f xs` applies `f` to each logical row of `xs`
+- The result is reassembled as a table
+- If `f` is batch-typed, then `map f` is a compile-time error for now
 
 ### Pipeline
 - `A | B | C` desugars to:
@@ -300,9 +332,12 @@ Upon providing inputs to a workflow ...
     a // b // c
 ```
 
-### Record Merge
-- `r1 | r2` merges records, right overrides left
+### Record Update
+
+- `r1 // r2` merges records or tables, right overrides left
 - Extra fields are allowed (ignored)
+- If a table `t` is updated with a record `r` via `t // r`, scalar properties in `r` are implicitly duplicated across all rows of `t` to preserve table length integrity. Similarly for `r // t`.
+- If both sides are tables, matching fields must remain array-typed and length-compatible.
 
 ---
 

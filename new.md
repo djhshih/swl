@@ -3,17 +3,14 @@
 Tasks and workflows are record-oriented, but with batch support there are now distinct categories that should be described separately.
 
 - `rec`: `{ str: file|num|str, ... }`
-- `[rec]`: homogeneous array of records
+- `tab`: record of arrays; each entry must be an array; each array must be the same length
 - **task**: `rec -> rec`
 - **simple workflow**: `rec -> rec`
-- **batch workflow**: either `[rec] -> rec` or `[rec] -> [rec]`
+- **batch workflow**: `tab -> rec` or `tab -> tab`
 
 For the first implementation, `map` creates batch behavior. A mapped callee may be:
 - a task (`rec -> rec`)
 - a simple workflow (`rec -> rec`)
-
-For now, mapping over a batch workflow is forbidden.
-That is, if a workflow already takes `[rec]`, then `map` may not be applied to it.
 
 ## 1. Task
 
@@ -66,12 +63,12 @@ So today, a simple workflow is compiled by fully materializing its internal task
 
 ## 3. Batch workflow
 
-A batch workflow is a workflow whose parameter is `[rec]`.
+A batch workflow is a workflow whose parameter is `tab`.
 For the intended final target, a batch workflow may return either:
 - `rec`
-- `[rec]`
+- `tab`
 
-Example reduction case (`[rec] -> rec`):
+Example reduction case (`tab -> rec`):
 
 ```sh
 #@  Merge mutations
@@ -93,7 +90,7 @@ merge = import "merge.sh"
    merge { bcf: calls.bcf }
 ```
 
-Example passthrough case (`[rec] -> [rec]`):
+Example passthrough case (`tab -> tab`):
 
 ```panel_only.swl
 call_variant = import "call_variant.wf"
@@ -103,12 +100,12 @@ call_variant = import "call_variant.wf"
 ```
 
 Remarks
-- `map` lifts a function from `rec -> rec` to `[rec] -> [rec]`
-- `panel.swl` is a batch workflow with signature `[rec] -> rec`
-- `panel_only.swl` is a batch workflow with signature `[rec] -> [rec]`
-- `calls` is a value of type `[rec]`
-- get operator `.` extends to `[rec]` and returns an array: `calls.bcf` returns `[file]`
-- because `map` applies one statically typed `rec -> rec` function uniformly to all elements, `[rec]` produced by `map` is homogeneous, not heterogeneous
+- `map` lifts a function from `rec -> rec` to `tab -> tab`
+- `panel.swl` is a batch workflow with signature `tab -> rec`
+- `panel_only.swl` is a batch workflow with signature `tab -> tab`
+- `calls` is a value of type `tab`
+- get operator `.` extends to `tab` and returns an array: `calls.bcf` returns `[file]`
+- because `map` applies one statically typed `rec -> rec` function uniformly to all elements, `tab` produced by `map` is homogeneous, not heterogeneous
 - if `field` is not present in the mapped element record type, `xs.field` is a compile-time error
 - unlike a simple workflow, a batch workflow should not always be compiled by expanding the mapped workflow into many concrete calls; instead, mapped execution must remain symbolic until target lowering so that runtime cardinality can be preserved
 
@@ -120,7 +117,7 @@ Remarks
 Syntactically it still appears as ordinary application, but semantically it is builtin.
 
 `map` takes a function `f1` with signature `rec -> rec` and returns a function
-`f2` with signature `[rec] -> [rec]`.
+`f2` with signature `tab -> tab`.
 
 Allowed mapped callees in the target design:
 - imported task
@@ -129,23 +126,25 @@ Allowed mapped callees in the target design:
 - partially applied function whose remaining signature is `rec -> rec`
 
 Forbidden for now:
-- `map` applied to a batch workflow (`[rec] -> rec` or `[rec] -> [rec]`)
-- nested batch mapping where the mapped callee itself consumes `[rec]`
+- `map` applied to a batch workflow (`tab -> rec` or `tab -> tab`)
+- nested batch mapping where the mapped callee itself consumes `tab`
 
-When `f2` is applied to a record array `[rec]`, `f1` is run on each record of the array,
+When `f2` is applied to a record array `tab`, `f1` is run on each record of the array,
 producing output records that are then structured into a homogeneous record array.
 
-### `.` on `[rec]`
+### `.` on `tab`
 
-If `xs : [rec]`, then:
+If `xs : tab` and `field : [t]` is a top-level table column, then:
 
 ```swl
 xs.field
 ```
 
-returns `[t]`, where `field : t` in each element record.
+returns `[t]`.
 
-If `field` is absent from the statically known element record type, this is a compile-time error.
+If `field` is absent from the statically known table schema, this is a compile-time error.
+
+Do not add a separate `ArrayField` operator; model this as ordinary field access on `tab`.
 
 ## Concrete implementation target
 
@@ -167,7 +166,7 @@ Distinguish clearly between task, simple workflow, and batch workflow.
 
 - **task**: shell-script unit, `rec -> rec`
 - **simple workflow**: ordinary workflow, `rec -> rec`
-- **batch workflow**: workflow whose root parameter is `[rec]`, and whose result is `rec` or `[rec]`
+- **batch workflow**: workflow whose root parameter is `tab`, and whose result is `rec` or `tab`
 
 Representation decisions:
 - `map` is the source of batch lifting
@@ -190,9 +189,9 @@ In the example:
 So in compiled form we need to preserve these distinctions:
 - a normal task call producing `rec`
 - a normal workflow expansion producing `rec`
-- a mapped task or mapped workflow step producing `[rec]`
+- a mapped task or mapped workflow step producing `tab`
 - a field projection from `rec`
-- a field projection from `[rec]`
+- a field projection from `tab`
 
 The important new concept is mapped execution. The compiled representation must preserve it explicitly rather than fully expanding it away.
 
@@ -202,10 +201,9 @@ The important new concept is mapped execution. The compiled representation must 
 
 Final target semantics:
 - `map` accepts any function whose effective signature is `rec -> rec`
-- `map f` has type `[rec] -> [rec]`
-- `.` works on `[rec]` and returns `[t]`
+- `map f` has type `tab -> tab`
 - tasks may consume array inputs if the task annotation type is an array type like `[file]`
-- batch workflow root type is `[rec] -> rec` or `[rec] -> [rec]`
+- batch workflow root type is `tab-> rec` or `tab -> tab`
 - mapped results are homogeneous
 - missing projected fields are compile-time errors
 - batch workflows can be transpiled to runnable packed CWL using native CWL scatter
@@ -218,7 +216,7 @@ Still deferred for later:
 - nested arrays beyond the direct result of `map`
 - multi-array zip/map semantics beyond what is needed for CWL scatter lowering
 - arbitrary synthesis of complex CWL `valueFrom` / `linkMerge` expressions
-- runtime/input surface syntax for external users to supply `[rec]` batches
+- runtime/input surface syntax for external users to supply `tab` batches
 
 ---
 
@@ -231,28 +229,28 @@ Files:
 Plan:
 
 1. Add workflow-level value categories for:
-   - `record`
-   - `[record]`
+   - `rec`
+   - `tab`
    - scalar arrays like `[file]`, `[str]`, `[int]`, `[float]`
    - function `rec -> rec`
-   - function `[rec] -> rec`
-   - function `[rec] -> [rec]`
+   - function `tab -> rec`
+   - function `tab -> tab`
 
 2. Keep task annotation array types as-is (`[file]`, `[str]`, `[int]`, `[float]`), but add workflow reasoning for collection-valued expressions and batch workflow roots.
 
 3. Add type rules:
-   - if `f : rec -> rec`, then `map f : [rec] -> [rec]`
-   - if `xs : [rec]` and `field : t` is present in the element record type, then `xs.field : [t]`
-   - if `field` is absent from the element record type, projection is a compile-time error
+   - if `f : rec -> rec`, then `map f : tab -> tab`
+   - if `xs : tab` and `field : [t]` is present in the table schema, then `xs.field : [t]`
+   - if `field` is absent from the table schema, projection is a compile-time error
    - if `f` is batch-typed, then `map f` is a compile-time error for now
 
 4. Ensure workflow well-formedness distinguishes:
    - simple workflow root signature: `rec -> rec`
-   - batch workflow root signature: `[rec] -> rec` or `[rec] -> [rec]`
+   - batch workflow root signature: `tab -> rec` or `tab -> tab`
 
 Recommendation:
 - do not try to force this into `TaskSignature` alone
-- add a workflow type layer for workflow expressions, including element schemas for `[rec]`
+- add a workflow type layer for workflow expressions, including element schemas for `tab`
 - keep mapped record arrays homogeneous by construction
 
 ---
@@ -267,24 +265,23 @@ Plan:
 
 1. Add IR nodes such as:
    - `Map(function, arg)` or equivalent builtin-lowered form
-   - `ArrayField(record_array, name)` for projection from `[rec]` to `[t]`
 
 2. Recognize builtin `map` in lowering.
    - process `map` through the same builtin-dispatch path as `import`
    - lower `map f xs` into dedicated IR rather than leaving it as ordinary generic apply
 
-3. Extend field access lowering/typing so `calls.bcf` can refer either to:
-   - `ir.Field(record, "bcf")`
-   - `ir.ArrayField(record_array, "bcf")`
+3. Extend field access lowering/typing so `calls.bcf` remains ordinary field access:
+   - `ir.Field(record, "bcf")` for record field projection
+   - `ir.Field(table, "bcf")` for table column projection
 
 4. Carry enough type/schema information to distinguish:
    - ordinary record field projection
-   - array-of-record field projection
-   - compile-time invalid projection on missing element fields
+   - table column projection
+   - compile-time invalid projection on missing table fields
 
 Recommendation:
-- prefer explicit IR nodes over silently overloading existing `Field` semantics
-- make builtin recognition explicit early so that later forcing and transpilation can rely on structured IR
+- remove any separate `ArrayField` operator from parser/AST/IR/etc.
+- keep `Field` semantics type-directed so later forcing and transpilation can rely on schema information
 
 ---
 
@@ -298,10 +295,9 @@ This is the main representation decision.
 
 ### 4.1 New forced value kinds
 
-Add forced/runtime-planning value kinds in `dag.py` for mapped execution and array projection.
+Add forced/runtime-planning value kinds in `dag.py` for mapped execution.
 For example:
 - an explicit mapped call/step value
-- an explicit array-field projection value
 - array input metadata sufficient for batch typing and later CWL lowering
 
 Suggested in-memory shape:
@@ -319,16 +315,7 @@ class MappedCall:
     deps: List[str] = field(default_factory=list)
 ```
 
-and:
-
-```python
-@dataclass(frozen=True)
-class ArrayField:
-    source: object
-    name: str
-```
-
-Whether the top-level compiled JSON keeps `tasks[]` or later generalizes to `steps[]`, the artifact must preserve mapped execution symbolically and encode enough callee metadata for CWL lowering.
+Whether the top-level compiled JSON keeps `tasks[]` or later generalizes to `steps[]`, the artifact must preserve mapped execution symbolically and encode enough callee metadata and schema information for CWL lowering.
 
 ### 4.2 JSON representation requirements
 
@@ -336,8 +323,8 @@ The compiled artifact must support all of the following concepts:
 - ordinary concrete task call
 - mapped task call
 - mapped workflow call
-- projection from mapped `[rec]` result to array output like `[file]`
-- top-level workflow outputs that may be `rec` or `[rec]`
+- projection from a mapped `tab` result to array output like `[file]`
+- top-level workflow outputs that may be `rec` or `tab`
 
 Two schema directions are possible:
 
@@ -399,7 +386,7 @@ However, implementation may stage toward that if needed.
 Required properties regardless of exact field names:
 - callee kind must be explicit (`task` vs `workflow`)
 - mapped execution must be explicit
-- array-field projection must be explicit
+- table-column projection must remain representable via ordinary field references plus schema/type information
 - references must preserve dependencies and output schemas
 - the artifact must carry enough information for the CWL emitter to produce runnable scatter steps
 
@@ -433,16 +420,16 @@ Plan:
    - produce a mapped symbolic value, not a concrete list of calls
 
 3. When forcing field projection from a mapped result:
-   - `ArrayField(MappedCall, "bcf")` should represent `[file]`
-   - if `bcf` is not in the mapped element output schema, reject at compile time
+   - ordinary field access on a mapped `tab` result should represent `[file]`
+   - if `bcf` is not in the mapped output table schema, reject at compile time
 
 4. Extend dependency walking:
    - downstream consumers of `calls.bcf` should depend on the mapped callee step
 
 5. Extend output normalization and serialization/deserialization for new sources:
-   - array-field projection
    - mapped step references
-   - top-level `[rec]` outputs where supported
+   - field projection from `tab`
+   - top-level `tab` outputs where supported
 
 6. Ensure forcing can preserve enough callee metadata for CWL lowering:
    - task vs workflow
@@ -498,7 +485,7 @@ Extend `_cwl_type` to support:
 
 The transpiler must also be able to lower mapped `[rec]` flow into CWL-compatible scattered ports.
 
-### 6.4 Resolve the `[rec]` to CWL mismatch
+### 6.4 Resolve the `tab` to CWL mismatch
 
 CWL supports records and arrays, but the current compiler does not yet preserve enough record-array schema information in its DAG artifact.
 So the final target requires an explicit normalization path for CWL lowering.
@@ -530,7 +517,7 @@ The design must ensure that a batch workflow can be transpiled into runnable pac
 That implies:
 - mapped tasks lower to runnable scattered tool steps
 - mapped workflows lower to runnable scattered subworkflow steps
-- array field projection such as `calls.bcf` becomes an array-valued CWL source
+- table column projection such as `calls.bcf` becomes an array-valued CWL source
 - downstream reduction tasks can consume that array-valued source
 - `[rec] -> [rec]` workflows can either lower to scattered step outputs exposed as workflow outputs, or be rejected only where the target runner format truly cannot express them yet
 
@@ -544,16 +531,15 @@ If some subcase remains unsupported during phased implementation, it should be r
 
 1. Add workflow-level typing for:
    - `rec`
-   - `[rec]`
+   - `tab`
    - scalar arrays
-   - function categories `rec -> rec`, `[rec] -> rec`, `[rec] -> [rec]`
+   - function categories `rec -> rec`, `tab -> rec`, `tab -> tab`
 2. Add compile-time checking for:
    - `map` only on effective `rec -> rec`
    - rejection of `map` on batch workflows
-   - `.` on `[rec]` with missing fields rejected at compile time
+   - `.` on `tab` with missing fields rejected at compile time
 3. Add IR support for:
    - `ir.Map`
-   - `ir.ArrayField`
 4. Route builtin `map` through the same builtin-recognition path used for `import`
 
 Deliverable:
@@ -563,9 +549,8 @@ Deliverable:
 
 1. Add forced DAG/runtime value classes for:
    - mapped call/step
-   - array-field projection
    - array-aware input/output metadata
-2. Extend serialization/deserialization with explicit mapped and array-field sources.
+2. Extend serialization/deserialization with explicit mapped sources and field-based table projections.
 3. Preserve enough metadata for downstream CWL normalization:
    - callee kind
    - path
@@ -579,9 +564,9 @@ Deliverable:
 
 ### Phase 3: CWL normalization and scatter emission
 
-1. Extend emitter validation to accept mapped steps and array-field bindings.
+1. Extend emitter validation to accept mapped steps and field-based table-column bindings.
 2. Add array type lowering in `_cwl_type`.
-3. Implement normalization from logical `[rec]` mapping to concrete scattered CWL ports.
+3. Implement normalization from logical `tab` mapping to concrete scattered CWL ports.
 4. Emit runnable scattered CWL steps:
    - scattered tool step for mapped task
    - scattered subworkflow step for mapped workflow
@@ -594,7 +579,7 @@ Deliverable:
 
 ### Phase 4: top-level batch outputs and polish
 
-1. Ensure `[rec] -> [rec]` workflows can be emitted as runnable CWL where representable.
+1. Ensure `tab -> tab` workflows can be emitted as runnable CWL where representable.
 2. Add end-to-end golden tests from `.swl` -> DAG JSON -> packed CWL.
 3. Update `spec.md` later with batch syntax/semantics, including `map`.
 4. Document remaining deferred topics such as external batch input surface syntax.
@@ -618,11 +603,11 @@ Minimum cases:
 2. `map` over imported task also produces one mapped symbolic callee in compiled JSON.
 3. `map` over lambda or partial function with effective signature `rec -> rec` type-checks and lowers correctly.
 4. `map` over batch workflow is rejected.
-5. `calls.bcf` serializes as explicit array-field projection.
-6. missing projected field on `[rec]` is rejected at compile time.
+5. `calls.bcf` serializes as field projection from `tab`.
+6. missing projected field on `tab` is rejected at compile time.
 7. downstream task consuming `[file]` from `calls.bcf` gets correct dependency.
 8. batch workflow returning `rec` transpiles to runnable CWL with scatter + reduction.
-9. batch workflow returning `[rec]` transpiles where supported, or is rejected explicitly and locally if not yet implemented.
+9. batch workflow returning `tab` transpiles where supported, or is rejected explicitly and locally if not yet implemented.
 10. unsupported nested batch cases are rejected explicitly.
 
 ---
@@ -634,23 +619,23 @@ Minimum cases:
 - `map` is a builtin handled in the same builtin-processing path as `import`
 - `map` may be applied to any function with effective signature `rec -> rec`
 - `map` on batch workflows is forbidden for now
-- `[rec]` produced by `map` is homogeneous
-- `.` on `[rec]` returns `[t]`
+- `tab` produced by `map` is homogeneous
+- `.` on `tab` returns `[t]` for table columns
 - missing projected fields are compile-time errors
-- batch workflow root signatures are `[rec] -> rec` and `[rec] -> [rec]`
+- batch workflow root signatures are `tab -> rec` and `tab -> tab`
 
 ### Compiled artifact
 
 - preserve mapped execution symbolically
 - make callee kind explicit (`task` vs `workflow`)
-- represent array-field projection explicitly
+- keep table-column projection explicit in semantics, but do not add a separate `ArrayField` operator
 - preserve enough schema/signature information for target-specific lowering
 - do not pre-expand batch cardinality into concrete repeated calls
 
 ### CWL
 
 - transpile batch workflows using native CWL scatter
-- normalize logical `[rec]` mapping into concrete scattered ports before emission
+- normalize logical `tab` mapping into concrete scattered ports before emission
 - support mapped tasks and mapped workflows
 - ensure the supported batch subset transpiles to runnable packed CWL
 
@@ -661,10 +646,10 @@ Minimum cases:
 1. implement workflow-level batch typing and batch workflow root classification
 2. implement builtin recognition for `map` alongside `import`
 3. add `ir.Map` and `ir.ArrayField`
-4. add forced mapped-call and array-field representations plus codec support
+4. add forced mapped-call representations plus codec support for mapped sources and table field projections
 5. preserve enough callee schema/signature metadata for CWL lowering
 6. implement CWL normalization from logical `[rec]` mapping to scattered ports
 7. emit runnable scattered CWL for mapped task/workflow calls
-8. add focused force/codec/CWL tests for both `[rec] -> rec` and `[rec] -> [rec]` workflows
+8. add focused force/codec/CWL tests for both `tab -> rec` and `tab -> tab` workflows
 
 That should make the final target explicit while keeping deferred items clearly separated.
