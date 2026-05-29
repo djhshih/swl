@@ -331,7 +331,10 @@ class Forcer:
     def _force_map(self, fn, arg):
         if not isinstance(fn, ForcedFunction):
             raise ValueError(f'Cannot map non-function value during forcing: {fn!r}')
-        return self._apply_mapped(fn, arg)
+        source = arg
+        if isinstance(arg, Record) and len(arg.fields) == 1:
+            source = next(iter(arg.fields.values()))
+        return self._apply_mapped(fn, source)
 
     def _apply_mapped(self, fn, source):
         if not isinstance(fn, ForcedFunction):

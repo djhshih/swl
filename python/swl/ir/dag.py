@@ -211,6 +211,8 @@ def _binding_from_dict(data, inputs, steps):
     if source == 'input':
         name = data['name']
         return inputs.get(name, Input(name))
+    if source == 'value':
+        return _binding_from_dict(data['value'], inputs, steps)
     if source == 'literal':
         return Literal(data.get('value'))
     if source == 'field':

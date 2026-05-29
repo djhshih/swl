@@ -241,17 +241,16 @@ class Checker:
                     if self._match_import(expr.value) is not None:
                         continue
                     env[expr.id.name] = self._eval_expr(expr.value, imports, env, demanded, issues)
-            env[final.param.name] = OpenRecord()
-            self._eval_function_body(final, imports, env, demanded, issues)
 
             if self._uses_map(final.body):
-                table_env = dict(env)
-                table_env[final.param.name] = TableValue({name: UnknownValue() for name in demanded})
-                table_issues = []
-                self._eval_function_body(final, imports, table_env, set(), table_issues)
-                if not issues:
-                    demanded = {final.param.name}
-                    issues.extend(table_issues)
+                env[final.param.name] = TableValue({})
+                self._eval_function_body(final, imports, env, set(), issues)
+                if any(issue.startswith('Missing field on tab:') for issue in issues):
+                    return {final.param.name}, issues
+                return {final.param.name}, []
+
+            env[final.param.name] = OpenRecord()
+            self._eval_function_body(final, imports, env, demanded, issues)
             return demanded, issues
 
         env = {}
@@ -382,8 +381,7 @@ class Checker:
             if isinstance(rec, TableValue):
                 if field in rec.columns:
                     return rec.columns[field]
-                if self._uses_map(rec_expr):
-                    issues.append(f'Missing field on tab: {field}')
+                issues.append(f'Missing field on tab: {field}')
                 rec.columns[field] = UnknownValue()
                 return rec.columns[field]
             if isinstance(rec, ComputationValue):
@@ -434,6 +432,15 @@ class Checker:
             local_env = dict(env)
             local_env[expr.param.name] = OpenRecord()
             body_value = self._eval_function_body(expr, imports, local_env, fn_demanded, fn_issues)
+            batch = False
+            if self._uses_map(expr.body):
+                table_env = dict(env)
+                table_env[expr.param.name] = TableValue({})
+                table_value = self._eval_function_body(expr, imports, table_env, set(), list(fn_issues))
+                if self._value_is_table(table_value):
+                    body_value = table_value
+                    batch = True
+                    fn_demanded = {expr.param.name}
             body_outputs = self._signature_outputs(body_value)
 
             if isinstance(body_value, (FunctionValue, ClosureValue)):
@@ -451,7 +458,7 @@ class Checker:
                 body=expr.body,
                 env=env,
                 imports=imports,
-                batch=self._value_is_table(body_value),
+                batch=batch or self._value_is_table(body_value),
             )
 
         if expr.type == wf_node.NodeType.chain:

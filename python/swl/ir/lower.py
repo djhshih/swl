@@ -137,6 +137,7 @@ class Lowerer:
         if imported.kind == 'workflow':
             body = self._cached_workflow_body(imported.path)
             function = ir.Function(name, imported.kind, imported.signature, imported.path, body)
+            setattr(function, 'is_batch', getattr(imported.check, 'is_batch', False))
         else:
             function = ir.Function(name, imported.kind, imported.signature, imported.path, None)
         self.function_cache[name] = function
@@ -147,6 +148,8 @@ class Lowerer:
             return self.workflow_cache[path]
         result = self.checker.load(path)
         body = self.lower_tree(result.tree, result.imports, result.signature)
+        if isinstance(body, ir.Lambda):
+            setattr(body, 'is_batch', getattr(result, 'is_batch', False))
         self.workflow_cache[path] = body
         return body
 
