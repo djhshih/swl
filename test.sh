@@ -10,6 +10,7 @@ CWL_COMPARE_COUNT=0
 EXPECT_COMPILE_FAIL=(
 	tests/bad_explicit.swl
 	tests/bad_pipe.swl
+	tests/map.swl
 )
 
 expects_compile_fail() {

@@ -1,6 +1,7 @@
 import os
 
 from swl.ir import node as ir
+from swl.semantic.task.type import Param, TaskSignature
 from swl.semantic.wf.check import Checker
 from swl.syntax.wf import node as wf_node
 from swl.syntax.wf.parser import Parser as WfParser
@@ -90,6 +91,11 @@ class Lowerer:
                     self.lower_expr(function_expr, env, imports),
                     self.lower_expr(arg_expr, env, imports),
                 )
+            if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map':
+                return ir.Apply(
+                    ir.Function('map', 'builtin', self._builtin_map_signature()),
+                    self.lower_expr(expr.arg, env, imports),
+                )
             return ir.Apply(
                 self.lower_expr(expr.fun, env, imports),
                 self.lower_expr(expr.arg, env, imports),
@@ -130,6 +136,9 @@ class Lowerer:
             return ir.Variable(self._alloc_var_id(), expr.id.name, value)
 
         return ir.Unknown()
+
+    def _builtin_map_signature(self):
+        return TaskSignature({'f': Param('f', None), 'xs': Param('xs', None)}, {}, {})
 
     def _function_from_import(self, name, imported):
         if name in self.function_cache:

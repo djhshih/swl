@@ -395,6 +395,9 @@ class Checker:
                 mapped_fun = self._eval_expr(map_parts[0], imports, env, demanded, issues)
                 mapped_arg = self._eval_expr(map_parts[1], imports, env, demanded, issues)
                 return self._apply_map(mapped_fun, mapped_arg, issues)
+            if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map':
+                mapped_fun = self._eval_expr(expr.arg, imports, env, demanded, issues)
+                return self._apply_map_partial(mapped_fun, issues)
             fun = self._eval_expr(expr.fun, imports, env, demanded, issues)
             arg = self._eval_expr(expr.arg, imports, env, demanded, issues)
             return self._apply(fun, arg, demanded, issues)
@@ -506,16 +509,33 @@ class Checker:
     def _value_is_table(self, value):
         return isinstance(value, TableValue)
 
-    def _apply_map(self, fun, arg, issues):
+    def _map_target(self, fun, issues):
         target = fun.function if isinstance(fun, ClosureValue) else fun
         if not isinstance(target, FunctionValue):
             issues.append('map requires a function value')
-            return UnknownValue()
+            return None
         if target.batch:
             issues.append('map on batch workflow is not supported')
-            return UnknownValue()
+            return None
         if len(target.signature.outputs) == 0:
             issues.append('map requires a function with rec output')
+            return None
+        return target
+
+    def _apply_map_partial(self, fun, issues):
+        target = self._map_target(fun, issues)
+        if target is None:
+            return UnknownValue()
+        return FunctionValue(
+            'map',
+            TaskSignature({'f': Param('f', None), 'xs': Param('xs', None)}, dict(target.signature.outputs), {}),
+            'builtin',
+            first_input='f',
+        )
+
+    def _apply_map(self, fun, arg, issues):
+        target = self._map_target(fun, issues)
+        if target is None:
             return UnknownValue()
         if not isinstance(arg, TableValue):
             issues.append('map requires a tab argument')

@@ -167,6 +167,13 @@ class Forcer:
         return result
 
     def _apply(self, fn, arg):
+        if isinstance(fn, ForcedFunction) and isinstance(fn.function, ir.Function) and fn.function.kind == 'builtin' and fn.function.name == 'map':
+            if fn.bound is None:
+                return ForcedFunction(fn.function, Record({'f': arg}), fn.signature)
+            if isinstance(fn.bound, Record) and 'f' in fn.bound.fields:
+                return self._force_map(fn.bound.fields['f'], arg)
+            bound = self._merge_bound(fn.bound, arg)
+            return ForcedFunction(fn.function, bound, fn.signature)
         if isinstance(arg, MappedStep):
             return self._apply_mapped(fn, arg)
         if not isinstance(fn, ForcedFunction):
