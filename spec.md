@@ -260,9 +260,13 @@ All other combinations are not allowed.
 
 ### 4. Inference of Workflow Input
 
-- Workflow input type is inferred from the unsatisfied inputs of all tasks
-- A task input is satisfied if there is an upstream task output with the same
-  name
+- Workflow input shape and field requirements are inferred from what the workflow body requires.
+- Input inference is semantic, not nominal: parameter names such as `x`, `xs`, or any other spelling have no type significance.
+- If a workflow body uses a parameter in a context that requires a `tab` (for example as the second argument to `map`), that parameter is inferred to be a `tab`.
+- If a workflow body uses a parameter in a context that requires a `rec`, that parameter is inferred to be a `rec` with the demanded fields.
+- Field requirements are inferred from unsatisfied task inputs and field accesses.
+- A task input is satisfied if there is an upstream task output with the same name.
+- Batch-vs-simple workflow classification is therefore determined by required input shape, not by parameter naming conventions.
 
 
 ## Pre-run-time Checks
