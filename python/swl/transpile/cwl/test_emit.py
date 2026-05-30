@@ -70,6 +70,12 @@ call  = import "call.sh"
     c = call ( x // a // s )
     a // s // c
 ''',
+            os.path.join(root, 'pipe.swl'): '''align = import "align.sh"
+sort  = import "sort.sh"
+call  = import "call.sh"
+
+align | sort | call
+''',
             os.path.join(root, 'partial.swl'): '''align = import "align.sh"
 align_hg38 = align {
     ref: "hg38.fa",
@@ -141,6 +147,10 @@ merge = import "merge.sh"
     f = \\x -> sub x
     ys = map f xs
     merge { bam: ys.bam2, outbase: "merged" }
+''',
+            os.path.join(root, 'map_root.swl'): '''call_variant = import "pipe.swl"
+
+map call_variant
 ''',
         }, root
 
@@ -277,6 +287,21 @@ merge = import "merge.sh"
         self.assertEqual(generated['steps'][0]['run'], '#sub')
         step = next(step for step in workflow['steps'] if step['run'].startswith('#map_lambda'))
         self.assertEqual(step['scatterMethod'], 'dotproduct')
+
+    def test_root_partial_map_transpiles_as_scattered_subworkflow(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'map_root.swl'), files)
+        cwl = transpile_dag_dict(dag.to_dict())
+        workflow = cwl['$graph'][-1]
+        step = next(step for step in workflow['steps'] if step['id'] == '#main/call_variant')
+        self.assertEqual(step['run'], '#call_variant')
+        self.assertEqual(step['scatterMethod'], 'dotproduct')
+        self.assertEqual(sorted(step['scatter']), ['#main/call_variant/fastq1', '#main/call_variant/fastq2', '#main/call_variant/outbase', '#main/call_variant/ref', '#main/call_variant/ref_amb', '#main/call_variant/ref_ann', '#main/call_variant/ref_bwt', '#main/call_variant/ref_fai', '#main/call_variant/ref_pac', '#main/call_variant/ref_sa'])
+        outputs = {item['id']: item for item in workflow['outputs']}
+        self.assertEqual(outputs['#main/bam']['type'], {'type': 'array', 'items': 'File'})
+        self.assertEqual(outputs['#main/bcf']['outputSource'], '#main/call_variant/bcf')
+        subwf = next(item for item in cwl['$graph'] if item.get('id') == '#call_variant')
+        self.assertEqual(subwf['class'], 'Workflow')
 
     def test_rejects_output_expr_interpolation(self):
         files, root = self._files()

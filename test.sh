@@ -10,7 +10,6 @@ CWL_COMPARE_COUNT=0
 EXPECT_COMPILE_FAIL=(
 	tests/bad_explicit.swl
 	tests/bad_pipe.swl
-	tests/map.swl
 )
 
 expects_compile_fail() {
@@ -178,6 +177,7 @@ if (( $# > 0 )); then
 else
 	run_unit_tests
 	mkdir -p tests/dag && rm -f tests/dag/*
+	mkdir -p tests/cwl
 	for task in tests/*.sh; do
 		evaluate_task $task
 	done
@@ -188,7 +188,7 @@ else
 	compare_dags tests/dag/pipe.json tests/dag/function.json
 	compare_dags tests/dag/explicit.json tests/dag/function.json
 
-	mkdir -p tests/cwl && rm -f tests/cwl/*
+	mkdir -p tests/cwl
 	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/function.json \
 		-o tests/cwl/function.cwl
 	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/pipe.json \
@@ -197,6 +197,8 @@ else
 		-o tests/cwl/explicit.cwl
 	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/panel.json \
 		-o tests/cwl/panel.cwl
+	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/map.json \
+		-o tests/cwl/map.cwl
 
 	compare_files tests/cwl/pipe.cwl tests/cwl/function.cwl
 	compare_files tests/cwl/explicit.cwl tests/cwl/function.cwl

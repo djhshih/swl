@@ -187,6 +187,10 @@ merge = import "merge.sh"
     merge { bam: ys.bam, outbase: "merged" }
 '''
 
+_MAP_ROOT = '''call_variant = import "pipe.swl"
+map call_variant
+'''
+
 
 class TestForce(ut.TestCase):
     def _files(self):
@@ -227,6 +231,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'map_partial.swl'): _MAP_PARTIAL,
             os.path.join(root, 'map_workflow.swl'): _MAP_WORKFLOW,
             os.path.join(root, 'map_workflow_partial.swl'): _MAP_WORKFLOW_PARTIAL,
+            os.path.join(root, 'map_root.swl'): _MAP_ROOT,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -257,6 +262,16 @@ class TestForce(ut.TestCase):
         self.assertEqual([task['id'] for task in data['steps']], ['align'])
         self.assertEqual(sorted(data['inputs'].keys()), ['fastq1', 'fastq2', 'outbase'])
         self.assertEqual(sorted(data['outputs'].keys()), ['bam'])
+
+    def test_force_partial_map_root_materializes_batch_workflow(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'map_root.swl'), files)
+        data = dag.to_dict()
+        self.assertEqual(sorted(data['inputs'].keys()), ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
+        self.assertEqual(sorted(data['outputs'].keys()), ['bai', 'bam'])
+        self.assertEqual([step['id'] for step in data['steps']], ['call_variant'])
+        self.assertEqual(data['steps'][0]['map']['source'], {'source': 'input', 'name': 'xs'})
+        self.assertEqual(sorted(data['steps'][0]['outputs'].keys()), ['bai', 'bam'])
 
     def test_task_run_value_prefers_partial_application_over_task_default(self):
         files, root = self._files()

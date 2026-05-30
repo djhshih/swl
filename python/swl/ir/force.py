@@ -646,8 +646,33 @@ class Forcer:
         signature = self._forced_signature(value)
         if signature is None:
             return value
+        if self._is_unsaturated_builtin_map(value, signature):
+            return self._materialize_partial_map_workflow(value, signature)
         arg = Record({name: self._input(name, spec) for name, spec in signature.inputs.items()})
         return self._apply(value, arg)
+
+    def _is_unsaturated_builtin_map(self, value, signature):
+        return (
+            isinstance(value, ForcedFunction)
+            and isinstance(value.function, ir.Function)
+            and value.function.kind == 'builtin'
+            and value.function.name == 'map'
+            and signature is not None
+            and 'xs' in signature.inputs
+        )
+
+    def _materialize_partial_map_workflow(self, value, signature):
+        if not isinstance(value.bound, Record) or 'f' not in value.bound.fields:
+            raise ValueError('partial map workflow is missing bound function')
+        fn = value.bound.fields['f']
+        if not isinstance(fn, ForcedFunction):
+            raise ValueError(f'partial map requires a normalized function, got: {fn!r}')
+        xs_spec = signature.inputs['xs']
+        xs = self._input('xs', xs_spec)
+        mapped = self._force_map(fn, xs)
+        if isinstance(mapped, MappedStep):
+            return Record({name: Field(mapped, name) for name in mapped.outputs})
+        return mapped
 
     def _forced_signature(self, value):
         signature = value.signature or self._function_signature(value.function)

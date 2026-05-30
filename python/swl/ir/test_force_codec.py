@@ -78,6 +78,9 @@ merge = import "merge.sh"
     calls = map align xs
     merge { bam: calls.bam, outbase: "merged" }
 ''',
+            os.path.join(root, 'map_root.swl'): '''call_variant = import "pipe.swl"
+map call_variant
+''',
         }, root
 
     def test_dag_round_trip_dict(self):
@@ -153,6 +156,13 @@ call  = import "call.sh"
     def test_mapped_step_round_trip(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'batch.swl'), files)
+        data = dag.to_dict()
+        restored = DAG.from_dict(data)
+        self.assertEqual(restored.to_dict(), data)
+
+    def test_partial_map_root_round_trip(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'map_root.swl'), files)
         data = dag.to_dict()
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
