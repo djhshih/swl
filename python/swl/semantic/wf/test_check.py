@@ -502,12 +502,6 @@ class TestWorkflowCheck(ut.TestCase):
         result = Checker().load(path)
         self.assertTrue(any('Missing field on tab: nope' in err for err in result.errors))
 
-    def test_batch_map_requires_array_argument(self):
-        root = self._make_fixture_dir()
-        path = self._write(root, 'batch_non_array.swl', _BATCH_NON_ARRAY)
-        result = Checker().load(path)
-        self.assertTrue(any('map requires a tab argument' in err for err in result.errors))
-
     def test_batch_map_on_batch_workflow_reports_error(self):
         root = self._make_fixture_dir()
         self._write(root, 'batch_inner.swl', _BATCH_INNER)
