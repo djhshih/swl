@@ -84,6 +84,7 @@ class Function(Node):
     signature: TaskSignature
     path: Optional[str] = None
     body: Optional[Node] = None
+    is_batch: bool = False
 
     def __repr__(self):
         return (
@@ -93,6 +94,7 @@ class Function(Node):
             f'  signature={self.signature!r},\n'
             f'  path={self.path!r},\n'
             f'  body={self.body!r},\n'
+            f'  is_batch={self.is_batch!r},\n'
             f')'
         )
 
@@ -102,6 +104,7 @@ class Lambda(Node):
     param: str
     body: 'Block'
     signature: Optional[TaskSignature] = None
+    is_batch: bool = False
 
     def __repr__(self):
         return (
@@ -109,6 +112,7 @@ class Lambda(Node):
             f'  param={self.param!r},\n'
             f'  body={self.body!r},\n'
             f'  signature={self.signature!r},\n'
+            f'  is_batch={self.is_batch!r},\n'
             f')'
         )
 

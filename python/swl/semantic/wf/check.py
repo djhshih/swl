@@ -79,8 +79,9 @@ class ComputationValue:
 
 
 class TableValue:
-    def __init__(self, columns=None):
+    def __init__(self, columns=None, placeholder=False):
         self.columns = dict(columns or {})
+        self.placeholder = placeholder
 
 
 class UnknownValue:
@@ -235,19 +236,12 @@ class Checker:
         demanded = set()
 
         if final.type == wf_node.NodeType.fun:
-            env = {}
-            for expr in tree.body[:-1]:
-                if expr.type == wf_node.NodeType.bind:
-                    if self._match_import(expr.value) is not None:
-                        continue
-                    env[expr.id.name] = self._eval_expr(expr.value, imports, env, demanded, issues)
-
+            env = self._eval_prefix_bindings(tree.body[:-1], imports, demanded, issues)
             if self._uses_map(final.body):
-                env[final.param.name] = TableValue({})
-                self._eval_function_body(final, imports, env, set(), issues)
-                if any(issue.startswith('Missing field on tab:') for issue in issues):
-                    return {final.param.name}, issues
-                return {final.param.name}, []
+                table_demanded, table_issues, _ = self._eval_lambda_in_mode(final, imports, env, 'table')
+                if self._looks_like_stale_record_errors(table_issues):
+                    return table_demanded, []
+                return table_demanded, table_issues
 
             env[final.param.name] = OpenRecord()
             self._eval_function_body(final, imports, env, demanded, issues)
@@ -270,37 +264,25 @@ class Checker:
 
         final = tree.body[-1]
         if final.type == wf_node.NodeType.fun:
-            env = {}
-            for expr in tree.body[:-1]:
-                if expr.type == wf_node.NodeType.bind:
-                    if self._match_import(expr.value) is not None:
-                        continue
-                    env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
+            env = self._eval_prefix_bindings(tree.body[:-1], imports, set(), issues)
+
+            if self._uses_map(final.body):
+                demanded, mode_issues, chosen_result = self._eval_lambda_in_mode(final, imports, env, 'table', inferred_inputs)
+                filtered_issues = [] if self._looks_like_stale_record_errors(mode_issues) else mode_issues
+                issues.extend(filtered_issues)
+                inputs = {final.param.name: Param(final.param.name, None)}
+                outputs = self._signature_outputs(chosen_result)
+                return TaskSignature(inputs, outputs, {}), True
 
             record_env = dict(env)
-            record_env[final.param.name] = self._initial_param_value(final, assume_batch=False, inferred_inputs=inferred_inputs)
-            record_result = self._eval_function_body(final, imports, record_env, set(), list(issues))
-
-            table_env = dict(env)
-            table_env[final.param.name] = self._initial_param_value(final, assume_batch=True, inferred_inputs=inferred_inputs)
-            table_result = self._eval_function_body(final, imports, table_env, set(), list(issues))
-
-            if self._value_is_table(table_result) or self._uses_map(final.body):
-                chosen_result = table_result
-                is_batch = True
-            else:
-                chosen_result = record_result
-                is_batch = False
-
-            if is_batch:
-                inputs = {final.param.name: Param(final.param.name, None)}
-            else:
-                inputs = {
-                    name: Param(name, None)
-                    for name in sorted(inferred_inputs)
-                }
+            record_env[final.param.name] = self._initial_param_value('record', inferred_inputs)
+            chosen_result = self._eval_function_body(final, imports, record_env, set(), list(issues))
+            inputs = {
+                name: Param(name, None)
+                for name in sorted(inferred_inputs)
+            }
             outputs = self._signature_outputs(chosen_result)
-            return TaskSignature(inputs, outputs, {}), is_batch
+            return TaskSignature(inputs, outputs, {}), False
 
         env = {}
         for expr in tree.body[:-1]:
@@ -381,6 +363,9 @@ class Checker:
             if isinstance(rec, TableValue):
                 if field in rec.columns:
                     return rec.columns[field]
+                if rec.placeholder:
+                    issues.append('map requires a tab argument')
+                    return UnknownValue()
                 issues.append(f'Missing field on tab: {field}')
                 rec.columns[field] = UnknownValue()
                 return rec.columns[field]
@@ -434,13 +419,12 @@ class Checker:
             body_value = self._eval_function_body(expr, imports, local_env, fn_demanded, fn_issues)
             batch = False
             if self._uses_map(expr.body):
-                table_env = dict(env)
-                table_env[expr.param.name] = TableValue({})
-                table_value = self._eval_function_body(expr, imports, table_env, set(), list(fn_issues))
+                _, table_issues, table_value = self._eval_lambda_in_mode(expr, imports, env, 'table')
                 if self._value_is_table(table_value):
                     body_value = table_value
                     batch = True
                     fn_demanded = {expr.param.name}
+                    fn_issues = [] if self._looks_like_stale_record_errors(table_issues) else table_issues
             body_outputs = self._signature_outputs(body_value)
 
             if isinstance(body_value, (FunctionValue, ClosureValue)):
@@ -481,15 +465,43 @@ class Checker:
             return True
         return any(self._uses_map(child) for child in self._children(expr))
 
-    def _initial_param_value(self, fn, assume_batch=False, inferred_inputs=None):
-        if assume_batch:
+    def _initial_param_value(self, mode, inferred_inputs=None):
+        if mode == 'table':
             columns = {}
-            if inferred_inputs is not None:
+            if inferred_inputs:
                 columns = {name: UnknownValue() for name in inferred_inputs}
-            return TableValue(columns)
+            return TableValue(columns, placeholder=not inferred_inputs)
         if inferred_inputs is not None:
             return OpenRecord(inferred_inputs)
         return OpenRecord()
+
+    def _eval_lambda_in_mode(self, fn, imports, env, mode, inferred_inputs=None):
+        local_env = dict(env)
+        demanded = set()
+        issues = []
+        local_env[fn.param.name] = self._initial_param_value(mode, inferred_inputs)
+        result = self._eval_function_body(fn, imports, local_env, demanded, issues)
+        if mode == 'table':
+            demanded = {fn.param.name}
+        return demanded, issues, result
+
+    def _eval_prefix_bindings(self, exprs, imports, demanded=None, issues=None):
+        env = {}
+        local_demanded = demanded if demanded is not None else set()
+        local_issues = issues if issues is not None else []
+        for expr in exprs:
+            if expr.type != wf_node.NodeType.bind:
+                continue
+            if self._match_import(expr.value) is not None:
+                continue
+            env[expr.id.name] = self._eval_expr(expr.value, imports, env, local_demanded, local_issues)
+        return env
+
+    def _looks_like_stale_record_errors(self, issues):
+        return (
+            'map requires a tab argument' in issues
+            and any(issue.startswith('Cannot resolve field access: (. ') for issue in issues)
+        )
 
     def _value_is_table(self, value):
         return isinstance(value, TableValue)
