@@ -2,6 +2,36 @@ import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
+"""
+Interpolation JSON schema for task parameter defaults.
+
+A default value is serialized as one of these forms:
+
+Word (interpolation with parts):
+    {"kind": "word", "parts": [
+        {"kind": "literal", "text": "path/to/"},
+        {"kind": "var", "name": "sample_id"},
+        {"kind": "literal", "text": ".bam"}
+    ]}
+
+Literal (plain text):
+    {"kind": "literal", "text": "42"}
+
+Var (variable reference — resolved from executor bindings):
+    {"kind": "var", "name": "outbase"}
+
+Expr (arbitrary expression — executor may shell-evaluate or reject):
+    {"kind": "expr", "text": "sample_id + \"_out\""}
+
+Resolution rules:
+- Literal: used as-is.
+- Var: resolved from the executor's runtime bindings dict by name.
+- Expr: the executor MAY evaluate the text as a shell expression, or reject
+  it if evaluation is not supported. The compiler does not validate Expr
+  contents beyond parsing.
+- Word: concatenate the resolved parts in order.
+"""
+
 
 @dataclass(frozen=True)
 class Input:
@@ -333,4 +363,39 @@ def _run_value_from_dict(name, spec, defaults, inputs, steps):
         return _binding_from_dict(value, inputs, steps)
     if value != default:
         return Literal(value)
+    return None
+
+
+def _resolve_interp_part(part, bindings):
+    kind = part.get('kind')
+    if kind == 'literal':
+        return part['text']
+    if kind == 'var':
+        name = part['name']
+        if name in bindings:
+            return str(bindings[name])
+        return '${' + name + '}'
+    if kind == 'expr':
+        return '${' + part['text'] + '}'
+    return ''
+
+
+def resolve_default(default, bindings=None):
+    if bindings is None:
+        bindings = {}
+    if not isinstance(default, dict):
+        return default
+    kind = default.get('kind')
+    if kind == 'literal':
+        return default['text']
+    if kind == 'var':
+        name = default['name']
+        if name in bindings:
+            return str(bindings[name])
+        return '${' + name + '}'
+    if kind == 'expr':
+        return '${' + default['text'] + '}'
+    if kind == 'word':
+        parts = default.get('parts', [])
+        return ''.join(_resolve_interp_part(part, bindings) for part in parts)
     return None

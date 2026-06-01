@@ -175,6 +175,7 @@ class Forcer:
             return self.apply_cache[key]
         satisfied = getattr(node, 'satisfied', set())
         result = self._apply(fn, arg, satisfied)
+        result = _canonicalize_merges(result)
         if key is not None:
             self.apply_cache[key] = result
         return result
@@ -788,6 +789,7 @@ class Forcer:
         return self.inputs[name]
 
     def _final_outputs(self, value):
+        value = _canonicalize_merges(value)
         fields = self._collect_output_fields(value)
         if fields is not None:
             return fields
@@ -817,6 +819,36 @@ def _forced_function_key(value):
     else:
         return None
     return (function_key, _value_key(value.bound))
+
+
+def _canonicalize_merges(value):
+    if isinstance(value, Merge):
+        left = _canonicalize_merges(value.left)
+        right = _canonicalize_merges(value.right)
+        if isinstance(left, Record) and isinstance(right, Record):
+            merged = dict(left.fields)
+            merged.update(right.fields)
+            return Record(merged)
+        if isinstance(left, Record) and isinstance(right, Merge):
+            right = _canonicalize_merges(right)
+            if isinstance(right, Record):
+                merged = dict(left.fields)
+                merged.update(right.fields)
+                return Record(merged)
+            return Merge(left, right)
+        if isinstance(right, Record) and isinstance(left, Merge):
+            left = _canonicalize_merges(left)
+            if isinstance(left, Record):
+                merged = dict(left.fields)
+                merged.update(right.fields)
+                return Record(merged)
+            return Merge(left, right)
+        return Merge(left, right)
+    if isinstance(value, Record):
+        return Record({name: _canonicalize_merges(item) for name, item in value.fields.items()})
+    if isinstance(value, Field):
+        return Field(_canonicalize_merges(value.source), value.name)
+    return value
 
 
 def _flatten_value_terms(value):

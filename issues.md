@@ -158,35 +158,32 @@ Both `semantic/wf/check.py` and `ir/lower.py` now import `builtins` from `swl.sy
 
 ### P3.1: DAG JSON has no contract for evaluating interpolation defaults
 
+**Status: Fixed.**
+
 **Spec:** String interpolation in defaults (`${outbase}.bam`) must be evaluated at execution time.
 
 **Code:** `force.py:_build_task_param()` stores parsed defaults as `Word` → `Literal`/`Var`/`Expr` AST fragments serialized via `_interp_to_dict`. The executor receives `{"kind": "var", "name": "outbase"}` but there is no documented contract for how to resolve `Var` references against runtime bindings or evaluate `Expr` fragments. Examples and test coverage for the executor side don't exist.
 
-**Proposed solution:** Define and document the interpolation JSON schema:
-```json
-{
-  "kind": "word",
-  "parts": [
-    {"kind": "literal", "text": "path/to/"},
-    {"kind": "var", "name": "sample_id"},
-    {"kind": "literal", "text": ".bam"}
-  ]
-}
-```
-Also handle the case where a default is a single `Expr` (e.g., `${sample_id + "_out"}`) rather than just `Var` or `Literal`. Add a reference executor implementation that substitutes `Var` from a provided bindings dict and documents that `Expr` evaluation is deferred (the executor may choose to shell-evaluate or reject it). Document this in a `dag-schema.md` or in the DAG module docstring.
+**Fix:**
+1. Added interpolation JSON schema documentation as a module-level docstring in `ir/dag.py`, covering all four kinds (`word`, `literal`, `var`, `expr`) with resolution rules for each.
+2. Added `dag.resolve_default(default, bindings=None)` — a reference executor implementation that takes a serialized interpolation dict and a bindings dict, substitutes `Var` references from bindings, passes `Literal` through, and preserves `Expr` fragments as-is (deferred to the executor). `Word` parts are concatenated after resolution.
 
 ---
 
 ### P3.2: `pipe.swl` and `function.swl` produce different DAGs despite semantic equivalence
 
+**Status: Fixed.**
+
 **Spec:** `A | B | C` desugars to a specific lambda form. Hand-written `Apply` + `Update` composition should produce the same DAG.
 
 **Code:** `_normalize_output_value()` (`force.py:793`) handles the chain case's flat merge correctly (producing `Record` with all outputs as top-level fields). The equivalent hand-written form reaches forcing as a deeply nested `Merge` tree, and `_normalize_output_value` doesn't fully flatten it — it preserves nested `Merge` nodes under the `result` key.
 
-**Proposed solution:** Fix `_normalize_output_value()` to recursively flatten `Merge` structures into a single `Record` whenever possible:
-1. When both sides of a `Merge` are `Record`, merge their fields into one `Record`.
-2. When one side is `Record` and the other is `Merge`, recursively normalize the `Merge` side and then merge fields.
-3. Add `force.py:_canonicalize_merges()` called from `_force_apply` and `_final_outputs` to eagerly normalize `Merge` → `Record` at construction time, preventing the divergence from propagating.
+**Fix:** Added `force.py:_canonicalize_merges(value)` that recursively normalizes `Merge` trees:
+- Both sides `Record` → merge fields into one `Record`
+- One side `Record` + other side `Merge` → recursively normalize the `Merge`, then merge
+- Also normalizes inside `Record` fields and `Field` sources
+
+Called from `_force_apply()` (after each application) and `_final_outputs()` (at output time), ensuring pipe-desugared and hand-written forms converge to the same DAG structure.
 
 ---
 
