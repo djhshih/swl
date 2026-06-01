@@ -12,6 +12,7 @@ def _format_param(param):
 
 def eval(fname):
     result = ck.Checker().load(fname)
+    print('workflow semantic view:')
     print('imports:')
     for name, imported in result.imports.items():
         print(f'  {name}: kind={imported.kind} path={imported.path}')
@@ -35,12 +36,13 @@ def eval(fname):
     print(f'workflow_type: {result.workflow_type!r}')
     print(f'root_input_type: {result.root_input_type!r}')
     print(f'root_output_type: {result.root_output_type!r}')
+    print('validation: use swl.semantic.validate_workflow_inputs(...) to validate concrete workflow inputs')
 
 
 if __name__ == '__main__':
     import sys, os, argparse
 
-    ap = argparse.ArgumentParser('Parse workflow and build semantic import view')
+    ap = argparse.ArgumentParser('Parse workflow and show semantic typing/import view')
     ap.add_argument('input', help='input file')
 
     args = ap.parse_args()

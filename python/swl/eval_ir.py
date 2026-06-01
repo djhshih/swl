@@ -17,6 +17,7 @@ def _print(node, indent='', tree_mode=False):
 def eval(fname):
     lowerer = Lowerer()
     tree = lowerer.lower_file(fname)
+    print('semantic IR:')
     print('functions:')
     for name in sorted(lowerer.function_cache.keys()):
         _print(lowerer.function_cache[name], '  ', False)
@@ -27,7 +28,7 @@ def eval(fname):
 if __name__ == '__main__':
     import sys, os, argparse
 
-    ap = argparse.ArgumentParser('Lower workflow to semantic IR')
+    ap = argparse.ArgumentParser('Lower workflow to semantic IR (pre-force, pre-CWL)')
     ap.add_argument('input', help='input file')
 
     args = ap.parse_args()

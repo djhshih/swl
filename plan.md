@@ -7,30 +7,6 @@ This plan is intentionally code-focused and excludes items already completed.
 
 ---
 
-## Priority 3: review CLI/debug surfaces for the updated canonical model
-
-### Why
-The semantic and force layers now expose more explicit workflow/root typing and canonical mapped-step metadata. CLI/debug surfaces should reflect that clearly.
-
-### Concrete changes
-
-Review and adjust if needed:
-- `python/swl/compile.py`
-- `python/swl/eval_force.py`
-- `python/swl/eval_ir.py`
-- `python/swl/eval_wf_semantic.py`
-
-Ensure:
-- canonical DAG output is described clearly as symbolic/logical
-- mapped-step source/schema information is visible enough for debugging
-- validation entry points are discoverable where appropriate
-
-### Required behavior after this step
-- debug surfaces accurately reflect the current canonical representation
-- users can inspect workflow typing and mapped DAG structure without confusion
-
----
-
 ## Priority 4: Implement table update semantics
 
 ### Why
