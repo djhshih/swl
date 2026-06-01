@@ -7,86 +7,7 @@ This plan is intentionally code-focused and excludes items already completed.
 
 ---
 
-## Priority 1: make canonical table-source representation more explicit in the forced DAG
-
-### Why
-Batch root typing now propagates concrete table columns, and the canonical DAG preserves mapped execution symbolically. However, logical table identity is still represented structurally in some cases (for example, as a record of column inputs) rather than through a more explicit canonical table-source abstraction.
-
-### Concrete changes
-
-#### 1. Refine canonical table-source representation in force/DAG
-Modify:
-- `python/swl/ir/force.py`
-- `python/swl/ir/dag.py`
-
-Decide whether to keep the current structural representation or introduce a more explicit logical table-source form.
-
-If refined, the representation should:
-- preserve logical `tab` identity in mapped-step sources
-- remain independent from CWL scatter-port structure
-- round-trip cleanly through `DAG.to_dict()` / `DAG.from_dict()`
-- remain compatible with current mapped-step `input_schema` / `output_schema`
-
-### Required behavior after this step
-- canonical DAG preserves logical mapped table sources clearly
-- canonical DAG remains SWL-oriented rather than backend-oriented
-- serialization remains stable for mapped workflows
-
----
-
-## Priority 2: implement or explicitly constrain table update semantics
-
-### Why
-`tab // rec`, `rec // tab`, and `tab // tab` are still not implemented. They currently fail explicitly, which is better than silent misbehavior, but this remains a major spec gap.
-
-### Concrete changes
-
-#### 1. Decide supported semantics
-Review:
-- `spec.md`
-- `new.md`
-
-Then implement or further constrain behavior for:
-- `tab // rec`
-- `rec // tab`
-- `tab // tab`
-
-Modify:
-- `python/swl/semantic/wf/check.py`
-- `python/swl/ir/force.py`
-- possibly `python/swl/ir/lower.py`
-
-If full implementation is deferred, tighten surface-level checks and errors so the unsupported boundary is completely clear.
-
-### Required behavior after this step
-- table-update behavior either works per spec or fails with precise, intentional errors
-- no table-update form is silently treated like ordinary record merge when that would violate `tab` semantics
-
----
-
-## Priority 3: Implement `map_by`
-
-### Why
-`map_by` is in the spec but still explicitly unsupported.
-
-### Concrete changes
-
-#### 1. Choose implementation vs. continued explicit rejection
-Review:
-- `spec.md`
-- `new.md`
-
-If implementing:
-- extend semantic typing in `python/swl/semantic/wf/check.py`
-- extend builtin lowering in `python/swl/ir/lower.py`
-- add force/DAG and CWL behavior as needed
-
-### Required behavior after this step
-- `map_by` is implemented consistently
-
----
-
-## Priority 4: add stronger semantic and force/DAG regression tests
+## Priority 1: add stronger semantic and force/DAG regression tests
 
 ### Why
 The remaining work is concentrated in edge semantics where narrow regressions are easy to introduce.
@@ -122,7 +43,7 @@ These tests should stay SWL/canonical-DAG focused. Backend flattening expectatio
 
 ---
 
-## Priority 5: review CLI/debug surfaces for the updated canonical model
+## Priority 3: review CLI/debug surfaces for the updated canonical model
 
 ### Why
 The semantic and force layers now expose more explicit workflow/root typing and canonical mapped-step metadata. CLI/debug surfaces should reflect that clearly.
@@ -145,6 +66,59 @@ Ensure:
 - users can inspect workflow typing and mapped DAG structure without confusion
 
 ---
+
+## Priority 4: Implement table update semantics
+
+### Why
+`tab // rec`, `rec // tab`, and `tab // tab` are still not implemented. They currently fail explicitly, which is better than silent misbehavior, but this remains a major spec gap.
+
+### Concrete changes
+
+#### 1. Decide supported semantics
+Review:
+- `spec.md`
+- `new.md`
+
+Then implement or further constrain behavior for:
+- `tab // rec`
+- `rec // tab`
+- `tab // tab`
+
+Modify:
+- `python/swl/semantic/wf/check.py`
+- `python/swl/ir/force.py`
+- possibly `python/swl/ir/lower.py`
+
+If full implementation is deferred, tighten surface-level checks and errors so the unsupported boundary is completely clear.
+
+### Required behavior after this step
+- table-update behavior either works per spec or fails with precise, intentional errors
+- no table-update form is silently treated like ordinary record merge when that would violate `tab` semantics
+
+---
+
+## Priority 5: Implement `map_by`
+
+### Why
+`map_by` is in the spec but still explicitly unsupported.
+
+### Concrete changes
+
+#### 1. Choose implementation vs. continued explicit rejection
+Review:
+- `spec.md`
+- `new.md`
+
+If implementing:
+- extend semantic typing in `python/swl/semantic/wf/check.py`
+- extend builtin lowering in `python/swl/ir/lower.py`
+- add force/DAG and CWL behavior as needed
+
+### Required behavior after this step
+- `map_by` is implemented consistently
+
+---
+
 
 ## Priority 6: continue auditing `spec.md` against implementation with focused fixes
 

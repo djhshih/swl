@@ -1,6 +1,5 @@
 # TODO
 
-- Improve canonical table-source representation in forced DAGs.
 - Add stronger semantic tests for concrete batch root typing and table-column propagation.
 - Add stronger force/DAG tests for logical mapped table sources and round-trip stability.
 - Implement `map_by`
