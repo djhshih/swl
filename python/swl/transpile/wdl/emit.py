@@ -8,7 +8,7 @@ def transpile_dag_file(path):
     return transpile_dag_dict(dag.to_dict())
 
 
-def transpile_dag_dict(data, workflow_id='main'):
+def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     dag = DAG.from_dict(data)
     _validate_supported(dag)
 
@@ -25,7 +25,8 @@ def transpile_dag_dict(data, workflow_id='main'):
                 tasks[step.id] = _task_name(step.id)
 
     lines = []
-    lines.append('version 1.1\n')
+    if _top_level:
+        lines.append('version 1.1\n')
     for s in structs:
         lines.append(s)
         lines.append('')
@@ -519,7 +520,7 @@ def _subworkflow_to_wdl(step, parent_id):
     if not dag_data:
         return ''
     wf_id = f'{parent_id}_{step.id}'
-    return transpile_dag_dict(dag_data, workflow_id=wf_id)
+    return transpile_dag_dict(dag_data, workflow_id=wf_id, _top_level=False)
 
 
 def _collect_structs(dag):
