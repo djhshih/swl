@@ -263,7 +263,7 @@ map call_variant
         self.assertEqual(sorted(mk['scatter']), ['#main/mk/fastq1', '#main/mk/fastq2', '#main/mk/outbase', '#main/mk/ref', '#main/mk/ref_amb', '#main/mk/ref_ann', '#main/mk/ref_bwt', '#main/mk/ref_pac', '#main/mk/ref_sa'])
         inputs = {item['id']: item for item in workflow['inputs']}
         self.assertIn('#main/fastq1', inputs)
-        self.assertIn('#main/xs', inputs)
+        self.assertNotIn('#main/xs', inputs)
         subwf = next(item for item in cwl['$graph'] if item.get('id') == '#mk')
         self.assertEqual(subwf['class'], 'Workflow')
 

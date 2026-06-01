@@ -25,11 +25,15 @@ def transpile_dag_dict(data, workflow_id='main'):
         if getattr(step, 'map', None) is None:
             continue
         source = step.map.get('source', {})
-        if source.get('source') != 'input' or 'name' not in source:
+        if source.get('source') == 'input' and 'name' in source:
+            for name, typ in (getattr(step, 'input_schema', None) or {}).items():
+                if name not in workflow_inputs:
+                    workflow_inputs[name] = type('InputSpec', (), {'type': _as_array_type(typ), 'desc': None})()
             continue
-        for name, typ in (getattr(step, 'input_schema', None) or {}).items():
-            if name not in workflow_inputs:
-                workflow_inputs[name] = type('InputSpec', (), {'type': _as_array_type(typ), 'desc': None})()
+        if source.get('source') == 'table':
+            for name, typ in (getattr(step, 'input_schema', None) or {}).items():
+                if name not in workflow_inputs:
+                    workflow_inputs[name] = type('InputSpec', (), {'type': _as_array_type(typ), 'desc': None})()
 
     workflow = {
         'id': '#main',
@@ -121,6 +125,17 @@ def _step_to_cwl(workflow_id, step, tool_id):
                 for port in ports:
                     if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
                         data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
+                data['scatter'] = [f'#main/{step.id}/{port}' for port in ports]
+                data['scatterMethod'] = 'dotproduct'
+            elif source.get('source') == 'table':
+                columns = source.get('columns', {})
+                for port in ports:
+                    column = columns.get(port)
+                    source_ref = f'#main/{port}'
+                    if isinstance(column, dict) and column.get('source') == 'input' and 'name' in column:
+                        source_ref = f"#main/{column['name']}"
+                    if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
+                        data['in'].append({'id': f'#main/{step.id}/{port}', 'source': source_ref})
                 data['scatter'] = [f'#main/{step.id}/{port}' for port in ports]
                 data['scatterMethod'] = 'dotproduct'
     return data
