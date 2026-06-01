@@ -7,6 +7,28 @@ This plan is intentionally code-focused and excludes items already completed.
 
 ---
 
+## Priority 5: Implement `map_by`
+
+### Why
+`map_by` is in the spec but still explicitly unsupported.
+
+### Concrete changes
+
+#### 1. Choose implementation vs. continued explicit rejection
+Review:
+- `spec.md`
+- `new.md`
+
+If implementing:
+- extend semantic typing in `python/swl/semantic/wf/check.py`
+- extend builtin lowering in `python/swl/ir/lower.py`
+- add force/DAG and CWL behavior as needed
+
+### Required behavior after this step
+- `map_by` is implemented consistently
+
+---
+
 ## Priority 4: Implement table update semantics
 
 ### Why
@@ -36,29 +58,6 @@ If full implementation is deferred, tighten surface-level checks and errors so t
 - no table-update form is silently treated like ordinary record merge when that would violate `tab` semantics
 
 ---
-
-## Priority 5: Implement `map_by`
-
-### Why
-`map_by` is in the spec but still explicitly unsupported.
-
-### Concrete changes
-
-#### 1. Choose implementation vs. continued explicit rejection
-Review:
-- `spec.md`
-- `new.md`
-
-If implementing:
-- extend semantic typing in `python/swl/semantic/wf/check.py`
-- extend builtin lowering in `python/swl/ir/lower.py`
-- add force/DAG and CWL behavior as needed
-
-### Required behavior after this step
-- `map_by` is implemented consistently
-
----
-
 
 ## Priority 6: continue auditing `spec.md` against implementation with focused fixes
 
