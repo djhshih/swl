@@ -974,7 +974,7 @@ workflow main {
 
 ## 12. Implementation Order
 
-### Phase 1: Scaffolding + basic task definitions
+### Phase 1: Scaffolding + basic task definitions ✓
 
 1. Create `swl/transpile/wdl/` package with `__init__.py`, `cli.py`, `__main__.py`.
 2. Implement `transpile_dag_dict()` skeleton: validate, iterate steps, call `_validate_supported`.
@@ -982,34 +982,34 @@ workflow main {
 4. Implement type mapping (`_wdl_type`), interpolation (`_interp_to_wdl`).
 5. Test: round-trip a simple single-task DAG (like `partial.swl`).
 
-### Phase 2: Workflow block + call wiring
+### Phase 2: Workflow block + call wiring ✓
 
 6. Implement `_dag_to_wdl()`: emit the top-level `workflow { }` block.
 7. Implement `_binding_to_wdl_expr()`: handle `Input`, `Literal`, `Field` bindings.
 8. Implement workflow input declaration.
 9. Test: transpile `function.swl` (three tasks in a pipeline).
 
-### Phase 3: Mapped steps (scatter via `map`)
+### Phase 3: Mapped steps (scatter via `map`) ✓
 
 10. Implement `_mapped_step_to_wdl()`: emit `scatter` block around `call`.
 11. Implement scatter input indexing vs broadcast input detection.
 12. Implement length-expression derivation from table source.
 13. Test: transpile `batch.swl` (map align over samples).
 
-### Phase 4: `map_by` via `collect_by_key()`
+### Phase 4: `map_by` via `collect_by_key()` ✓
 
 14. Implement `_mapped_by_step_to_wdl()`: emit `collect_by_key()` + scatter.
 15. Implement zip chain construction for multi-column tables.
 16. Implement key/value extraction inside scatter body.
 17. Test: transpile a simple `map_by` workflow.
 
-### Phase 5: Sub-workflows
+### Phase 5: Sub-workflows ✓
 
 18. Implement `_subworkflow_to_wdl()`: recursively transpile `definition.dag`.
 19. Implement multi-workflow emission (sub-workflows before parent).
 20. Test: transpile `import_partial.swl` (workflow step with sub-workflow).
 
-### Phase 6: Record + struct
+### Phase 6: Record + struct ✓
 
 21. Implement `_collect_structs()`: walk DAG for record shapes.
 22. Implement `_emit_struct()`: emit WDL `struct` definitions.
@@ -1017,7 +1017,7 @@ workflow main {
 24. Add merge binding rejection with clear error.
 25. Implement `_infer_output_type` for all binding kinds.
 
-### Phase 7: Hardening
+### Phase 7: Hardening ✓
 
 26. Handle optional types (`String?`, `File?`) with `?` suffix.
 27. Handle special characters in task/workflow names.
@@ -1060,25 +1060,25 @@ def _validate_output_binding(value, name):
 ## 14. Feature Support Summary
 
 | DAG feature | WDL 1.1 | Status |
-|---|---|---|
-| Task step | `task` with `command <<< >>>` | Planned Phase 1 |
-| Input binding | Call input block argument | Planned Phase 2 |
-| Step output binding | `call_alias.output_name` | Planned Phase 2 |
-| Literal binding | Inline literal value | Planned Phase 2 |
-| Field projection | `.field_name` member access | Planned Phase 2 |
-| Record merge | Must be flattened before transpilation | Rejected |
-| Record binding | `struct` literal | Planned Phase 6 |
-| `map` (scatter) | `scatter` block | Planned Phase 3 |
-| `map_by` | `collect_by_key()` + scatter | Planned Phase 4 |
-| Sub-workflow | `workflow` block + `call` | Planned Phase 5 |
-| CPU | `cpu:` in `requirements {}` | Planned Phase 1 |
-| Memory | `memory:` in `requirements {}` | Planned Phase 1 |
-| Container | `container:` in `requirements {}` | Planned Phase 1 |
-| Time | `time_minutes:` in `requirements {}` | Planned Phase 7 |
-| Output file path | `File name = "~{var}.ext"` | Planned Phase 1 |
-| Interpolation (var) | `~{var}` in command/output | Planned Phase 1 |
-| Interpolation (expr) | `~{expr}` passthrough | Planned Phase 1 |
-| Table binding | Array inputs + scatter indexing | Planned Phase 3 |
+|---|---|---|---|
+| Task step | `task` with `command <<< >>>` | Implemented (Phase 1) |
+| Input binding | Call input block argument | Implemented (Phase 2) |
+| Step output binding | `call_alias.output_name` | Implemented (Phase 2) |
+| Literal binding | Inline literal value | Implemented (Phase 2) |
+| Field projection | `.field_name` member access | Implemented (Phase 2) |
+| Record merge | Must be flattened before transpilation | Rejected (Phase 6) |
+| Record binding | `struct` literal | Implemented (Phase 6) |
+| `map` (scatter) | `scatter` block | Implemented (Phase 3) |
+| `map_by` | `collect_by_key()` + scatter | Implemented (Phase 4) |
+| Sub-workflow | `workflow` block + `call` | Implemented (Phase 5) |
+| CPU | `cpu:` in `requirements {}` | Implemented (Phase 1) |
+| Memory | `memory:` in `requirements {}` | Implemented (Phase 1) |
+| Container | `container:` in `requirements {}` | Implemented (Phase 1) |
+| Time | `time_minutes:` in `requirements {}` | Implemented (Phase 7) |
+| Output file path | `File name = "~{var}.ext"` | Implemented (Phase 1) |
+| Interpolation (var) | `~{var}` in command/output | Implemented (Phase 1) |
+| Interpolation (expr) | `~{expr}` passthrough | Implemented (Phase 1) |
+| Table binding | Array inputs + scatter indexing | Implemented (Phase 3) |
 | Optional types | `Type?` suffix | Planned Phase 7 |
 | Workflow doc/desc | `meta {}` / `parameter_meta {}` | Optional |
 
