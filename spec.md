@@ -94,8 +94,8 @@ A block is one or more statements, each ending with `\n` (newline).
 
 - `import: str -> fun` imports a task or workflow as a function
 - `map: (rec -> rec) -> tab -> tab` maps a `rec -> rec` function over the logical rows of a table and returns a table
-- `map_by: (rec -> rec) -> str -> tab -> tab` maps a function over table, grouping the rows
-  of the table by a key, to return a table
+- `map_by: (rec -> rec) -> str -> tab -> tab` groups a table by equality of a named key column,
+  applies a `rec -> rec` function to each grouped slice, and reassembles the per-group results into a table
 
 #### Workflow well-formedness
 
@@ -267,6 +267,8 @@ All other combinations are not allowed.
 - Field requirements are inferred from unsatisfied task inputs and field accesses.
 - A task input is satisfied if there is an upstream task output with the same name.
 - Batch-vs-simple workflow classification is therefore determined by required input shape, not by parameter naming conventions.
+- For `map_by f key xs`, the grouping key must name an existing top-level column of the input table.
+- During data validation, the input table will be checked for the named grouping key.
 
 
 ## Pre-run-time Checks
@@ -325,6 +327,25 @@ Upon providing inputs to a workflow ...
 - `map f xs` applies `f` to each logical row of `xs`
 - The result is reassembled as a table
 - If `f` is batch-typed, then `map f` is a compile-time error for now
+
+### Map By
+- `map_by` is a builtin
+- If `f : rec -> rec`, then `map_by f : str -> tab -> tab`
+- `map_by f key xs` partitions the logical rows of `xs` by equality of values in the column named by `key`
+- Each partition is presented to `f` as a grouped slice with record shape
+- The result of `f` is one output record per group
+- The result table therefore has one row per unique value of the grouping key
+- The grouping key is preserved in the output
+- If `f` is batch-typed, then `map_by f` is a compile-time error for now
+
+More explicitly, if:
+- `xs : tab{ k:[tk], a:[t1], b:[t2], ... }`
+- `f : rec{k:[tk], a:[t1], b:[t2], ...} -> rec{k:[tk], u1:v1, u2:v2, ...}`
+
+then:
+- `map_by f "k" xs : tab{ k:[tk], u1:[v1], u2:[v2], ... }`
+
+where the output row count equals the number of distinct values in `xs.k`.
 
 ### Pipeline
 - `A | B | C` desugars to:
