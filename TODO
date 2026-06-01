@@ -1,7 +1,13 @@
+Tests:
+- run cwltool on transpiled .cwl files
+- run sprocket on transpiled .wdl files
+- run nextflow on transpiled .nf files
+
 Python:
 - check that panel.cwl is transpiled correctly
 - Common Subexpression Elimination in lower.py
 - interpolation in bash command of task
+- remove trailing empty lines in Bash command
 - expression evaluation (e.g. memory / cpu) in the task
 - eta reduction (e.g. \x -> f x -> f)
 
