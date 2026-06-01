@@ -105,7 +105,10 @@ class Lowerer:
                     self.lower_expr(expr.arg, env, imports),
                 )
             if builtin == 'map_by_partial':
-                return ir.Function('map_by', 'builtin', self._builtin_map_by_signature())
+                return ir.Apply(
+                    ir.Function('map_by', 'builtin', self._builtin_map_by_signature()),
+                    self.lower_expr(expr.arg, env, imports),
+                )
             return ir.Apply(
                 self.lower_expr(expr.fun, env, imports),
                 self.lower_expr(expr.arg, env, imports),

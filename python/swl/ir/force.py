@@ -675,7 +675,7 @@ class Forcer:
             isinstance(value, ForcedFunction)
             and isinstance(value.function, ir.Function)
             and value.function.kind == 'builtin'
-            and value.function.name == 'map'
+            and value.function.name in ('map', 'map_by')
             and signature is not None
             and 'xs' in signature.inputs
         )
@@ -688,7 +688,13 @@ class Forcer:
             raise ValueError(f'partial map requires a normalized function, got: {fn!r}')
         xs_spec = signature.inputs['xs']
         xs = self._input('xs', xs_spec)
-        mapped = self._force_map(fn, xs)
+        key = None
+        if isinstance(value.function, ir.Function) and value.function.name == 'map_by':
+            if 'key' not in value.bound.fields:
+                raise ValueError('partial map_by workflow is missing bound grouping key')
+            key_value = value.bound.fields['key']
+            key = key_value.value if isinstance(key_value, Literal) else None
+        mapped = self._force_map(fn, xs, key=key)
         if isinstance(mapped, MappedStep):
             return Record({name: Field(mapped, name) for name in mapped.outputs})
         return mapped

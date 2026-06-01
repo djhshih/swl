@@ -81,6 +81,9 @@ merge = import "merge.sh"
             os.path.join(root, 'map_root.swl'): '''call_variant = import "pipe.swl"
 map call_variant
 ''',
+            os.path.join(root, 'map_by_root.swl'): '''call_variant = import "pipe.swl"
+map_by call_variant "outbase"
+''',
         }, root
 
     def test_dag_round_trip_dict(self):
@@ -167,6 +170,15 @@ call  = import "call.sh"
         dag = force_file(os.path.join(root, 'map_root.swl'), files)
         data = dag.to_dict()
         self.assertEqual(data['steps'][0]['map']['source'], {'source': 'input', 'name': 'xs'})
+        restored = DAG.from_dict(data)
+        self.assertEqual(restored.to_dict(), data)
+
+    def test_partial_map_by_root_round_trip_preserves_group_by(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'map_by_root.swl'), files)
+        data = dag.to_dict()
+        self.assertEqual(data['steps'][0]['map']['source'], {'source': 'input', 'name': 'xs'})
+        self.assertEqual(data['steps'][0]['map']['group_by'], 'outbase')
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
 
