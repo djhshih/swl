@@ -5,6 +5,7 @@ from swl.ir import node as ir
 from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep, TableSource
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import signature_from_task
+from swl.semantic.wf.check import _validate_bash_variables
 from swl.syntax.task import bash as task_bash
 from swl.syntax.task import interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
@@ -506,6 +507,10 @@ class Forcer:
         task = TaskParser().parse(src)
         signature = signature_from_task(task)
         parsed_body = task_bash.Parser().parse(task.body)
+        input_names = set(signature.inputs.keys())
+        var_errors = _validate_bash_variables(parsed_body, input_names, f'task at "{path}"')
+        if var_errors:
+            raise ValueError('\n'.join(var_errors))
         definition = {
             'doc': task.annotation.doc,
             'body': task.body,

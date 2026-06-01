@@ -3,6 +3,7 @@ import os
 from swl.semantic.task.type import Param, TaskSignature, TypeChecker, signature_from_task
 from swl.semantic.wf import type as wf_type
 from swl.syntax.task import bash as task_bash
+from swl.syntax.task import interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
 from swl.syntax.wf import builtins, node as wf_node
 from swl.syntax.wf.parser import Parser as WfParser
@@ -105,6 +106,39 @@ def _is_explicitly_bound_value(value):
     return not isinstance(value, (UnknownValue, TypedValue))
 
 
+def _bash_interp_vars(word):
+    vars = []
+    parts = word.parts if isinstance(word, interp.Word) else [word]
+    for part in parts:
+        if isinstance(part, interp.Var):
+            vars.append(part.name)
+    return vars
+
+
+def _validate_bash_variables(parsed_body, input_names, context_name):
+    errors = []
+    defined = set(input_names)
+    for stmt in parsed_body.statements:
+        if isinstance(stmt, task_bash.Assignment):
+            refs = _bash_interp_vars(stmt.value)
+            for ref in refs:
+                if ref not in defined:
+                    errors.append(
+                        f'Unresolved variable "${ref}" in assignment to "{stmt.name}" '
+                        f'in {context_name}'
+                    )
+            defined.add(stmt.name)
+        elif isinstance(stmt, task_bash.Command):
+            for word in stmt.words:
+                for ref in _bash_interp_vars(word):
+                    if ref not in defined:
+                        errors.append(
+                            f'Unresolved variable "${ref}" in command "{stmt.text[:60]}" '
+                            f'in {context_name}'
+                        )
+    return errors
+
+
 class WorkflowCheck:
     def __init__(self, tree, imports, errors, inferred_inputs, signature=None, is_batch=False, workflow_type=None, root_input_type=None, root_output_type=None):
         self.tree = tree
@@ -193,7 +227,12 @@ class Checker:
             src = self._read_file(path)
             task = TaskParser().parse(src)
             parsed_body = task_bash.Parser().parse(task.body)
-            return Import(name, path, signature_from_task(task), 'task', task=task, parsed_body=parsed_body)
+            signature = signature_from_task(task)
+            input_names = set(signature.inputs.keys())
+            var_errors = _validate_bash_variables(parsed_body, input_names, f'task "{name}" ({path})')
+            if var_errors:
+                raise ValueError('\n'.join(var_errors))
+            return Import(name, path, signature, 'task', task=task, parsed_body=parsed_body)
         if path.endswith('.swl'):
             check = self.load(path)
             if check.signature is None:

@@ -146,10 +146,11 @@ Both `semantic/wf/check.py` and `ir/lower.py` now import `builtins` from `swl.sy
 
 **Code:** `syntax/task/bash.py` parses bash scripts into `Assignment`/`Command` structures with interpolation analysis, but no pipeline stage uses it. The DAG stores the raw bash body as `script` with no static analysis.
 
-**Fix:** Wired `bash.Parser.parse()` into the pipeline:
-1. `Checker._load_import()` for `.sh` files: parses the bash body at import time and stores the parsed `Script` in the `Import` object as `parsed_body`.
-2. `force.py:_tool_definition()`: also parses the bash body and stores the parsed result alongside the tool definition.
-3. Added `task` and `parsed_body` fields to the `Import` class.
+**Fix:** Wired `bash.Parser.parse()` into the pipeline with variable reference validation:
+1. Added `_validate_bash_variables(parsed_body, input_names, context_name)` in `semantic/wf/check.py` that walks the parsed bash script, tracking defined variables (starting with task input names), and reports errors for any `${var}` reference that doesn't match a known task input or a previously assigned bash variable.
+2. Called from `Checker._load_import()` for `.sh` files: raises `ValueError` if any unresolved variable references are found at import time.
+3. Called from `force.py:_tool_definition()`: also validates at forcing time for defense-in-depth.
+4. Added `task` and `parsed_body` fields to the `Import` class.
 
 ---
 
