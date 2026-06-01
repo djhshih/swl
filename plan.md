@@ -7,42 +7,6 @@ This plan is intentionally code-focused and excludes items already completed.
 
 ---
 
-## Priority 1: add stronger semantic and force/DAG regression tests
-
-### Why
-The remaining work is concentrated in edge semantics where narrow regressions are easy to introduce.
-
-### Concrete changes
-
-#### 1. Semantic tests
-Modify/add in:
-- `python/swl/semantic/wf/test_check.py`
-
-Add focused tests for:
-- concrete batch root classification and column propagation from mapped callees
-- remaining edge cases around imported workflows and partial application
-- any newly supported or newly constrained table-update behavior
-- `map_by` behavior, whether implemented or explicitly unsupported
-
-#### 2. IR/force tests
-Modify/add in:
-- `python/swl/ir/test_force.py`
-- `python/swl/ir/test_force_codec.py`
-
-Add stronger tests for:
-- logical mapped table-source preservation in the canonical DAG
-- imported workflow mapping and partial applications inside `map`
-- mapped-step schema preservation
-- DAG codec round trips for mapped metadata and logical sources
-
-These tests should stay SWL/canonical-DAG focused. Backend flattening expectations belong in CWL emitter tests.
-
-### Required behavior after this step
-- remaining semantic changes are covered by narrow regression tests before and after implementation
-- canonical DAG invariants are enforced independently from CWL lowering
-
----
-
 ## Priority 3: review CLI/debug surfaces for the updated canonical model
 
 ### Why
@@ -180,22 +144,3 @@ Do this sequence:
 
 ---
 
-## Recommended implementation order
-
-1. add stronger focused tests for remaining semantic/force gaps
-2. decide and implement/constrain table-update semantics
-3. decide whether to implement `map_by`
-4. refine canonical table-source representation if needed
-5. review CLI/debug surfaces
-6. continue spec-audit work incrementally
-
----
-
-## Definition of done
-
-The remaining work is done when all of the following are true:
-- canonical DAG preserves logical mapped table sources clearly and stably
-- table-update semantics are either implemented per spec or explicitly constrained with precise errors
-- `map_by` is either implemented consistently or rejected consistently
-- regression tests cover the remaining semantic and canonical-DAG edge cases
-- CLI/debug surfaces accurately reflect the current workflow typing and canonical DAG model
