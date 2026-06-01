@@ -340,7 +340,7 @@ Upon providing inputs to a workflow ...
 
 More explicitly, if:
 - `xs : tab{ k:[tk], a:[t1], b:[t2], ... }`
-- `f : rec{k:[tk], a:[t1], b:[t2], ...} -> rec{k:[tk], u1:v1, u2:v2, ...}`
+- `f : rec{k:tk, a:[t1], b:[t2], ...} -> rec{k:tk, u1:v1, u2:v2, ...}`
 
 then:
 - `map_by f "k" xs : tab{ k:[tk], u1:[v1], u2:[v2], ... }`

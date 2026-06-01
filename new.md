@@ -122,6 +122,33 @@ Forbidden for now:
 When `f2` is applied to a table `tab`, `f1` is run on each logical row of the table,
 producing output records that are then reassembled into a homogeneous table.
 
+### `map_by`
+
+`map_by` is a builtin.
+
+`map_by` takes a function `f1` with signature `rec -> rec`, a string key naming a table column,
+and returns a function with signature `tab -> tab`.
+
+Allowed mapped callees in the target design:
+- imported task
+- imported simple workflow
+- lambda of type `rec -> rec`
+- partially applied function whose remaining signature is `rec -> rec`
+
+Forbidden for now:
+- `map_by` applied to a batch workflow (`tab -> rec` or `tab -> tab`)
+- nested batch mapping where the mapped callee itself consumes `tab`
+
+When `map_by f1 key` is applied to a table `tab`:
+- rows are partitioned by equality of the values in the column named by `key`
+- each partition is presented to `f1` as a grouped slice with record shape
+- that grouped slice is a `rec`, not a `tab`
+- fields in that grouped slice may contain arrays collected from the rows in the group
+- those arrays do not by themselves make the grouped slice a `tab`
+- one output record is produced per group
+- output rows therefore correspond to unique key values, not original input rows
+- the grouping key must already exist in the input table schema and must be preserved in the output
+
 ### `.` on `tab`
 
 If `xs : tab` and `field : [t]` is a top-level table column, then:
@@ -247,7 +274,36 @@ Forbidden typing cases for now:
 
 So `map` is not a general higher-kinded collection combinator here; it is specifically the lifting from row-wise `rec -> rec` computation to table-wise `tab -> tab` computation.
 
-### 6. Workflow classification
+### 6. `map_by`
+
+The fundamental typing rule is:
+
+- if `f : rec -> rec`, then `map_by f : str -> tab -> tab`
+
+and therefore:
+
+- if `f : rec -> rec`, `key : str`, and `xs : tab`, then `map_by f key xs : tab`
+
+More explicitly, if:
+- `xs : tab{ k:[tk], a:[t1], b:[t2], ... }`
+- `f : rec{k:tk, a:[t1], b:[t2], ...} -> rec{k:tk, u1:v1, u2:v2, ...}`
+
+then:
+- `map_by f "k" xs : tab{ k:[tk], u1:[v1], u2:[v2], ... }`
+
+with one output row per distinct value of `xs.k`.
+
+Additional typing rules:
+- the `key` argument must name an existing top-level input table column
+- if the named key column is absent from the statically known table schema, that is a compile-time error
+- the output of the mapped function must preserve the grouping key
+- if the key is not present in the mapped output record schema, that is a compile-time error
+
+As with `map`, forbidden typing cases for now:
+- if `f : tab -> rec`, then `map_by f` is a compile-time error
+- if `f : tab -> tab`, then `map_by f` is a compile-time error
+
+### 7. Workflow classification
 
 Workflow classification is type-based.
 
