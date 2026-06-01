@@ -133,7 +133,7 @@ Both `semantic/wf/check.py` and `ir/lower.py` now import `builtins` from `swl.sy
 **Code:** `syntax/task/bash.py` parses bash scripts into `Assignment`/`Command` structures with interpolation analysis, but no pipeline stage uses it. The DAG stores the raw bash body as `script` with no static analysis.
 
 **Proposed solution:** Wire `bash.Parser.parse()` into `Checker._load_import()` (for `.sh` files) and `force.py:_tool_definition()`. After parsing, validate:
-- All variable references in interpolation (`${var}`) match known workflow inputs or task outputs.
+- All variable references in interpolation (`${var}`) match known workflow inputs or variables defined previously in the bash script itself.
 - Shell syntax errors are caught early.
 - The parsed `Script` is stored in the DAG's task definition alongside the raw body, so an executor can use it for fast variable lookup without re-parsing.
 
