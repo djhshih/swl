@@ -7,6 +7,7 @@ WF_COUNT=0
 COMPARE_COUNT=0
 CWL_COMPARE_COUNT=0
 WDL_COMPARE_COUNT=0
+NF_COMPARE_COUNT=0
 
 EXPECT_COMPILE_FAIL=(
 	tests/bad_explicit.swl
@@ -170,6 +171,7 @@ print_summary() {
 	echo "  dag equality checks: $COMPARE_COUNT"
 	echo "  cwl golden checks: $CWL_COMPARE_COUNT"
 	echo "  wdl golden checks: $WDL_COMPARE_COUNT"
+	echo "  nf golden checks: $NF_COMPARE_COUNT"
 }
 
 if (( $# > 0 )); then
@@ -245,6 +247,7 @@ else
 
 	compare_files tests/nf/pipe.nf tests/nf/function.nf
 	compare_files tests/nf/explicit.nf tests/nf/function.nf
+	NF_COMPARE_COUNT=$((NF_COMPARE_COUNT + 2))
 
 	print_summary
 fi
