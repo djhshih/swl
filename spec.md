@@ -343,6 +343,10 @@ Upon providing inputs to a workflow ...
 - If a table `t` is updated with a record `r` via `t // r`, scalar properties in `r` are implicitly duplicated across all rows of `t` to preserve table length integrity. Similarly for `r // t`.
 - If both sides are tables, matching fields must remain array-typed and length-compatible.
 
+### Bindings
+
+Binding statements in a block can reference each other, but no recursion.
+
 ---
 
 ## Examples
