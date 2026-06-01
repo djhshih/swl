@@ -134,7 +134,7 @@ class Forcer:
         if isinstance(node, ir.Map):
             fn = self.force_value(node.function, env)
             arg = self.force_value(node.arg, env)
-            return self._force_map(fn, arg)
+            return self._force_map(fn, arg, key=getattr(node, 'key', None))
 
         if isinstance(node, ir.Block):
             local = ForceEnv(env)
@@ -171,11 +171,22 @@ class Forcer:
         return result
 
     def _apply(self, fn, arg):
-        if isinstance(fn, ForcedFunction) and isinstance(fn.function, ir.Function) and fn.function.kind == 'builtin' and fn.function.name == 'map':
+        if isinstance(fn, ForcedFunction) and isinstance(fn.function, ir.Function) and fn.function.kind == 'builtin' and fn.function.name in ('map', 'map_by'):
+            if fn.function.name == 'map':
+                if fn.bound is None:
+                    return ForcedFunction(fn.function, Record({'f': arg}), fn.signature)
+                if isinstance(fn.bound, Record) and 'f' in fn.bound.fields:
+                    return self._force_map(fn.bound.fields['f'], arg)
+                bound = self._merge_bound(fn.bound, arg)
+                return ForcedFunction(fn.function, bound, fn.signature)
             if fn.bound is None:
                 return ForcedFunction(fn.function, Record({'f': arg}), fn.signature)
-            if isinstance(fn.bound, Record) and 'f' in fn.bound.fields:
-                return self._force_map(fn.bound.fields['f'], arg)
+            if isinstance(fn.bound, Record) and 'f' in fn.bound.fields and 'key' not in fn.bound.fields:
+                return ForcedFunction(fn.function, Record({'f': fn.bound.fields['f'], 'key': arg}), fn.signature)
+            if isinstance(fn.bound, Record) and 'f' in fn.bound.fields and 'key' in fn.bound.fields:
+                key_value = fn.bound.fields['key']
+                key = key_value.value if isinstance(key_value, Literal) else None
+                return self._force_map(fn.bound.fields['f'], arg, key=key)
             bound = self._merge_bound(fn.bound, arg)
             return ForcedFunction(fn.function, bound, fn.signature)
         if isinstance(arg, MappedStep):
@@ -339,28 +350,28 @@ class Forcer:
         self.step_cache[key] = result
         return result
 
-    def _force_map(self, fn, arg):
+    def _force_map(self, fn, arg, key=None):
         if not isinstance(fn, ForcedFunction):
             raise ValueError(f'Cannot map non-function value during forcing: {fn!r}')
         source = arg
         if isinstance(arg, Record) and len(arg.fields) == 1:
             source = next(iter(arg.fields.values()))
-        return self._apply_mapped(fn, source)
+        return self._apply_mapped(fn, source, key=key)
 
-    def _apply_mapped(self, fn, source):
+    def _apply_mapped(self, fn, source, key=None):
         if not isinstance(fn, ForcedFunction):
             raise ValueError(f'Cannot map non-function value during forcing: {fn!r}')
         if self._is_batch_function(fn):
             raise ValueError('map on batch workflow is not supported during forcing')
         if isinstance(fn.function, ir.Function) and fn.function.kind in ('task', 'workflow'):
-            return self._emit_mapped_step(fn, source)
+            return self._emit_mapped_step(fn, source, key=key)
         raise ValueError(f'map requires normalized executable callable during forcing: {fn.function!r}')
 
-    def _emit_mapped_step(self, fn, source):
+    def _emit_mapped_step(self, fn, source, key=None):
         target = fn.function
         outputs = list(target.signature.outputs.keys())
         step_id = self._step_id(target.name)
-        bindings, map_info = self._mapped_step_bindings(fn, source)
+        bindings, map_info = self._mapped_step_bindings(fn, source, key=key)
         signature = self._forced_signature(fn)
         step = MappedStep(
             id=step_id,
@@ -378,9 +389,12 @@ class Forcer:
         self.steps.append(step)
         return step
 
-    def _mapped_step_bindings(self, fn, source):
+    def _mapped_step_bindings(self, fn, source, key=None):
         logical_source = self._logical_table_source(source)
-        return {}, {'source': _binding_to_public_dict(logical_source)}
+        info = {'source': _binding_to_public_dict(logical_source)}
+        if key is not None:
+            info['group_by'] = key
+        return {}, info
 
     def _logical_table_source(self, source):
         if isinstance(source, Record):

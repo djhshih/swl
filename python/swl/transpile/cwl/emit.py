@@ -191,6 +191,9 @@ def _docker_requirement(run):
 
 
 def _validate_supported(dag):
+    for step in dag.steps:
+        if getattr(step, 'map', None) is not None and step.map.get('group_by') is not None:
+            raise ValueError(f'CWL transpilation does not yet support map_by grouping: {step.id} by {step.map.get("group_by")}')
     for name, value in dag.outputs.items():
         error = _workflow_output_error(value)
         if error is not None:

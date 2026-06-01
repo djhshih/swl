@@ -144,12 +144,14 @@ class Apply(Node):
 class Map(Node):
     function: Node
     arg: Node
+    key: Optional[str] = None
 
     def __repr__(self):
         return (
             f'Map(\n'
             f'  function={self.function!r},\n'
             f'  arg={self.arg!r},\n'
+            f'  key={self.key!r},\n'
             f')'
         )
 

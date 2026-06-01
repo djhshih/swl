@@ -288,6 +288,29 @@ map call_variant
         step = next(step for step in workflow['steps'] if step['run'].startswith('#map_lambda'))
         self.assertEqual(step['scatterMethod'], 'dotproduct')
 
+    def test_map_by_transpile_reports_explicit_grouping_not_supported(self):
+        bad = {
+            'inputs': {'sample': {'type': '[str]', 'desc': None}},
+            'steps': [{
+                'id': 'grouped',
+                'type': 'workflow',
+                'path': '/tmp/grouped.swl',
+                'map': {'source': {'source': 'table', 'name': 'table', 'columns': {'sample': {'source': 'input', 'name': 'sample'}}}, 'group_by': 'sample'},
+                'input_schema': {'sample': 'str'},
+                'output_schema': {'sample': 'str'},
+                'deps': [],
+                'inputs': {'sample': {'type': 'str', 'desc': None}},
+                'bindings': {},
+                'outputs': {'sample': {'type': 'str'}},
+                'run': {},
+                'script': '',
+                'definition': {'class': 'Workflow', 'dag': {'inputs': {'sample': {'type': 'str', 'desc': None}}, 'steps': [], 'outputs': {'sample': {'source': 'input', 'name': 'sample'}}}, 'inputs': {'sample': {'type': 'str', 'desc': None}}, 'outputs': {'sample': {'type': 'str'}}, 'body': '', 'run': {}},
+            }],
+            'outputs': {'sample': {'step': 'grouped', 'output': 'sample'}},
+        }
+        with self.assertRaisesRegex(ValueError, 'CWL transpilation does not yet support map_by grouping'):
+            transpile_dag_dict(bad)
+
     def test_root_partial_map_transpiles_as_scattered_subworkflow(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'map_root.swl'), files)

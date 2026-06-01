@@ -91,13 +91,21 @@ class Lowerer:
                     self.lower_expr(function_expr, env, imports),
                     self.lower_expr(arg_expr, env, imports),
                 )
+            if builtin == 'map_by_apply':
+                key_expr, function_expr, arg_expr = self._match_map_by(expr)
+                key = key_expr.value if key_expr.type == wf_node.NodeType.str else None
+                return ir.Map(
+                    self.lower_expr(function_expr, env, imports),
+                    self.lower_expr(arg_expr, env, imports),
+                    key=key,
+                )
             if builtin == 'map_partial':
                 return ir.Apply(
                     ir.Function('map', 'builtin', self._builtin_map_signature()),
                     self.lower_expr(expr.arg, env, imports),
                 )
-            if builtin == 'map_by':
-                raise ValueError('map_by is not implemented')
+            if builtin == 'map_by_partial':
+                return ir.Function('map_by', 'builtin', self._builtin_map_by_signature())
             return ir.Apply(
                 self.lower_expr(expr.fun, env, imports),
                 self.lower_expr(expr.arg, env, imports),
@@ -142,6 +150,9 @@ class Lowerer:
     def _builtin_map_signature(self):
         return TaskSignature({'f': Param('f', None), 'xs': Param('xs', None)}, {}, {})
 
+    def _builtin_map_by_signature(self):
+        return TaskSignature({'f': Param('f', None), 'key': Param('key', None), 'xs': Param('xs', None)}, {}, {})
+
     def _function_from_import(self, name, imported):
         if name in self.function_cache:
             return self.function_cache[name]
@@ -172,17 +183,30 @@ class Lowerer:
             return None
         return left.arg, arg
 
+    def _match_map_by(self, expr):
+        if expr.type != wf_node.NodeType.apply:
+            return None
+        left = expr.fun
+        if left.type != wf_node.NodeType.apply:
+            return None
+        inner = left.fun
+        if inner.type != wf_node.NodeType.apply:
+            return None
+        if inner.fun.type != wf_node.NodeType.id or inner.fun.name != 'map_by':
+            return None
+        return left.arg, inner.arg, expr.arg
+
     def _match_builtin(self, expr):
         if expr.type != wf_node.NodeType.apply:
             return None
         if self._match_map(expr) is not None:
             return 'map_apply'
+        if self._match_map_by(expr) is not None:
+            return 'map_by_apply'
         if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map':
             return 'map_partial'
         if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map_by':
-            return 'map_by'
-        if expr.fun.type == wf_node.NodeType.apply and expr.fun.fun.type == wf_node.NodeType.id and expr.fun.fun.name == 'map_by':
-            return 'map_by'
+            return 'map_by_partial'
         return None
 
     def _lower_chain_items(self, expr, env, imports):
@@ -216,7 +240,7 @@ class Lowerer:
             fn = self.normalize(node.function)
             arg = self.normalize(node.arg)
             fn = self._materialize_mappable_callable(fn)
-            return ir.Map(fn, arg)
+            return ir.Map(fn, arg, node.key)
 
         if isinstance(node, ir.Ref):
             return node
@@ -309,7 +333,7 @@ class Lowerer:
                 fn = binding_map[fn.id]
             fn = self._materialize_mappable_callable(fn)
             arg = self._normalize_with_bindings(node.arg, binding_map)
-            return ir.Map(fn, arg)
+            return ir.Map(fn, arg, node.key)
         if isinstance(node, ir.Apply):
             return ir.Apply(self._normalize_with_bindings(node.function, binding_map), self._normalize_with_bindings(node.arg, binding_map), node.signature)
         if isinstance(node, ir.Record):

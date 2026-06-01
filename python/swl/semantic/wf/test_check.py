@@ -591,11 +591,30 @@ class TestWorkflowCheck(ut.TestCase):
         self.assertTrue(isinstance(result.root_input_type, wf_type.RecordType))
         self.assertTrue(isinstance(result.root_output_type, wf_type.RecordType))
 
-    def test_map_by_reports_explicit_not_implemented(self):
+    def test_map_by_requires_existing_key_and_preserves_it(self):
         root = self._make_fixture_dir()
-        path = self._write(root, 'map_by.swl', '\\xs ->\n    map_by (\\x -> x) "k" xs\n')
+        self._write(root, 'group_ok.swl', 'align = import "align.sh"\n\\x ->\n    a = align x\n    { sample: x.sample, bam: a.bam }\n')
+        path = self._write(root, 'map_by_ok.swl', 'g = import "group_ok.swl"\n\\xs ->\n    map_by g "sample" xs\n')
         result = Checker().load(path)
-        self.assertTrue(any('map_by is not implemented' in err for err in result.errors))
+        self.assertEqual(result.errors, [])
+        self.assertTrue(isinstance(result.root_input_type, wf_type.TableType))
+        self.assertIn('sample', result.root_input_type.columns)
+
+    def test_map_by_reports_missing_key_column(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'group_nosample.sh', '# @ GroupNoSample\n# in\n#   bam [file]\n# out\n#   sample str = s\n#   bam file = out.bam\necho ok\n')
+        self._write(root, 'group_nosample.swl', 'g = import "group_nosample.sh"\ng\n')
+        path = self._write(root, 'map_by_missing_key.swl', 'g = import "group_nosample.swl"\n\\xs ->\n    map_by g "sample" xs\n')
+        result = Checker().load(path)
+        self.assertTrue(any('Missing field on tab: sample' in err for err in result.errors))
+
+    def test_map_by_requires_preserving_grouping_key_in_output(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'group_bad.sh', '# @ GroupBad\n# in\n#   sample [str]\n#   bam [file]\n# out\n#   bam file = out.bam\necho bad\n')
+        self._write(root, 'group_bad.swl', 'g = import "group_bad.sh"\ng\n')
+        path = self._write(root, 'map_by_missing_output_key.swl', 'g = import "group_bad.swl"\n\\xs ->\n    map_by g "sample" xs\n')
+        result = Checker().load(path)
+        self.assertTrue(any('map_by output must preserve grouping key: sample' in err for err in result.errors))
 
     def test_table_update_reports_explicit_not_implemented(self):
         root = self._make_fixture_dir()

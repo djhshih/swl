@@ -191,6 +191,13 @@ _MAP_ROOT = '''call_variant = import "pipe.swl"
 map call_variant
 '''
 
+_MAP_BY_WORKFLOW = '''g = import "group_align.swl"
+merge = import "merge.sh"
+\\xs ->
+    ys = map_by g "sample" xs
+    merge { bam: ys.bam, outbase: "merged" }
+'''
+
 
 class TestForce(ut.TestCase):
     def _files(self):
@@ -214,6 +221,11 @@ class TestForce(ut.TestCase):
 \\x ->
     align x
 ''',
+            os.path.join(root, 'group_align.swl'): '''align = import "align.sh"
+\\x ->
+    a = align x
+    { sample: x.sample, bam: a.bam }
+''',
             os.path.join(root, 'mk_align_partial.swl'): '''align = import "align.sh"
 \\x ->
     f = align { ref: "hg38.fa", ref_fai: "hg38.fa.fai" }
@@ -232,6 +244,7 @@ class TestForce(ut.TestCase):
             os.path.join(root, 'map_workflow.swl'): _MAP_WORKFLOW,
             os.path.join(root, 'map_workflow_partial.swl'): _MAP_WORKFLOW_PARTIAL,
             os.path.join(root, 'map_root.swl'): _MAP_ROOT,
+            os.path.join(root, 'map_by_workflow.swl'): _MAP_BY_WORKFLOW,
         }, root
 
     def test_force_saturated_workflow_produces_task_dag(self):
@@ -437,6 +450,13 @@ class TestForce(ut.TestCase):
                 'ref_fai': {'source': 'input', 'name': 'ref_fai'},
             },
         )
+
+    def test_map_by_imported_workflow_preserves_grouping_metadata(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'map_by_workflow.swl'), files).to_dict()
+        self.assertEqual([step['id'] for step in data['steps']], ['g', 'merge'])
+        self.assertEqual(data['steps'][0]['map']['group_by'], 'sample')
+        self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
 
     def test_force_rejects_unnormalized_map_callable(self):
         with self.assertRaisesRegex(ValueError, 'map requires normalized executable callable during forcing'):

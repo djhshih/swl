@@ -205,12 +205,16 @@ class Checker:
 
     def _match_map_by(self, expr):
         if expr.type != wf_node.NodeType.apply:
-            return False
+            return None
         left = expr.fun
         if left.type != wf_node.NodeType.apply:
-            return False
+            return None
         inner = left.fun
-        return inner.type == wf_node.NodeType.id and inner.name == 'map_by'
+        if inner.type != wf_node.NodeType.apply:
+            return None
+        if inner.fun.type != wf_node.NodeType.id or inner.fun.name != 'map_by':
+            return None
+        return left.arg, inner.arg, expr.arg
 
     def _check_scope(self, tree):
         errors = []
@@ -295,7 +299,11 @@ class Checker:
             if self._uses_map(final.body):
                 demanded, mode_issues, chosen_result = self._eval_lambda_in_mode(final, imports, env, 'table', inferred_inputs)
                 if self._value_is_table(chosen_result):
-                    issues[:] = [issue for issue in issues if not issue.startswith('Cannot resolve field access: (. ') and issue != 'map requires a tab argument']
+                    issues[:] = [
+                        issue for issue in issues
+                        if not issue.startswith('Cannot resolve field access: (. ')
+                        and issue not in ('map requires a tab argument', 'map_by requires a tab argument')
+                    ]
                     root_input_type = self._infer_root_table_type(final, imports, env, inferred_inputs)
                     root_output_type = self._wf_output_type(chosen_result, table_context=True)
                     inputs = self._signature_inputs_from_table_type(root_input_type)
@@ -604,9 +612,12 @@ class Checker:
             if path is not None:
                 return UnknownValue()
             map_parts = self._match_map(expr)
-            if self._match_map_by(expr):
-                issues.append('map_by is not implemented')
-                return UnknownValue()
+            map_by_parts = self._match_map_by(expr)
+            if map_by_parts is not None:
+                mapped_key = self._eval_expr(map_by_parts[0], imports, env, demanded, issues)
+                mapped_fun = self._eval_expr(map_by_parts[1], imports, env, demanded, issues)
+                mapped_arg = self._eval_expr(map_by_parts[2], imports, env, demanded, issues)
+                return self._apply_map_by(mapped_fun, mapped_key, mapped_arg, issues)
             if map_parts is not None:
                 mapped_fun = self._eval_expr(map_parts[0], imports, env, demanded, issues)
                 mapped_arg = self._eval_expr(map_parts[1], imports, env, demanded, issues)
@@ -615,8 +626,8 @@ class Checker:
                 mapped_fun = self._eval_expr(expr.arg, imports, env, demanded, issues)
                 return self._apply_map_partial(mapped_fun, issues)
             if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map_by':
-                issues.append('map_by is not implemented')
-                return UnknownValue()
+                mapped_fun = self._eval_expr(expr.arg, imports, env, demanded, issues)
+                return self._apply_map_by_partial(mapped_fun, issues)
             fun = self._eval_expr(expr.fun, imports, env, demanded, issues)
             arg = self._eval_expr(expr.arg, imports, env, demanded, issues)
             return self._apply(fun, arg, demanded, issues)
@@ -693,7 +704,7 @@ class Checker:
         return left.arg, expr.arg
 
     def _uses_map(self, expr):
-        if expr.type == wf_node.NodeType.apply and self._match_map(expr) is not None:
+        if expr.type == wf_node.NodeType.apply and (self._match_map(expr) is not None or self._match_map_by(expr) is not None):
             return True
         return any(self._uses_map(child) for child in self._children(expr))
 
@@ -714,7 +725,11 @@ class Checker:
         local_env[fn.param.name] = self._initial_param_value(mode, inferred_inputs)
         result = self._eval_function_body(fn, imports, local_env, demanded, issues)
         if mode == 'table':
-            demanded = {fn.param.name}
+            table_value = local_env.get(fn.param.name)
+            if isinstance(table_value, TableValue) and table_value.columns:
+                demanded = set(table_value.columns.keys())
+            else:
+                demanded = {fn.param.name}
         return demanded, issues, result
 
     def _eval_prefix_bindings(self, exprs, imports, demanded=None, issues=None):
@@ -731,7 +746,7 @@ class Checker:
 
     def _looks_like_stale_record_errors(self, issues):
         return (
-            'map requires a tab argument' in issues
+            ('map requires a tab argument' in issues or 'map_by requires a tab argument' in issues)
             and any(issue.startswith('Cannot resolve field access: (. ') for issue in issues)
         )
 
@@ -762,6 +777,20 @@ class Checker:
             first_input='f',
         )
 
+    def _apply_map_by_partial(self, fun, issues):
+        target = self._map_target(fun, issues)
+        if target is None:
+            return UnknownValue()
+        return ClosureValue(
+            FunctionValue(
+                'map_by',
+                TaskSignature({'key': Param('key', None), 'xs': Param('xs', None)}, dict(target.signature.outputs), {}),
+                'builtin',
+                first_input='key',
+            ),
+            ClosedRecord({'f': target}),
+        )
+
     def _apply_map(self, fun, arg, issues):
         target = self._map_target(fun, issues)
         if target is None:
@@ -781,6 +810,32 @@ class Checker:
                     arg.columns[name] = TypedValue(param.type)
         return TableValue({name: UnknownValue() for name in target.signature.outputs.keys()})
 
+    def _apply_map_by(self, fun, key, arg, issues):
+        target = self._map_target(fun, issues)
+        if target is None:
+            return UnknownValue()
+        if not isinstance(key, str):
+            issues.append('map_by requires a string key')
+            return UnknownValue()
+        if not isinstance(arg, TableValue):
+            issues.append('map_by requires a tab argument')
+            return UnknownValue()
+        if not arg.columns:
+            arg.columns.update({
+                name: TypedValue(param.type)
+                for name, param in target.signature.inputs.items()
+            })
+            arg.placeholder = False
+        else:
+            for name, param in target.signature.inputs.items():
+                if name not in arg.columns or isinstance(arg.columns[name], UnknownValue):
+                    arg.columns[name] = TypedValue(param.type)
+        if key not in arg.columns:
+            issues.append(f'Missing field on tab: {key}')
+        if key not in target.signature.outputs:
+            issues.append(f'map_by output must preserve grouping key: {key}')
+        return TableValue({name: UnknownValue() for name in target.signature.outputs.keys()})
+
     def _apply(self, fun, arg, demanded, issues):
         if isinstance(fun, ClosureValue):
             return self._apply_closure(fun, arg, demanded, issues)
@@ -790,10 +845,18 @@ class Checker:
         return UnknownValue()
 
     def _apply_closure(self, closure, arg, demanded, issues=None):
+        if isinstance(closure.function, FunctionValue) and closure.function.kind == 'builtin' and closure.function.name == 'map_by':
+            bound_fields = dict(getattr(closure.bound_value, 'fields', {}))
+            if 'f' in bound_fields and 'key' not in bound_fields:
+                return ClosureValue(closure.function, ClosedRecord({'f': bound_fields['f'], 'key': arg}))
+            if 'f' in bound_fields and 'key' in bound_fields:
+                return self._apply_map_by(bound_fields['f'], bound_fields['key'], arg, issues or [])
         bound = self._merge_arg_values(closure.bound_value, self._argument_value(closure, arg))
         return self._application_result(closure, bound, demanded, issues or [])
 
     def _apply_function(self, fun, arg, demanded, issues=None):
+        if isinstance(fun, FunctionValue) and fun.kind == 'builtin' and fun.name == 'map_by':
+            return self._apply_map_by_partial(arg, issues or [])
         bound = self._argument_value(fun, arg)
         return self._application_result(fun, bound, demanded, issues or [])
 
