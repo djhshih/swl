@@ -168,7 +168,7 @@ class Lowerer:
             value = self.lower_binding(expr, env, imports)
             return ir.Variable(self._alloc_var_id(), expr.id.name, value)
 
-        return ir.Unknown()
+        raise ValueError(f'Unhandled AST node type during lowering: {expr.type}, expression: {expr}')
 
     def _builtin_map_signature(self):
         return TaskSignature({'f': Param('f', None), 'xs': Param('xs', None)}, {}, {})

@@ -223,11 +223,12 @@ Called from `_force_apply()` (after each application) and `_final_outputs()` (at
 
 ### P5.2: `ir/node.py`: `Unknown` sentinel can propagate to forcing
 
-`lower.py` returns `ir.Unknown()` as a fallback for unhandled AST node types. `force.py:force_value()` has no handler for `ir.Unknown` and raises a generic `ValueError` without pointing to the original AST location or node type.
+### P5.2: `ir/node.py`: `Unknown` sentinel can propagate to forcing
 
-**Proposed solution:**
-1. Replace the silent `return ir.Unknown()` fallback in `lower.py` with a `raise ValueError(...)` that names the unhandled `NodeType` and the expression's string representation.
-2. Alternatively, add an `ir.Unknown` handler in `force_value()` that raises a descriptive error with the IR node's context.
+**Status: Fixed.**
+
+1. Replaced `return ir.Unknown()` fallback in `lower.py:lower_expr()` with `raise ValueError(f'Unhandled AST node type during lowering: {expr.type}, expression: {expr}')` — this provides the original AST location and node type instead of silently producing an Unknown node.
+2. Added an `ir.Unknown` handler in `force.py:force_value()` that raises a descriptive error, ensuring any remaining Unknown nodes (e.g., from `Block.result` default) are caught with a clear message rather than falling through to the generic catch-all.
 
 ---
 

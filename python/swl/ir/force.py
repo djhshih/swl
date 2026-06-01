@@ -157,6 +157,9 @@ class Forcer:
             self.forced_variables[node.id] = value
             return value
 
+        if isinstance(node, ir.Unknown):
+            raise ValueError(f'Unknown IR node reached forcing (the lowerer should have rejected this): {node!r}')
+
         raise ValueError(f'Unsupported IR node during forcing: {type(node).__name__}')
 
     def _force_ref(self, ref, env):
