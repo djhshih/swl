@@ -1,9 +1,11 @@
+import re
 from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
 from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep, TableSource
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import signature_from_task
+from swl.syntax.task import bash as task_bash
 from swl.syntax.task import interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
 
@@ -52,7 +54,9 @@ class Forcer:
         for name, output in outputs.items():
             self._assert_wireable_output(name, output)
         self._prune_unused_inputs(value, outputs)
-        return DAG(dict(self.inputs), list(self.steps), outputs)
+        dag = DAG(dict(self.inputs), list(self.steps), outputs)
+        dag.validate()
+        return dag
 
     def _assert_canonical(self, node):
         if isinstance(node, ir.Lambda):
@@ -481,11 +485,19 @@ class Forcer:
         names = list(function.signature.run.keys())
         if not names or not self._can_project_record_fields(bound):
             return {}
-        return {
-            name: self._project_input(bound, name)
-            for name in names
-            if self._project_field(bound, name) is not _SENTINEL
-        }
+        result = {}
+        for name in names:
+            spec = function.signature.run[name]
+            projected = self._project_field(bound, name)
+            if projected is _SENTINEL:
+                if getattr(spec, 'parsed_default', None) is None:
+                    raise ValueError(
+                        f'Required run parameter "{name}" for task {function.name} '
+                        f'({function.path}) has no value and no default'
+                    )
+                continue
+            result[name] = self._project_input(bound, name)
+        return result
 
     def _tool_definition(self, path):
         if path in self.tool_defs:
@@ -493,6 +505,7 @@ class Forcer:
         src = self.lowerer.checker._read_file(path)
         task = TaskParser().parse(src)
         signature = signature_from_task(task)
+        parsed_body = task_bash.Parser().parse(task.body)
         definition = {
             'doc': task.annotation.doc,
             'body': task.body,
@@ -570,7 +583,25 @@ class Forcer:
             built['desc'] = param.desc
         if param.default is not None:
             built['default'] = _interp_to_dict(param.default)
+            if kind == 'out':
+                self._validate_output_default_glob(name, param.default)
         return built
+
+    def _validate_output_default_glob(self, name, default):
+        text = _interp_word_to_text(default)
+        if '[' in text or ']' in text:
+            depth = 0
+            for c in text:
+                if c == '[':
+                    depth += 1
+                elif c == ']':
+                    depth -= 1
+                if depth < 0 or depth > 1:
+                    raise ValueError(f'Malformed glob pattern in output "{name}" default: {text!r}')
+            if depth != 0:
+                raise ValueError(f'Malformed glob pattern in output "{name}" default: {text!r}')
+        if '*' in text or '?' in text:
+            pass
 
     # dag finalization ------------------------------------------------------
 
@@ -870,6 +901,18 @@ def _interp_to_dict(value):
     if isinstance(value, interp.Expr):
         return {'kind': 'expr', 'text': value.text}
     return None
+
+
+def _interp_word_to_text(value):
+    if isinstance(value, interp.Word):
+        return ''.join(_interp_word_to_text(part) for part in value.parts)
+    if isinstance(value, interp.Literal):
+        return value.text
+    if isinstance(value, interp.Var):
+        return '${' + value.name + '}'
+    if isinstance(value, interp.Expr):
+        return '${' + value.text + '}'
+    return ''
 
 
 def _binding_to_public_dict(value):

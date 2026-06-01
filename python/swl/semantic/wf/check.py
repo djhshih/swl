@@ -2,18 +2,21 @@ import os
 
 from swl.semantic.task.type import Param, TaskSignature, TypeChecker, signature_from_task
 from swl.semantic.wf import type as wf_type
+from swl.syntax.task import bash as task_bash
 from swl.syntax.task.parser import Parser as TaskParser
 from swl.syntax.wf import builtins, node as wf_node
 from swl.syntax.wf.parser import Parser as WfParser
 
 
 class Import:
-    def __init__(self, name: str, path: str, signature: TaskSignature, kind: str, check=None):
+    def __init__(self, name: str, path: str, signature: TaskSignature, kind: str, check=None, task=None, parsed_body=None):
         self.name = name
         self.path = path
         self.signature = signature
         self.kind = kind
         self.check = check
+        self.task = task
+        self.parsed_body = parsed_body
 
 
 class OpenRecord:
@@ -142,6 +145,7 @@ class Checker:
             checker = TypeChecker()
             for imported in imports.values():
                 checker.add_task(imported.name, imported.signature)
+            self._type_checker = checker
             errors.extend(self._check_chains(tree, checker))
             inferred_inputs, infer_errors = self._infer_inputs(tree, imports)
             signature, is_batch, workflow_type, root_input_type, root_output_type = self._build_workflow_signature(tree, imports, inferred_inputs, errors)
@@ -186,8 +190,10 @@ class Checker:
 
     def _load_import(self, name: str, path: str) -> Import:
         if path.endswith('.sh'):
-            task = TaskParser().parse(self._read_file(path))
-            return Import(name, path, signature_from_task(task), 'task')
+            src = self._read_file(path)
+            task = TaskParser().parse(src)
+            parsed_body = task_bash.Parser().parse(task.body)
+            return Import(name, path, signature_from_task(task), 'task', task=task, parsed_body=parsed_body)
         if path.endswith('.swl'):
             check = self.load(path)
             if check.signature is None:
@@ -586,7 +592,18 @@ class Checker:
         if expr.type == wf_node.NodeType.apply:
             path = builtins.match_import(expr)
             if path is not None:
-                return UnknownValue()
+                base_dir = os.path.dirname(self._loading[-1]) if self._loading else '.'
+                full_path = os.path.abspath(os.path.join(base_dir, path))
+                stem = os.path.splitext(os.path.basename(full_path))[0]
+                imp = self._load_import(stem, full_path)
+                return FunctionValue(
+                    stem,
+                    imp.signature,
+                    imp.kind,
+                    imports=imp.check.imports if imp.check is not None else None,
+                    imported_check=imp.check,
+                    batch=imp.check.is_batch if imp.check is not None else False,
+                )
             map_parts = builtins.match_map(expr)
             map_by_parts = builtins.match_map_by(expr)
             if map_by_parts is not None:
@@ -606,6 +623,12 @@ class Checker:
                 return self._apply_map_by_partial(mapped_fun, issues)
             fun = self._eval_expr(expr.fun, imports, env, demanded, issues)
             arg = self._eval_expr(expr.arg, imports, env, demanded, issues)
+            if isinstance(fun, FunctionValue) and isinstance(arg, FunctionValue):
+                if hasattr(self, '_type_checker'):
+                    left_name = arg.name
+                    right_name = fun.name
+                    if left_name in self._type_checker.signatures and right_name in self._type_checker.signatures:
+                        issues.extend(self._type_checker.check_chain(left_name, right_name))
             result = self._apply(fun, arg, demanded, issues)
             self._record_apply_satisfied(expr, fun, arg, result)
             return result
@@ -1000,8 +1023,17 @@ class Checker:
             return UnknownValue()
         merged = dict(left_fields)
         for name, value in right_fields.items():
-            if name in merged and isinstance(merged[name], UnknownValue) and isinstance(value, TypedValue):
-                merged[name] = value
+            if name in merged:
+                if isinstance(merged[name], UnknownValue) and isinstance(value, TypedValue):
+                    merged[name] = value
+                elif isinstance(value, UnknownValue) and isinstance(merged[name], TypedValue):
+                    pass
+                else:
+                    left_type = self._value_type(merged[name])
+                    right_type = self._value_type(value)
+                    if left_type != wf_type.UNKNOWN and right_type != wf_type.UNKNOWN and left_type != right_type:
+                        pass
+                    merged[name] = value
             else:
                 merged[name] = value
         if isinstance(left, OpenRecord) or isinstance(right, OpenRecord):

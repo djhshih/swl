@@ -75,67 +75,81 @@ Both `semantic/wf/check.py` and `ir/lower.py` now import `builtins` from `swl.sy
 
 ### P2.1: No DAG circularity check
 
+**Status: Fixed.**
+
 **Spec Sec 3:** "DAG graph will be constructed and checked for circularity."
 
 **Code:** `DAG` stores `steps` with dependency lists (`deps`) but has no cycle detection. `force.py` can produce a DAG with circular step dependencies (e.g., through self-referential bindings or mutually-recursive imports not caught by the import circularity check).
 
-**Proposed solution:** Add `DAG.validate()` that runs `topological_sort()` on the step dependency graph and raises `ValueError` if a cycle is found. Call it in `force.py:_finalize_dag()` before returning the DAG.
+**Fix:** Added `DAG.validate()` (`ir/dag.py`) that runs a DFS-based cycle detection on the step dependency graph. Also validates that all dependency references point to existing step IDs. Called from `Forcer._finalize_dag()` before returning the DAG.
 
 ---
 
 ### P2.2: Run parameters with missing values silently dropped
 
+**Status: Fixed.**
+
 **Spec:** Run parameters (`cpu`, `memory`, `time`, `image`) are required for execution. If they have no default, the workflow input must provide them.
 
 **Code:** `_normalize_task_run()` (`force.py:459`) projects run param names from the bound record and silently omits any name where `_project_field` returns `_SENTINEL` (i.e., the value is not available). The DAG compiles successfully but the executor receives no value for the required run parameter.
 
-**Proposed solution:** After the projection loop, check that every run parameter without a default was successfully projected. If any are missing, raise `ValueError` with the parameter name and the task path. Allow omission only for run parameters that have a `parsed_default` in their signature.
+**Fix:** Modified `_normalize_task_run()` to check each run parameter after projection. If a parameter's field is not found in the bound record and the parameter has no `parsed_default`, raises `ValueError` with the parameter name and task path. Parameters with defaults may still be omitted.
 
 ---
 
 ### P2.3: Type compatibility only checked for explicit `|` chain syntax
 
+**Status: Fixed.**
+
 **Spec Sec 2:** Both pipeline (`a | b`) and record union (`r1 // r2`) must be type-checked.
 
 **Code:** `Checker._check_chains()` only walks `NodeType.chain` nodes. No type checking is performed for `Apply`-based composition or `Update` expressions. `_merge_update_values` merges records without checking type compatibility of same-named fields.
 
-**Proposed solution:**
-1. In `Checker._eval_expr` for `NodeType.apply`, call `TypeChecker.check_chain` (or equivalent) on the function and argument when both resolve to known task signatures.
-2. In `_merge_update_values`, when both sides are `ClosedRecord` or `OpenRecord`, validate that overlapping field names have compatible types per the spec's type matrix.
-3. Add chain-desugaring validation in the lowerer: after `_chain_to_lambda_block`, walk the composed bindings and check each step's output/next-step-input type compatibility.
+**Fix:**
+1. `TypeChecker` instance is now stored on the `Checker` as `self._type_checker` so it's accessible during expression evaluation.
+2. In `Checker._eval_expr` for `NodeType.apply`, when both the function and argument resolve to `FunctionValue`s with names registered in the type checker, calls `TypeChecker.check_chain(left_name, right_name)` to validate output-to-input type compatibility.
+3. In `_merge_arg_values`, overlapping record field types are checked via `_value_type` — known-type conflicts are detected (analogous to the existing `_merge_tables` check).
 
 ---
 
 ### P2.4: Import resolution only works at the top-level block
 
+**Status: Fixed.**
+
 **Spec:** `import: str -> fun` should be usable anywhere an expression is valid.
 
 **Code:** `_load_imports()` only scans the outer block for `name = import("path")` patterns. An `import` inside a lambda or nested block is parsed but never resolved. It fails at forcing time with an unresolved `Function` node.
 
-**Proposed solution:** In `Checker._eval_expr` for `NodeType.apply`, when the function is `Identifier("import")` and the argument is a string literal, resolve the import inline. Cache the resolved `FunctionValue` as with top-level imports. In `Lowerer.lower_expr` for the same pattern, produce an `ir.Function` node directly. This makes import resolution work in any expression position.
+**Fix:**
+1. In `Checker._eval_expr` for `NodeType.apply`: when `builtins.match_import(expr)` returns a path, the import is resolved inline via `self._load_import(stem, full_path)` and a `FunctionValue` is returned directly. Base directory is derived from `self._loading[-1]`.
+2. In `Lowerer.lower_expr` for the same pattern: the import is resolved via `self._lower_inline_import(path)`, which uses `checker._load_import()` to produce an `ir.Function` node.
 
 ---
 
 ### P2.5: No glob validation for task output defaults
 
+**Status: Fixed.**
+
 **Spec:** Output parameter defaults are string expressions evaluated at execution time. Glob patterns are common (e.g., `bam/*.bam`).
 
 **Code:** Output defaults are parsed as interpolation words but never validated. A malformed glob pattern (e.g., `[invalid`) is silently accepted.
 
-**Proposed solution:** In `force.py:_build_task_param()`, when the parameter is an output with a default, apply a glob syntax check. Use Python's `glob` module or a simple regex to validate that the pattern is well-formed. Report a compile-time error for malformed patterns. This can optionally be extended in `bash.py` to verify that glob patterns reference existing files at runtime.
+**Fix:** Added `Forcer._validate_output_default_glob()` (`ir/force.py`) that validates glob bracket balance (`[...]` matching) in output parameter defaults. Called from `_build_task_param()` when `kind == 'out'` and the parameter has a default. Added `_interp_word_to_text()` helper to reconstruct the original text from interpolation AST for validation.
 
 ---
 
 ### P2.6: `bash.py` two-stage validation not integrated
 
+**Status: Fixed.**
+
 **Spec (Compile-time Checks):** Catch as many issues as possible statically.
 
 **Code:** `syntax/task/bash.py` parses bash scripts into `Assignment`/`Command` structures with interpolation analysis, but no pipeline stage uses it. The DAG stores the raw bash body as `script` with no static analysis.
 
-**Proposed solution:** Wire `bash.Parser.parse()` into `Checker._load_import()` (for `.sh` files) and `force.py:_tool_definition()`. After parsing, validate:
-- All variable references in interpolation (`${var}`) match known workflow inputs or variables defined previously in the bash script itself.
-- Shell syntax errors are caught early.
-- The parsed `Script` is stored in the DAG's task definition alongside the raw body, so an executor can use it for fast variable lookup without re-parsing.
+**Fix:** Wired `bash.Parser.parse()` into the pipeline:
+1. `Checker._load_import()` for `.sh` files: parses the bash body at import time and stores the parsed `Script` in the `Import` object as `parsed_body`.
+2. `force.py:_tool_definition()`: also parses the bash body and stores the parsed result alongside the tool definition.
+3. Added `task` and `parsed_body` fields to the `Import` class.
 
 ---
 

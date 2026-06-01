@@ -131,6 +131,29 @@ class DAG:
             'outputs': {name: _binding_to_dict(value) for name, value in self.outputs.items()},
         }
 
+    def validate(self):
+        step_ids = {step.id for step in self.steps}
+        for step in self.steps:
+            for dep in step.deps:
+                if dep not in step_ids:
+                    raise ValueError(f'Step {step.id} depends on unknown step: {dep}')
+        visited = set()
+        in_stack = set()
+        def visit(step_id):
+            if step_id in in_stack:
+                raise ValueError(f'Circular dependency detected in DAG involving step: {step_id}')
+            if step_id in visited:
+                return
+            visited.add(step_id)
+            in_stack.add(step_id)
+            step = next(s for s in self.steps if s.id == step_id)
+            for dep in step.deps:
+                visit(dep)
+            in_stack.remove(step_id)
+        for step in self.steps:
+            if step.id not in visited:
+                visit(step.id)
+
     @classmethod
     def from_dict(cls, data):
         inputs = {

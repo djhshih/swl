@@ -99,6 +99,9 @@ class Lowerer:
             )
 
         if expr.type == wf_node.NodeType.apply:
+            import_path = builtins.match_import(expr)
+            if import_path is not None:
+                return self._lower_inline_import(import_path)
             builtin = self._match_builtin(expr)
             if builtin == 'map_apply':
                 function_expr, arg_expr = builtins.match_map(expr)
@@ -172,6 +175,13 @@ class Lowerer:
 
     def _builtin_map_by_signature(self):
         return TaskSignature({'f': Param('f', None), 'key': Param('key', None), 'xs': Param('xs', None)}, {}, {})
+
+    def _lower_inline_import(self, path):
+        base_dir = os.path.dirname(self.checker._loading[-1]) if self.checker._loading else '.'
+        full_path = os.path.abspath(os.path.join(base_dir, path))
+        stem = os.path.splitext(os.path.basename(full_path))[0]
+        imported = self.checker._load_import(stem, full_path)
+        return self._function_from_import(stem, imported)
 
     def _function_from_import(self, name, imported):
         if name in self.function_cache:
