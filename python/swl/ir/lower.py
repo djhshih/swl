@@ -3,7 +3,7 @@ import os
 from swl.ir import node as ir
 from swl.semantic.task.type import Param, TaskSignature
 from swl.semantic.wf.check import Checker
-from swl.syntax.wf import node as wf_node
+from swl.syntax.wf import builtins, node as wf_node
 from swl.syntax.wf.parser import Parser as WfParser
 
 
@@ -101,13 +101,13 @@ class Lowerer:
         if expr.type == wf_node.NodeType.apply:
             builtin = self._match_builtin(expr)
             if builtin == 'map_apply':
-                function_expr, arg_expr = self._match_map(expr)
+                function_expr, arg_expr = builtins.match_map(expr)
                 return ir.Map(
                     self.lower_expr(function_expr, env, imports),
                     self.lower_expr(arg_expr, env, imports),
                 )
             if builtin == 'map_by_apply':
-                key_expr, function_expr, arg_expr = self._match_map_by(expr)
+                key_expr, function_expr, arg_expr = builtins.match_map_by(expr)
                 key = key_expr.value if key_expr.type == wf_node.NodeType.str else None
                 return ir.Map(
                     self.lower_expr(function_expr, env, imports),
@@ -192,36 +192,12 @@ class Lowerer:
         self.workflow_cache[path] = body
         return body
 
-    def _match_map(self, expr):
-        if expr.type != wf_node.NodeType.apply:
-            return None
-        left = expr.fun
-        arg = expr.arg
-        if left.type != wf_node.NodeType.apply:
-            return None
-        if left.fun.type != wf_node.NodeType.id or left.fun.name != 'map':
-            return None
-        return left.arg, arg
-
-    def _match_map_by(self, expr):
-        if expr.type != wf_node.NodeType.apply:
-            return None
-        left = expr.fun
-        if left.type != wf_node.NodeType.apply:
-            return None
-        inner = left.fun
-        if inner.type != wf_node.NodeType.apply:
-            return None
-        if inner.fun.type != wf_node.NodeType.id or inner.fun.name != 'map_by':
-            return None
-        return left.arg, inner.arg, expr.arg
-
     def _match_builtin(self, expr):
         if expr.type != wf_node.NodeType.apply:
             return None
-        if self._match_map(expr) is not None:
+        if builtins.match_map(expr) is not None:
             return 'map_apply'
-        if self._match_map_by(expr) is not None:
+        if builtins.match_map_by(expr) is not None:
             return 'map_by_apply'
         if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map':
             return 'map_partial'

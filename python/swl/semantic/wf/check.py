@@ -3,7 +3,7 @@ import os
 from swl.semantic.task.type import Param, TaskSignature, TypeChecker, signature_from_task
 from swl.semantic.wf import type as wf_type
 from swl.syntax.task.parser import Parser as TaskParser
-from swl.syntax.wf import node as wf_node
+from swl.syntax.wf import builtins, node as wf_node
 from swl.syntax.wf.parser import Parser as WfParser
 
 
@@ -177,7 +177,7 @@ class Checker:
         for expr in tree.body:
             if expr.type != wf_node.NodeType.bind:
                 continue
-            path = self._match_import(expr.value)
+            path = builtins.match_import(expr.value)
             if path is None:
                 continue
             full_path = os.path.join(base_dir, path)
@@ -194,28 +194,6 @@ class Checker:
                 raise ValueError(f'Imported workflow does not produce a signature: {path}')
             return Import(name, path, check.signature, 'workflow', check=check)
         raise ValueError(f'Unrecognized import path: {path}')
-
-    def _match_import(self, expr):
-        if expr.type != wf_node.NodeType.apply:
-            return None
-        if expr.fun.type != wf_node.NodeType.id or expr.fun.name != 'import':
-            return None
-        if expr.arg.type != wf_node.NodeType.str:
-            return None
-        return expr.arg.value
-
-    def _match_map_by(self, expr):
-        if expr.type != wf_node.NodeType.apply:
-            return None
-        left = expr.fun
-        if left.type != wf_node.NodeType.apply:
-            return None
-        inner = left.fun
-        if inner.type != wf_node.NodeType.apply:
-            return None
-        if inner.fun.type != wf_node.NodeType.id or inner.fun.name != 'map_by':
-            return None
-        return left.arg, inner.arg, expr.arg
 
     def _check_scope(self, tree):
         errors = []
@@ -281,7 +259,7 @@ class Checker:
         env = {}
         for expr in tree.body[:-1]:
             if expr.type == wf_node.NodeType.bind:
-                if self._match_import(expr.value) is not None:
+                if builtins.match_import(expr.value) is not None:
                     continue
                 env[expr.id.name] = self._eval_expr(expr.value, imports, env, demanded, issues)
         value = self._eval_expr(final, imports, env, demanded, issues)
@@ -351,7 +329,7 @@ class Checker:
         env = {}
         for expr in tree.body[:-1]:
             if expr.type == wf_node.NodeType.bind:
-                if self._match_import(expr.value) is not None:
+                if builtins.match_import(expr.value) is not None:
                     continue
                 env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
         result = self._eval_expr(final, imports, env, set(), issues)
@@ -470,7 +448,7 @@ class Checker:
         for expr in body.body[:-1]:
             if expr.type != wf_node.NodeType.bind:
                 continue
-            if self._match_import(expr.value) is not None:
+            if builtins.match_import(expr.value) is not None:
                 continue
             local_env[expr.id.name] = self._eval_expr(expr.value, imports, local_env, set(), [])
         callee = local_env.get(result.fun.name)
@@ -606,11 +584,11 @@ class Checker:
             return self._merge_update_values(left, right, issues)
 
         if expr.type == wf_node.NodeType.apply:
-            path = self._match_import(expr)
+            path = builtins.match_import(expr)
             if path is not None:
                 return UnknownValue()
-            map_parts = self._match_map(expr)
-            map_by_parts = self._match_map_by(expr)
+            map_parts = builtins.match_map(expr)
+            map_by_parts = builtins.match_map_by(expr)
             if map_by_parts is not None:
                 mapped_key = self._eval_expr(map_by_parts[0], imports, env, demanded, issues)
                 mapped_fun = self._eval_expr(map_by_parts[1], imports, env, demanded, issues)
@@ -693,18 +671,8 @@ class Checker:
 
         return UnknownValue()
 
-    def _match_map(self, expr):
-        if expr.type != wf_node.NodeType.apply:
-            return None
-        left = expr.fun
-        if left.type != wf_node.NodeType.apply:
-            return None
-        if left.fun.type != wf_node.NodeType.id or left.fun.name != 'map':
-            return None
-        return left.arg, expr.arg
-
     def _uses_map(self, expr):
-        if expr.type == wf_node.NodeType.apply and (self._match_map(expr) is not None or self._match_map_by(expr) is not None):
+        if expr.type == wf_node.NodeType.apply and (builtins.match_map(expr) is not None or builtins.match_map_by(expr) is not None):
             return True
         return any(self._uses_map(child) for child in self._children(expr))
 
@@ -739,7 +707,7 @@ class Checker:
         for expr in exprs:
             if expr.type != wf_node.NodeType.bind:
                 continue
-            if self._match_import(expr.value) is not None:
+            if builtins.match_import(expr.value) is not None:
                 continue
             env[expr.id.name] = self._eval_expr(expr.value, imports, env, local_demanded, local_issues)
         return env
@@ -911,7 +879,7 @@ class Checker:
         env = {}
         for expr in tree.body[:-1]:
             if expr.type == wf_node.NodeType.bind:
-                if self._match_import(expr.value) is not None:
+                if builtins.match_import(expr.value) is not None:
                     continue
                 env[expr.id.name] = self._eval_expr(expr.value, fun.imports, env, demanded, issues)
         env[final.param.name] = bound

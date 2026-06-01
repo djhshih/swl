@@ -58,9 +58,16 @@ The Checker's analysis is not embedded in the IR. The Forcer re-derives everythi
 
 ### P1.4: Duplicate pattern-matching for imports and builtins across checker and lowerer
 
+**Status: Fixed.**
+
 **Root cause:** Both `semantic/wf/check.py` and `ir/lower.py` independently implement pattern-matching for `import("path")`, `map f xs`, and `map_by f key xs`. The checker needs it for type inference; the lowerer needs it for IR construction. Any change to the AST structure or built-in detection rules must be mirrored in both files.
 
-**Proposed solution:** Extract a shared pattern-matching module, e.g. `syntax/wf/builtins.py`, with functions like `match_import(expr)`, `match_map(expr)`, `match_map_by(expr)`. Both checker and lowerer import from this single source. If the detection logic later depends on checker state (e.g., resolved import tables), make these methods on a shared base class or pass the checker state as a parameter.
+**Fix:** Created `syntax/wf/builtins.py` with three shared functions:
+- `match_import(expr)` — returns path string or `None`
+- `match_map(expr)` — returns `(function_expr, arg_expr)` or `None`
+- `match_map_by(expr)` — returns `(key_expr, function_expr, arg_expr)` or `None`
+
+Both `semantic/wf/check.py` and `ir/lower.py` now import `builtins` from `swl.syntax.wf` and call `builtins.match_*()` instead of their own `self._match_*()` methods. The individual `_match_import`, `_match_map`, and `_match_map_by` methods were removed from both classes. The lowerer's `_match_builtin` method (which is specific to lowering logic) remains but now delegates to `builtins.match_map` and `builtins.match_map_by` internally.
 
 ---
 

@@ -66,6 +66,7 @@ SWL is a workflow language that compiles to a logical DAG of task invocations. T
 - `_parse_function()` handles `\` name `->` body.
 - `_parse_record()` handles `{ key: value, ... }` with comma separators.
 - The `import` call is detected later (not at parse time) — at parse time it's just an `Apply` of `id("import")` to a `String`.
+- **Shared pattern-matching** (`syntax/wf/builtins.py`): Functions `match_import`, `match_map`, and `match_map_by` are shared between the checker and lowerer to detect `import("path")`, `map f xs`, and `map_by f key xs` AST patterns.
 
 **Representation at this stage:** A tree of `Expr` objects rooted at a `Block`. Example for `\x ->\n    y = f x\n    y`:
 ```
