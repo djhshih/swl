@@ -1,0 +1,3 @@
+call_variant = import "pipe.swl"
+
+map_by call_variant "outbase"
