@@ -199,6 +199,9 @@ else
 		-o tests/cwl/panel.cwl
 	PYTHONPATH=python python -m swl.transpile.cwl tests/dag/map.json \
 		-o tests/cwl/map.cwl
+	# TODO Implemenent CWL transpilation for workflows involving map_by
+	# PYTHONPATH=python python -m swl.transpile.cwl tests/dag/map_by.json \
+	# 	-o tests/cwl/map_by.cwl
 
 	compare_files tests/cwl/pipe.cwl tests/cwl/function.cwl
 	compare_files tests/cwl/explicit.cwl tests/cwl/function.cwl
