@@ -377,3 +377,26 @@ Converts the compiled DAG JSON into CWL (`Common Workflow Language`) documents. 
 | Compile-time checks (1-4) | `semantic/wf/check.py:Checker.load` |
 | Pre-run-time checks (5) | `semantic/wf/validate.py` |
 | DAG graph | `ir/dag.py:DAG`, `ir/force.py` |
+
+
+## Source files
+
+- syntax/wf/lexer.py — Workflow lexer
+- syntax/wf/parser.py — Workflow parser
+- syntax/wf/node.py — Workflow AST node types (has the fragile Expr.__repr__ issue)
+- syntax/task/parser.py — Task annotation parser
+- syntax/task/bash.py — Bash script parser (not integrated into pipeline)
+- syntax/task/interpolation.py — String interpolation parser
+- semantic/wf/check.py — Workflow semantic checker (imports, scope, type inference, partial application)
+- semantic/wf/type.py — Workflow type system (ScalarType, ArrayType, RecordType, TableType, FunctionType)
+- semantic/wf/validate.py — Pre-run-time input validation
+- semantic/task/type.py — Task type system (TaskSignature, Param, TypeKind, type compatibility matrix)
+- ir/node.py — IR node types (Function, Lambda, Closure, Apply, Map, Block, Variable, etc.)
+- ir/lower.py — AST-to-IR lowering (chain desugaring, map/match_map_by, normalization)
+- ir/force.py — IR forcing (DAG construction, step call emission, mapped step emission, partial application, root forcing)
+- ir/dag.py — DAG dataclasses and JSON serialization (StepCall, MappedStep, Input, Literal, Field, Merge, Record, TableSource, DAG)
+- transpile/cwl/emit.py — CWL transpiler (reference pattern for new transpilers)
+- transpile/cwl/test_emit.py — CWL transpiler tests
+- compile.py — Compiler entry point
+- repl.py, eval\*.py — Debug evaluation scripts
+
