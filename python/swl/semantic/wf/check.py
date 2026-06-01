@@ -1,6 +1,7 @@
 import os
 
 from swl.semantic.task.type import Param, TaskSignature, TypeChecker, signature_from_task
+from swl.semantic.wf import type as wf_type
 from swl.syntax.task.parser import Parser as TaskParser
 from swl.syntax.wf import node as wf_node
 from swl.syntax.wf.parser import Parser as WfParser
@@ -58,7 +59,11 @@ class ClosureValue:
     @property
     def signature(self):
         remaining = {}
-        bound_fields = set(self.bound_value.fields.keys()) if isinstance(self.bound_value, (OpenRecord, ClosedRecord)) else set()
+        bound_fields = set()
+        if isinstance(self.bound_value, (OpenRecord, ClosedRecord)):
+            for name, value in self.bound_value.fields.items():
+                if _is_explicitly_bound_value(value):
+                    bound_fields.add(name)
         for name, param in self.function.signature.inputs.items():
             if name not in bound_fields:
                 remaining[name] = param
@@ -88,14 +93,26 @@ class UnknownValue:
     pass
 
 
+class TypedValue:
+    def __init__(self, typ=None):
+        self.type = typ
+
+
+def _is_explicitly_bound_value(value):
+    return not isinstance(value, (UnknownValue, TypedValue))
+
+
 class WorkflowCheck:
-    def __init__(self, tree, imports, errors, inferred_inputs, signature=None, is_batch=False):
+    def __init__(self, tree, imports, errors, inferred_inputs, signature=None, is_batch=False, workflow_type=None, root_input_type=None, root_output_type=None):
         self.tree = tree
         self.imports = imports
         self.errors = list(errors)
         self.inferred_inputs = inferred_inputs
         self.signature = signature
         self.is_batch = is_batch
+        self.workflow_type = workflow_type
+        self.root_input_type = root_input_type
+        self.root_output_type = root_output_type
 
     @property
     def chain_errors(self):
@@ -126,11 +143,11 @@ class Checker:
                 checker.add_task(imported.name, imported.signature)
             errors.extend(self._check_chains(tree, checker))
             inferred_inputs, infer_errors = self._infer_inputs(tree, imports)
-            signature, is_batch = self._build_workflow_signature(tree, imports, inferred_inputs, errors)
+            signature, is_batch, workflow_type, root_input_type, root_output_type = self._build_workflow_signature(tree, imports, inferred_inputs, errors)
             errors.extend(infer_errors)
             if signature is None:
                 errors.append('Workflow must evaluate to a function')
-            return WorkflowCheck(tree, imports, errors, inferred_inputs, signature, is_batch)
+            return WorkflowCheck(tree, imports, errors, inferred_inputs, signature, is_batch, workflow_type, root_input_type, root_output_type)
         finally:
             self._loading.pop()
 
@@ -185,6 +202,15 @@ class Checker:
         if expr.arg.type != wf_node.NodeType.str:
             return None
         return expr.arg.value
+
+    def _match_map_by(self, expr):
+        if expr.type != wf_node.NodeType.apply:
+            return False
+        left = expr.fun
+        if left.type != wf_node.NodeType.apply:
+            return False
+        inner = left.fun
+        return inner.type == wf_node.NodeType.id and inner.name == 'map_by'
 
     def _check_scope(self, tree):
         errors = []
@@ -260,7 +286,7 @@ class Checker:
 
     def _build_workflow_signature(self, tree, imports, inferred_inputs, issues):
         if tree.type != wf_node.NodeType.block or not tree.body:
-            return None, False
+            return None, False, None, None, None
 
         final = tree.body[-1]
         if final.type == wf_node.NodeType.fun:
@@ -268,21 +294,50 @@ class Checker:
 
             if self._uses_map(final.body):
                 demanded, mode_issues, chosen_result = self._eval_lambda_in_mode(final, imports, env, 'table', inferred_inputs)
+                if self._value_is_table(chosen_result):
+                    issues[:] = [issue for issue in issues if not issue.startswith('Cannot resolve field access: (. ') and issue != 'map requires a tab argument']
+                    root_input_type = self._infer_root_table_type(final, imports, env, inferred_inputs)
+                    root_output_type = self._wf_output_type(chosen_result, table_context=True)
+                    inputs = self._signature_inputs_from_table_type(root_input_type)
+                    if not inputs:
+                        inputs = {final.param.name: Param(final.param.name, None)}
+                    outputs = self._signature_outputs(chosen_result)
+                    signature = TaskSignature(inputs, outputs, {})
+                    return signature, True, wf_type.FunctionType(root_input_type, root_output_type), root_input_type, root_output_type
                 filtered_issues = [] if self._looks_like_stale_record_errors(mode_issues) else mode_issues
                 issues.extend(filtered_issues)
-                inputs = {final.param.name: Param(final.param.name, None)}
+                root_input_type = self._infer_root_table_type(final, imports, env, inferred_inputs)
+                root_output_type = self._wf_output_type(chosen_result, table_context=True)
+                inputs = self._signature_inputs_from_table_type(root_input_type)
+                if not inputs:
+                    inputs = {final.param.name: Param(final.param.name, None)}
                 outputs = self._signature_outputs(chosen_result)
-                return TaskSignature(inputs, outputs, {}), True
+                signature = TaskSignature(inputs, outputs, {})
+                return signature, True, wf_type.FunctionType(root_input_type, root_output_type), root_input_type, root_output_type
 
             record_env = dict(env)
             record_env[final.param.name] = self._initial_param_value('record', inferred_inputs)
             chosen_result = self._eval_function_body(final, imports, record_env, set(), list(issues))
-            inputs = {
-                name: Param(name, None)
-                for name in sorted(inferred_inputs)
-            }
+            root_output_type = self._wf_output_type(chosen_result, table_context=False)
+            partial_inputs = self._inner_partial_remaining_inputs(final, imports, env)
+            if isinstance(chosen_result, ClosureValue):
+                inputs = dict(chosen_result.signature.inputs)
+                root_input_type = wf_type.RecordType({
+                    name: wf_type.scalar_from_name(getattr(getattr(param, 'type', None), 'value', None))
+                    for name, param in sorted(inputs.items())
+                }, open=True)
+            elif partial_inputs is not None:
+                inputs = dict(partial_inputs)
+                root_input_type = wf_type.RecordType({
+                    name: wf_type.scalar_from_name(getattr(getattr(param, 'type', None), 'value', None))
+                    for name, param in sorted(inputs.items())
+                }, open=True)
+            else:
+                root_input_type = self._infer_root_record_type(final, imports, env, inferred_inputs)
+                inputs = self._signature_inputs_from_root_type(root_input_type)
             outputs = self._signature_outputs(chosen_result)
-            return TaskSignature(inputs, outputs, {}), False
+            signature = TaskSignature(inputs, outputs, {})
+            return signature, False, wf_type.FunctionType(root_input_type, root_output_type), root_input_type, root_output_type
 
         env = {}
         for expr in tree.body[:-1]:
@@ -292,10 +347,13 @@ class Checker:
                 env[expr.id.name] = self._eval_expr(expr.value, imports, env, set(), issues)
         result = self._eval_expr(final, imports, env, set(), issues)
         if isinstance(result, FunctionValue):
-            return result.signature, result.batch
+            wft = self._wf_function_type_from_signature(result.signature, result.batch)
+            return result.signature, result.batch, wft, getattr(wft, 'input', None), getattr(wft, 'output', None)
         if isinstance(result, ClosureValue):
-            return result.signature, result.function.batch
-        return None, False
+            signature = result.signature
+            wft = self._wf_function_type_from_signature(signature, result.function.batch)
+            return signature, result.function.batch, wft, getattr(wft, 'input', None), getattr(wft, 'output', None)
+        return None, False, None, None, None
 
     def _signature_outputs(self, value):
         if isinstance(value, ComputationValue):
@@ -305,10 +363,156 @@ class Checker:
         if isinstance(value, FunctionValue):
             return dict(value.signature.outputs)
         if isinstance(value, ClosedRecord):
-            return {name: Param(name, None) for name in sorted(value.fields.keys())}
+            return {
+                name: self._param_from_value(name, item)
+                for name, item in sorted(value.fields.items())
+            }
         if isinstance(value, OpenRecord):
-            return {name: Param(name, None) for name in sorted(value.fields.keys())}
+            return {
+                name: self._param_from_value(name, item)
+                for name, item in sorted(value.fields.items())
+            }
+        if isinstance(value, TableValue):
+            return {
+                name: self._param_from_value(name, item)
+                for name, item in sorted(value.columns.items())
+            }
         return {}
+
+    def _wf_output_type(self, value, table_context=False):
+        if isinstance(value, TableValue):
+            return wf_type.TableType({name: wf_type.UNKNOWN for name in sorted(value.columns.keys())})
+        if isinstance(value, (ClosedRecord, OpenRecord)):
+            fields = getattr(value, 'fields', {})
+            return wf_type.RecordType({name: wf_type.UNKNOWN for name in sorted(fields.keys())}, open=isinstance(value, OpenRecord))
+        if isinstance(value, (ComputationValue, ClosureValue, FunctionValue)):
+            outputs = self._signature_outputs(value)
+            return wf_type.RecordType({name: wf_type.UNKNOWN for name in sorted(outputs.keys())}, open=False)
+        return wf_type.RecordType({}, open=True)
+
+    def _wf_function_type_from_signature(self, signature, is_batch):
+        if signature is None:
+            return None
+        output = wf_type.RecordType({
+            name: wf_type.scalar_from_name(getattr(getattr(param, 'type', None), 'value', None))
+            for name, param in sorted(signature.outputs.items())
+        }, open=False)
+        if is_batch:
+            input_type = wf_type.TableType({
+                name: wf_type.scalar_from_name(getattr(getattr(param, 'type', None), 'value', None))
+                for name, param in sorted(signature.inputs.items())
+            })
+        else:
+            input_type = wf_type.RecordType({
+                name: wf_type.scalar_from_name(getattr(getattr(param, 'type', None), 'value', None))
+                for name, param in sorted(signature.inputs.items())
+            }, open=True)
+        return wf_type.FunctionType(input_type, output)
+
+    def _signature_inputs_from_root_type(self, root_input_type):
+        if isinstance(root_input_type, wf_type.RecordType):
+            return {
+                name: Param(name, self._task_type_from_wf_type(typ))
+                for name, typ in sorted(root_input_type.fields.items())
+            }
+        return {}
+
+    def _signature_inputs_from_table_type(self, root_input_type):
+        if isinstance(root_input_type, wf_type.TableType):
+            return {
+                name: Param(name, self._task_type_from_wf_type(typ))
+                for name, typ in sorted(root_input_type.columns.items())
+            }
+        return {}
+
+    def _task_type_from_wf_type(self, typ):
+        from swl.semantic.task.type import parse_type
+        if isinstance(typ, wf_type.ScalarType) and typ.name in ('file', 'str', 'int', 'float'):
+            return parse_type(typ.name)
+        if isinstance(typ, wf_type.ArrayType) and isinstance(typ.item, wf_type.ScalarType):
+            name = f'[{typ.item.name}]'
+            return parse_type(name)
+        return None
+
+    def _infer_root_table_type(self, fn, imports, env, inferred_inputs):
+        value = self._infer_root_input_value(fn, imports, env, inferred_inputs, mode='table')
+        columns = getattr(value, 'columns', {}) if isinstance(value, TableValue) else {}
+        if fn.param.name in columns and len(columns) > 1 and self._value_type(columns[fn.param.name]) == wf_type.UNKNOWN:
+            columns = {name: item for name, item in columns.items() if name != fn.param.name}
+        return wf_type.TableType({name: self._value_type(item) for name, item in sorted(columns.items())})
+
+    def _infer_root_input_value(self, fn, imports, env, inferred_inputs, mode):
+        local_env = dict(env)
+        local_env[fn.param.name] = self._initial_param_value(mode, inferred_inputs)
+        self._eval_function_body(fn, imports, local_env, set(), [])
+        return local_env[fn.param.name]
+
+    def _inner_partial_remaining_inputs(self, fn, imports, env):
+        body = getattr(fn, 'body', None)
+        if getattr(body, 'type', None) != wf_node.NodeType.block or not getattr(body, 'body', None):
+            return None
+        result = body.body[-1]
+        if getattr(result, 'type', None) != wf_node.NodeType.apply:
+            return None
+        if getattr(result.fun, 'type', None) != wf_node.NodeType.id:
+            return None
+        local_env = dict(env)
+        local_env[fn.param.name] = self._initial_param_value('record', None)
+        for expr in body.body[:-1]:
+            if expr.type != wf_node.NodeType.bind:
+                continue
+            if self._match_import(expr.value) is not None:
+                continue
+            local_env[expr.id.name] = self._eval_expr(expr.value, imports, local_env, set(), [])
+        callee = local_env.get(result.fun.name)
+        if not isinstance(callee, ClosureValue):
+            return None
+        if getattr(result.arg, 'type', None) != wf_node.NodeType.id or result.arg.name != fn.param.name:
+            return None
+        return callee.signature.inputs
+
+    def _value_type(self, value):
+        if isinstance(value, TypedValue):
+            return wf_type.scalar_from_name(getattr(value.type, 'value', None))
+        if isinstance(value, TableValue):
+            return wf_type.TableType({name: self._value_type(item) for name, item in sorted(value.columns.items())})
+        if isinstance(value, (OpenRecord, ClosedRecord)):
+            return wf_type.RecordType({name: self._value_type(item) for name, item in sorted(value.fields.items())}, open=isinstance(value, OpenRecord))
+        if isinstance(value, ComputationValue):
+            return self._wf_function_type_from_signature(value.signature, False).output
+        if isinstance(value, (FunctionValue, ClosureValue)):
+            return self._wf_function_type_from_signature(value.signature, getattr(getattr(value, 'function', value), 'batch', False))
+        return wf_type.UNKNOWN
+
+    def _infer_root_record_type(self, fn, imports, env, inferred_inputs):
+        local_env = dict(env)
+        local_env[fn.param.name] = self._initial_param_value('record', inferred_inputs)
+        result = self._eval_function_body(fn, imports, local_env, set(), [])
+        if isinstance(result, ClosureValue):
+            return wf_type.RecordType({
+                name: wf_type.scalar_from_name(getattr(getattr(param, 'type', None), 'value', None))
+                for name, param in sorted(result.signature.inputs.items())
+            }, open=True)
+        if isinstance(result, ComputationValue) and isinstance(result.arg_value, OpenRecord):
+            fields = result.arg_value.fields
+            return wf_type.RecordType({name: self._value_type(item) for name, item in sorted(fields.items())}, open=True)
+        value = local_env[fn.param.name]
+        fields = getattr(value, 'fields', {}) if isinstance(value, (OpenRecord, ClosedRecord)) else {}
+        return wf_type.RecordType({name: self._value_type(item) for name, item in sorted(fields.items())}, open=True)
+
+    def _task_type_from_value(self, value):
+        if isinstance(value, TypedValue):
+            return value.type
+        if isinstance(value, ComputationValue) and len(value.signature.outputs) == 1:
+            only = next(iter(value.signature.outputs.values()))
+            return only.type
+        if isinstance(value, (FunctionValue, ClosureValue, ComputationValue)):
+            return None
+        return None
+
+    def _param_from_value(self, name, value):
+        typ = self._task_type_from_value(value)
+        return Param(name, typ)
 
     def _eval_function_body(self, fn, imports, env, demanded, issues):
         local_env = dict(env)
@@ -340,6 +544,12 @@ class Checker:
                     batch=imported.check.is_batch if imported.check is not None else False,
                 )
             return UnknownValue()
+
+        if expr.type == wf_node.NodeType.num:
+            return expr.value
+
+        if expr.type == wf_node.NodeType.str:
+            return expr.value
 
         if expr.type == wf_node.NodeType.rec:
             fields = {
@@ -384,6 +594,9 @@ class Checker:
         if expr.type == wf_node.NodeType.update:
             left = self._eval_expr(expr.left, imports, env, demanded, issues)
             right = self._eval_expr(expr.right, imports, env, demanded, issues)
+            if isinstance(left, TableValue) or isinstance(right, TableValue):
+                issues.append('table update semantics are not implemented')
+                return UnknownValue()
             return self._merge_records(left, right)
 
         if expr.type == wf_node.NodeType.apply:
@@ -391,6 +604,9 @@ class Checker:
             if path is not None:
                 return UnknownValue()
             map_parts = self._match_map(expr)
+            if self._match_map_by(expr):
+                issues.append('map_by is not implemented')
+                return UnknownValue()
             if map_parts is not None:
                 mapped_fun = self._eval_expr(map_parts[0], imports, env, demanded, issues)
                 mapped_arg = self._eval_expr(map_parts[1], imports, env, demanded, issues)
@@ -398,6 +614,9 @@ class Checker:
             if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map':
                 mapped_fun = self._eval_expr(expr.arg, imports, env, demanded, issues)
                 return self._apply_map_partial(mapped_fun, issues)
+            if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map_by':
+                issues.append('map_by is not implemented')
+                return UnknownValue()
             fun = self._eval_expr(expr.fun, imports, env, demanded, issues)
             arg = self._eval_expr(expr.arg, imports, env, demanded, issues)
             return self._apply(fun, arg, demanded, issues)
@@ -422,20 +641,30 @@ class Checker:
             body_value = self._eval_function_body(expr, imports, local_env, fn_demanded, fn_issues)
             batch = False
             if self._uses_map(expr.body):
-                _, table_issues, table_value = self._eval_lambda_in_mode(expr, imports, env, 'table')
+                _, table_issues, table_value = self._eval_lambda_in_mode(expr, imports, env, 'table', fn_demanded)
                 if self._value_is_table(table_value):
                     body_value = table_value
                     batch = True
-                    fn_demanded = {expr.param.name}
+                    if isinstance(table_value, TableValue) and table_value.columns:
+                        fn_demanded = set(table_value.columns.keys())
+                    else:
+                        fn_demanded = {expr.param.name}
                     fn_issues = [] if self._looks_like_stale_record_errors(table_issues) else table_issues
             body_outputs = self._signature_outputs(body_value)
 
             if isinstance(body_value, (FunctionValue, ClosureValue)):
                 body_outputs = dict(body_value.signature.outputs)
-            inputs = {
-                name: Param(name, None)
-                for name in sorted(fn_demanded)
-            }
+            if batch:
+                root_input_type = self._infer_root_table_type(expr, imports, env, fn_demanded)
+                inputs = self._signature_inputs_from_table_type(root_input_type)
+                if not inputs:
+                    inputs = {expr.param.name: Param(expr.param.name, None)}
+            else:
+                if isinstance(body_value, ClosureValue):
+                    inputs = dict(body_value.signature.inputs)
+                else:
+                    root_input_type = self._infer_root_record_type(expr, imports, env, fn_demanded)
+                    inputs = self._signature_inputs_from_root_type(root_input_type)
             signature = TaskSignature(inputs, body_outputs, {})
             return FunctionValue(
                 expr.param.name,
@@ -540,6 +769,16 @@ class Checker:
         if not isinstance(arg, TableValue):
             issues.append('map requires a tab argument')
             return UnknownValue()
+        if not arg.columns:
+            arg.columns.update({
+                name: TypedValue(param.type)
+                for name, param in target.signature.inputs.items()
+            })
+            arg.placeholder = False
+        else:
+            for name, param in target.signature.inputs.items():
+                if name not in arg.columns or isinstance(arg.columns[name], UnknownValue):
+                    arg.columns[name] = TypedValue(param.type)
         return TableValue({name: UnknownValue() for name in target.signature.outputs.keys()})
 
     def _apply(self, fun, arg, demanded, issues):
@@ -551,35 +790,40 @@ class Checker:
         return UnknownValue()
 
     def _apply_closure(self, closure, arg, demanded, issues=None):
-        bound = self._merge_arg_values(closure.bound_value, self._argument_value(closure.function, arg))
-        return self._application_result(closure.function, bound, demanded, issues or [])
+        bound = self._merge_arg_values(closure.bound_value, self._argument_value(closure, arg))
+        return self._application_result(closure, bound, demanded, issues or [])
 
     def _apply_function(self, fun, arg, demanded, issues=None):
         bound = self._argument_value(fun, arg)
         return self._application_result(fun, bound, demanded, issues or [])
 
     def _application_result(self, fun, bound, demanded, issues):
+        signature = fun.signature
+        base_fun = fun.function if isinstance(fun, ClosureValue) else fun
         if isinstance(bound, OpenRecord):
-            for name, param in fun.signature.inputs.items():
+            for name, param in signature.inputs.items():
                 if name in bound.fields:
+                    current = bound.fields[name]
+                    if isinstance(current, (UnknownValue, TypedValue)):
+                        bound.fields[name] = TypedValue(param.type)
                     continue
                 if param.type is not None and str(param.type.value).endswith('?'):
                     continue
                 demanded.add(name)
-                bound.fields[name] = UnknownValue()
+                bound.fields[name] = TypedValue(param.type)
             return self._computation_value(fun, bound)
 
-        missing = self._required_missing(fun.signature, bound)
+        missing = self._required_missing(signature, bound)
         for name in missing:
             demanded.add(name)
         if missing:
-            return ClosureValue(fun, bound)
-        if fun.kind == 'lambda' and fun.param is not None and fun.body is not None:
-            local_env = dict(fun.env)
-            local_env[fun.param] = bound
-            return self._eval_expr(fun.body, fun.imports, local_env, demanded, issues)
-        if fun.kind == 'workflow' and fun.imported_check is not None:
-            return self._apply_imported_workflow(fun, bound, demanded, issues)
+            return ClosureValue(base_fun, bound)
+        if base_fun.kind == 'lambda' and base_fun.param is not None and base_fun.body is not None:
+            local_env = dict(base_fun.env)
+            local_env[base_fun.param] = bound
+            return self._eval_expr(base_fun.body, base_fun.imports, local_env, demanded, issues)
+        if base_fun.kind == 'workflow' and base_fun.imported_check is not None:
+            return self._apply_imported_workflow(base_fun, bound, demanded, issues)
         return self._computation_value(fun, bound)
 
     def _apply_imported_workflow(self, fun, bound, demanded, issues):
@@ -599,10 +843,23 @@ class Checker:
         return self._eval_function_body(final, fun.imports, env, demanded, issues)
 
     def _computation_value(self, fun, bound):
+        effective_fun = fun
+        if isinstance(fun, ClosureValue):
+            effective_fun = FunctionValue(
+                fun.function.name,
+                fun.signature,
+                fun.function.kind,
+                param=fun.function.param,
+                body=fun.function.body,
+                env=fun.function.env,
+                imports=fun.function.imports,
+                imported_check=fun.function.imported_check,
+                batch=fun.function.batch,
+            )
         return ComputationValue(
-            fun,
+            effective_fun,
             bound,
-            ClosedRecord({name: UnknownValue() for name in fun.signature.outputs.keys()}),
+            ClosedRecord({name: UnknownValue() for name in effective_fun.signature.outputs.keys()}),
         )
 
     def _required_missing(self, signature, available):
@@ -671,7 +928,11 @@ class Checker:
         if left_fields is None or right_fields is None:
             return UnknownValue()
         merged = dict(left_fields)
-        merged.update(right_fields)
+        for name, value in right_fields.items():
+            if name in merged and isinstance(merged[name], UnknownValue) and isinstance(value, TypedValue):
+                merged[name] = value
+            else:
+                merged[name] = value
         if isinstance(left, OpenRecord) or isinstance(right, OpenRecord):
             return OpenRecord(merged)
         return ClosedRecord(merged)

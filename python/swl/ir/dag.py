@@ -56,6 +56,8 @@ class MappedStep:
     deps: List[str] = field(default_factory=list)
     type: str = 'task'
     map: Optional[dict] = None
+    input_schema: Optional[dict] = None
+    output_schema: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,8 @@ class DAG:
                     'type': step.type,
                     'path': step.path,
                     **({'map': step.map} if getattr(step, 'map', None) is not None else {}),
+                    **({'input_schema': step.input_schema} if getattr(step, 'input_schema', None) is not None else {}),
+                    **({'output_schema': step.output_schema} if getattr(step, 'output_schema', None) is not None else {}),
                     'deps': list(step.deps),
                     'inputs': dict(step.task.get('inputs', {})),
                     'bindings': {
@@ -153,7 +157,7 @@ class DAG:
                 }),
                 deps=list(item.get('deps', [])),
                 type=item.get('type', 'task'),
-                **({'source': _binding_from_dict(item['map']['source'], inputs, step_by_id) if item.get('map', {}).get('source') is not None else None, 'map': item.get('map')} if item.get('map') is not None else {}),
+                **({'source': _binding_from_dict(item['map']['source'], inputs, step_by_id) if item.get('map', {}).get('source') is not None or item.get('map', {}).get('fields') is not None else None, 'map': item.get('map'), 'input_schema': item.get('input_schema'), 'output_schema': item.get('output_schema')} if item.get('map') is not None else {}),
             )
             steps.append(step)
             step_by_id[step.id] = step

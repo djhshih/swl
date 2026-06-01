@@ -84,18 +84,20 @@ class Lowerer:
             )
 
         if expr.type == wf_node.NodeType.apply:
-            map_parts = self._match_map(expr)
-            if map_parts is not None:
-                function_expr, arg_expr = map_parts
+            builtin = self._match_builtin(expr)
+            if builtin == 'map_apply':
+                function_expr, arg_expr = self._match_map(expr)
                 return ir.Map(
                     self.lower_expr(function_expr, env, imports),
                     self.lower_expr(arg_expr, env, imports),
                 )
-            if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map':
+            if builtin == 'map_partial':
                 return ir.Apply(
                     ir.Function('map', 'builtin', self._builtin_map_signature()),
                     self.lower_expr(expr.arg, env, imports),
                 )
+            if builtin == 'map_by':
+                raise ValueError('map_by is not implemented')
             return ir.Apply(
                 self.lower_expr(expr.fun, env, imports),
                 self.lower_expr(expr.arg, env, imports),
@@ -169,6 +171,19 @@ class Lowerer:
         if left.fun.type != wf_node.NodeType.id or left.fun.name != 'map':
             return None
         return left.arg, arg
+
+    def _match_builtin(self, expr):
+        if expr.type != wf_node.NodeType.apply:
+            return None
+        if self._match_map(expr) is not None:
+            return 'map_apply'
+        if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map':
+            return 'map_partial'
+        if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map_by':
+            return 'map_by'
+        if expr.fun.type == wf_node.NodeType.apply and expr.fun.fun.type == wf_node.NodeType.id and expr.fun.fun.name == 'map_by':
+            return 'map_by'
+        return None
 
     def _lower_chain_items(self, expr, env, imports):
         if expr.type == wf_node.NodeType.chain:

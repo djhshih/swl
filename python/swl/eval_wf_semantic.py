@@ -32,6 +32,9 @@ def eval(fname):
         print('  run:')
         for name, param in result.signature.run.items():
             print(f'    {name}: {_format_param(param)}')
+    print(f'workflow_type: {result.workflow_type!r}')
+    print(f'root_input_type: {result.root_input_type!r}')
+    print(f'root_output_type: {result.root_output_type!r}')
 
 
 if __name__ == '__main__':

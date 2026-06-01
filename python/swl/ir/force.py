@@ -116,7 +116,11 @@ class Forcer:
             return Field(source, node.name)
 
         if isinstance(node, ir.Update):
-            return self._merge_values(self.force_value(node.left, env), self.force_value(node.right, env))
+            left = self.force_value(node.left, env)
+            right = self.force_value(node.right, env)
+            if isinstance(left, MappedStep) or isinstance(right, MappedStep):
+                raise ValueError('table update semantics are not implemented')
+            return self._merge_values(left, right)
 
         if isinstance(node, ir.Function):
             return ForcedFunction(node, None, node.signature)
@@ -357,6 +361,7 @@ class Forcer:
         outputs = list(target.signature.outputs.keys())
         step_id = self._step_id(target.name)
         bindings, map_info = self._mapped_step_bindings(fn, source)
+        signature = self._forced_signature(fn)
         step = MappedStep(
             id=step_id,
             path=target.path,
@@ -367,31 +372,14 @@ class Forcer:
             deps=sorted(self._step_dependencies(bindings or {'source': source})),
             type=target.kind,
             map=map_info,
+            input_schema={name: self._normalize_swl_type(spec.type.value if getattr(spec, 'type', None) is not None else None) for name, spec in signature.inputs.items()} if signature is not None else None,
+            output_schema={name: self._normalize_swl_type(spec.type.value if getattr(spec, 'type', None) is not None else None) for name, spec in signature.outputs.items()} if signature is not None else None,
         )
         self.steps.append(step)
         return step
 
     def _mapped_step_bindings(self, fn, source):
-        signature = self._forced_signature(fn)
-        if signature is None:
-            return {}, {'source': _binding_to_public_dict(source)}
-        if isinstance(source, Input):
-            bindings = {
-                name: self._input(name, self._tab_column_input_spec(spec))
-                for name, spec in signature.inputs.items()
-            }
-            return bindings, {'source': _binding_to_public_dict(source), 'ports': list(bindings.keys())}
         return {}, {'source': _binding_to_public_dict(source)}
-
-    def _tab_column_input_spec(self, spec):
-        if spec is None:
-            return None
-        class _Spec:
-            pass
-        column = _Spec()
-        column.type = type('TypeValue', (), {'value': self._as_array_type(spec.type.value if getattr(spec, 'type', None) is not None else None)})() if spec is not None else None
-        column.desc = getattr(spec, 'desc', None)
-        return column
 
     def _as_array_type(self, typ):
         if typ is None or (isinstance(typ, str) and typ.startswith('[') and typ.endswith(']')):
@@ -648,6 +636,11 @@ class Forcer:
             return value
         if self._is_unsaturated_builtin_map(value, signature):
             return self._materialize_partial_map_workflow(value, signature)
+        if self._is_batch_function(value):
+            table_name = getattr(getattr(value.function, 'body', None), 'param', None) or getattr(value.function, 'param', None) or 'xs'
+            for name, spec in signature.inputs.items():
+                self._input(name, spec)
+            return self._apply(value, Record({table_name: self._input(table_name)}))
         arg = Record({name: self._input(name, spec) for name, spec in signature.inputs.items()})
         return self._apply(value, arg)
 
@@ -831,6 +824,8 @@ def _binding_to_public_dict(value):
         return {'source': 'input', 'name': value.name}
     if isinstance(value, Field) and isinstance(value.source, (StepCall, MappedStep)):
         return {'source': 'step', 'step': value.source.id, 'output': value.name}
+    if isinstance(value, Record):
+        return {'source': 'record', 'fields': {name: _binding_to_public_dict(item) for name, item in value.fields.items()}}
     return {'source': 'value'}
 
 

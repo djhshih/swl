@@ -20,10 +20,21 @@ def transpile_dag_dict(data, workflow_id='main'):
             tool_ids[tool_id] = f'#{tool_id}'
             tools.extend(_tool_to_cwl(step, tool_ids[tool_id]))
 
+    workflow_inputs = dict(dag.inputs)
+    for step in dag.steps:
+        if getattr(step, 'map', None) is None:
+            continue
+        source = step.map.get('source', {})
+        if source.get('source') != 'input' or 'name' not in source:
+            continue
+        for name, typ in (getattr(step, 'input_schema', None) or {}).items():
+            if name not in workflow_inputs:
+                workflow_inputs[name] = type('InputSpec', (), {'type': _as_array_type(typ), 'desc': None})()
+
     workflow = {
         'id': '#main',
         'class': 'Workflow',
-        'inputs': [_workflow_input_to_cwl(workflow_id, name, spec) for name, spec in dag.inputs.items()],
+        'inputs': [_workflow_input_to_cwl(workflow_id, name, spec) for name, spec in workflow_inputs.items()],
         'outputs': [_workflow_output_to_cwl(workflow_id, name, value, dag) for name, value in dag.outputs.items()],
         'requirements': [],
         'steps': [_step_to_cwl(workflow_id, step, tool_ids[step.id]) for step in dag.steps],
@@ -102,19 +113,15 @@ def _step_to_cwl(workflow_id, step, tool_id):
     }
     if getattr(step, 'map', None) is not None:
         ports = step.map.get('ports') or []
+        if not ports:
+            ports = sorted((getattr(step, 'input_schema', None) or {}).keys())
         if ports:
-            for port in ports:
-                if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
-                    data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
-            data['scatter'] = [f'#main/{step.id}/{port}' for port in ports]
-            data['scatterMethod'] = 'dotproduct'
-        else:
             source = step.map.get('source', {})
             if source.get('source') == 'input' and 'name' in source:
-                port = source['name']
-                if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
-                    data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
-                data['scatter'] = [f'#main/{step.id}/{port}']
+                for port in ports:
+                    if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
+                        data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
+                data['scatter'] = [f'#main/{step.id}/{port}' for port in ports]
                 data['scatterMethod'] = 'dotproduct'
     return data
 
@@ -270,6 +277,12 @@ def _infer_output_type(name, value, dag):
         return _cwl_type(type(rest[0]).__name__)
     return 'string'
 
+
+
+def _as_array_type(value):
+    if value is None or (isinstance(value, str) and value.startswith('[') and value.endswith(']')):
+        return value
+    return f'[{value}]'
 
 
 def _cwl_type(value):

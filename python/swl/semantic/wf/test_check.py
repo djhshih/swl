@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest as ut
 
+from swl.semantic.wf import type as wf_type
 from swl.semantic.wf.check import Checker, ClosedRecord, ClosureValue, ComputationValue, FunctionValue, UnknownValue
 
 
@@ -116,6 +117,16 @@ _INPUT_PROP_WORKFLOW = '''align = import "align.sh"
 '''
 
 _IMPORT_INPUT_PROP = '''w = import "input_prop.swl"
+w
+'''
+
+_PARTIAL_INNER_WORKFLOW = '''align = import "align.sh"
+\\x ->
+    f = align { ref: "hg38.fa", ref_fai: "hg38.fa.fai" }
+    f x
+'''
+
+_IMPORT_PARTIAL_INNER = '''w = import "partial_inner.swl"
 w
 '''
 
@@ -395,6 +406,19 @@ class TestWorkflowCheck(ut.TestCase):
         self.assertIn('ref_fai', result.imports['w'].signature.inputs)
         self.assertIn('outbase', result.imports['w'].signature.inputs)
 
+    def test_imported_workflow_with_inner_partial_preserves_remaining_inputs_only(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'partial_inner.swl', _PARTIAL_INNER_WORKFLOW)
+        path = self._write(root, 'import_partial_inner.swl', _IMPORT_PARTIAL_INNER)
+        result = Checker().load(path)
+        self.assertEqual(result.errors, [])
+        self.assertIn('w', result.imports)
+        self.assertEqual(sorted(result.imports['w'].signature.inputs.keys()), ['fastq1', 'fastq2', 'outbase'])
+        self.assertEqual(
+            {k: getattr(getattr(v, 'type', None), 'value', None) for k, v in result.imports['w'].signature.inputs.items()},
+            {'fastq1': 'file', 'fastq2': 'file', 'outbase': 'str'},
+        )
+
     def test_circular_workflow_import_fails(self):
         root = self._make_fixture_dir()
         path = self._write(root, 'a.swl', _CYCLE_A)
@@ -488,13 +512,26 @@ class TestWorkflowCheck(ut.TestCase):
         result = Checker().load(path)
         self.assertNotIn('Duplicate binding in scope: x', result.errors)
 
-    def test_batch_map_workflow_infers_xs_input(self):
+    def test_batch_map_workflow_infers_concrete_table_inputs(self):
         root = self._make_fixture_dir()
         path = self._write(root, 'batch_ok.swl', _BATCH_OK)
         result = Checker().load(path)
         self.assertEqual(result.errors, [])
-        self.assertEqual(sorted(result.signature.inputs.keys()), ['xs'])
+        self.assertEqual(sorted(result.signature.inputs.keys()), ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
         self.assertIn('bam', result.signature.outputs)
+        self.assertTrue(isinstance(result.workflow_type, wf_type.FunctionType))
+        self.assertTrue(isinstance(result.root_input_type, wf_type.TableType))
+        self.assertEqual(
+            result.root_input_type.columns,
+            {
+                'fastq1': wf_type.FILE,
+                'fastq2': wf_type.FILE,
+                'outbase': wf_type.STR,
+                'ref': wf_type.FILE,
+                'ref_fai': wf_type.FILE,
+            },
+        )
+        self.assertTrue(isinstance(result.root_output_type, wf_type.RecordType))
 
     def test_batch_map_missing_field_reports_compile_time_error(self):
         root = self._make_fixture_dir()
@@ -521,6 +558,26 @@ class TestWorkflowCheck(ut.TestCase):
         result = Checker().load(path)
         self.assertIsNone(result.signature)
         self.assertIn('Workflow must evaluate to a function', result.errors)
+
+    def test_simple_workflow_exposes_record_root_types(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'function.swl', _FUNCTION)
+        result = Checker().load(path)
+        self.assertTrue(isinstance(result.workflow_type, wf_type.FunctionType))
+        self.assertTrue(isinstance(result.root_input_type, wf_type.RecordType))
+        self.assertTrue(isinstance(result.root_output_type, wf_type.RecordType))
+
+    def test_map_by_reports_explicit_not_implemented(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'map_by.swl', '\\xs ->\n    map_by (\\x -> x) "k" xs\n')
+        result = Checker().load(path)
+        self.assertTrue(any('map_by is not implemented' in err for err in result.errors))
+
+    def test_table_update_reports_explicit_not_implemented(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'tab_update.swl', 'align = import "align.sh"\n\\xs ->\n    ys = map align xs\n    ys // { extra: "x" }\n')
+        result = Checker().load(path)
+        self.assertTrue(any('table update semantics are not implemented' in err for err in result.errors))
 
 
 if __name__ == '__main__':
