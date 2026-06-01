@@ -213,7 +213,7 @@ Task(
 - **Imports** become `ir.Function` nodes carrying their kind (`task`/`workflow`), path, and signature. Workflow imports recursively lower their body via `_cached_workflow_body()`.
 - **Lambda s** become `ir.Lambda` with a `Block` body.
 - **Bindings** become `ir.Variable` nodes with unique integer `id`s. Subsequent references are `ir.Ref` nodes pointing to the `Variable` by id.
-- **`map`/`map_by` detection**: The lowerer pattern-matches `map f xs` and `map_by f key xs` (which are `Apply(Apply(id("map"), f), xs)` in AST) and collapses them into `ir.Map` nodes with an optional `key` field.
+- **`map`/`map_by` detection**: The lowerer uses `builtins.match_map` / `builtins.match_map_by` (from `syntax/wf/builtins.py`) to detect `map f xs` and `map_by f key xs` (which are `Apply(Apply(id("map"), f), xs)` in AST) and collapses them into `ir.Map` nodes with an optional `key` field.
 - **Pipeline chains** (`A | B | C`) are desugared into a lambda block following the spec:
   ```
   \_input ->
@@ -373,7 +373,7 @@ Converts the compiled DAG JSON into CWL (`Common Workflow Language`) documents. 
 | Type compatibility (chaining) | `semantic/task/type.py:TypeChecker.check_chain` |
 | Pipeline desugaring | `ir/lower.py:_chain_to_lambda_block` |
 | Record update semantics | `ir/lower.py:_normalize_update`, `ir/force.py:_merge_values` |
-| map / map_by semantics | `ir/lower.py:_match_map/_match_map_by`, `ir/force.py:_force_map` |
+| map / map_by semantics | `syntax/wf/builtins.py`, `ir/force.py:_force_map` |
 | Workflow well-formedness | `semantic/wf/check.py:_infer_inputs` |
 | Compile-time checks (1-4) | `semantic/wf/check.py:Checker.load` |
 | Pre-run-time checks (5) | `semantic/wf/validate.py` |
@@ -385,6 +385,7 @@ Converts the compiled DAG JSON into CWL (`Common Workflow Language`) documents. 
 - syntax/wf/lexer.py — Workflow lexer
 - syntax/wf/parser.py — Workflow parser
 - syntax/wf/node.py — Workflow AST node types (has the fragile Expr.__repr__ issue)
+- syntax/wf/builtins.py — Shared pattern-matching for `import`, `map`, `map_by` (used by checker and lowerer)
 - syntax/task/parser.py — Task annotation parser
 - syntax/task/bash.py — Bash script parser (not integrated into pipeline)
 - syntax/task/interpolation.py — String interpolation parser
