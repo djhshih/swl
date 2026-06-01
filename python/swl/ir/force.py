@@ -508,8 +508,8 @@ class Forcer:
         task = TaskParser().parse(src)
         signature = signature_from_task(task)
         parsed_body = task_bash.Parser().parse(task.body)
-        input_names = set(signature.inputs.keys())
-        var_errors = _validate_bash_variables(parsed_body, input_names, f'task at "{path}"')
+        known_vars = set(signature.inputs.keys()) | set(signature.run.keys())
+        var_errors = _validate_bash_variables(parsed_body, known_vars, f'task at "{path}"')
         if var_errors:
             raise ValueError('\n'.join(var_errors))
         definition = {

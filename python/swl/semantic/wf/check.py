@@ -228,8 +228,8 @@ class Checker:
             task = TaskParser().parse(src)
             parsed_body = task_bash.Parser().parse(task.body)
             signature = signature_from_task(task)
-            input_names = set(signature.inputs.keys())
-            var_errors = _validate_bash_variables(parsed_body, input_names, f'task "{name}" ({path})')
+            known_vars = set(signature.inputs.keys()) | set(signature.run.keys())
+            var_errors = _validate_bash_variables(parsed_body, known_vars, f'task "{name}" ({path})')
             if var_errors:
                 raise ValueError('\n'.join(var_errors))
             return Import(name, path, signature, 'task', task=task, parsed_body=parsed_body)
