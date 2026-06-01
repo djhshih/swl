@@ -2,7 +2,7 @@ import re
 from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
-from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep, TableSource
+from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, TableSource
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import signature_from_task
 from swl.semantic.wf.check import _validate_bash_variables
@@ -117,7 +117,7 @@ class Forcer:
             projected = self._project_field(source, node.name)
             if projected is not _SENTINEL:
                 return projected
-            if isinstance(source, MappedStep):
+            if isinstance(source, StepCall):
                 if node.name not in source.outputs:
                     raise ValueError(f'Missing field on tab: {node.name}')
                 return Field(source, node.name)
@@ -126,7 +126,7 @@ class Forcer:
         if isinstance(node, ir.Update):
             left = self.force_value(node.left, env)
             right = self.force_value(node.right, env)
-            if isinstance(left, MappedStep) or isinstance(right, MappedStep):
+            if isinstance(left, StepCall) or isinstance(right, StepCall):
                 raise ValueError('table update semantics are not implemented')
             return self._merge_values(left, right)
 
@@ -201,7 +201,7 @@ class Forcer:
                 return self._force_map(fn.bound.fields['f'], arg, key=key)
             bound = self._merge_bound(fn.bound, arg)
             return ForcedFunction(fn.function, bound, fn.signature, satisfied)
-        if isinstance(arg, MappedStep):
+        if isinstance(arg, StepCall):
             return self._apply_mapped(fn, arg)
         if not isinstance(fn, ForcedFunction):
             raise ValueError(f'Cannot apply non-function value during forcing: {fn!r}')
@@ -274,7 +274,7 @@ class Forcer:
             return self._available_inputs(value.left).union(self._available_inputs(value.right))
         if isinstance(value, StepCall):
             return set(value.outputs)
-        if isinstance(value, MappedStep):
+        if isinstance(value, StepCall):
             return set(value.outputs)
         if isinstance(value, Field):
             return set()
@@ -387,7 +387,7 @@ class Forcer:
         step_id = self._step_id(target.name)
         bindings, map_info = self._mapped_step_bindings(fn, source, key=key)
         signature = self._forced_signature(fn)
-        step = MappedStep(
+        step = StepCall(
             id=step_id,
             path=target.path,
             source=source,
@@ -706,7 +706,7 @@ class Forcer:
     def _value_dependencies(self, value):
         deps = set()
         for item in self._walk_values(value):
-            if isinstance(item, Field) and isinstance(item.source, (StepCall, MappedStep)):
+            if isinstance(item, Field) and isinstance(item.source, StepCall):
                 deps.add(item.source.id)
         return deps
 
@@ -753,7 +753,7 @@ class Forcer:
             key_value = value.bound.fields['key']
             key = key_value.value if isinstance(key_value, Literal) else None
         mapped = self._force_map(fn, xs, key=key)
-        if isinstance(mapped, MappedStep):
+        if isinstance(mapped, StepCall):
             return Record({name: Field(mapped, name) for name in mapped.outputs})
         return mapped
 
@@ -799,7 +799,7 @@ class Forcer:
         normalized = _normalize_output_value(value)
         if isinstance(normalized, (Input, Literal)):
             return
-        if isinstance(normalized, Field) and isinstance(normalized.source, (Input, StepCall, MappedStep)):
+        if isinstance(normalized, Field) and isinstance(normalized.source, (Input, StepCall)):
             return
         raise ValueError(f'Workflow output did not normalize to a wireable value: {name}: {normalized!r}')
 
@@ -923,7 +923,7 @@ def _value_key(value):
         return _merge_key(value)
     if isinstance(value, Record):
         return ('record', _record_fields_key(value.fields))
-    if isinstance(value, (StepCall, MappedStep)):
+    if isinstance(value, StepCall):
         return ('step', value.path, value.id)
     return ('other', type(value).__name__, repr(value))
 
@@ -955,7 +955,7 @@ def _interp_word_to_text(value):
 def _binding_to_public_dict(value):
     if isinstance(value, Input):
         return {'source': 'input', 'name': value.name}
-    if isinstance(value, Field) and isinstance(value.source, (StepCall, MappedStep)):
+    if isinstance(value, Field) and isinstance(value.source, StepCall):
         return {'source': 'step', 'step': value.source.id, 'output': value.name}
     if isinstance(value, Record):
         return {'source': 'record', 'fields': {name: _binding_to_public_dict(item) for name, item in value.fields.items()}}

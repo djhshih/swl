@@ -1,6 +1,6 @@
 import json
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, MappedStep, Record, StepCall
+from swl.ir.dag import DAG, Field, Input, Literal, Merge, Record, StepCall
 
 
 def transpile_dag_file(path):
@@ -226,7 +226,7 @@ def _dag_to_wdl(dag, workflow_id, tasks):
 
         tname = tasks.get(step.id, _task_name(step.id))
         alias = _call_alias(step.id)
-        if type(step).__name__ in ('StepCall', 'MappedStep') and step.type == 'workflow':
+        if type(step).__name__ == 'StepCall' and step.type == 'workflow':
             tname = _wf_name(f'{workflow_id}_{step.id}')
 
         if alias == tname:
@@ -276,7 +276,7 @@ def _binding_to_wdl_expr(binding, current_step_id, dag):
             fields.append(f'{fname}: {fexpr}')
         return f'{struct_name} {{{", ".join(fields)}}}'
 
-    if isinstance(binding, (StepCall, MappedStep)):
+    if isinstance(binding, StepCall):
         return _call_alias(binding.id)
 
     if isinstance(binding, dict):
@@ -360,7 +360,7 @@ def _mapped_step_to_wdl(step, tasks):
             expr = _literal_to_wdl(binding.value)
         elif isinstance(binding, Field):
             base = _binding_to_wdl_expr(binding.source, step.id, None)
-            if isinstance(binding.source, (StepCall, MappedStep)):
+            if isinstance(binding.source, StepCall):
                 expr = f'{base}.{binding.name}[{s_var}]'
             else:
                 expr = f'{base}.{binding.name}'
@@ -403,7 +403,7 @@ def _derive_length_expr(source, bindings, table_columns):
                 col = columns[col_names[0]]
                 if isinstance(col, Input):
                     return f'length({col.name})'
-                if isinstance(col, Field) and isinstance(col.source, (StepCall, MappedStep)):
+                if isinstance(col, Field) and isinstance(col.source, StepCall):
                     return f'length({_call_alias(col.source.id)}.{col.name})'
     for name, binding in bindings.items():
         if isinstance(binding, Input):
@@ -575,7 +575,7 @@ def _emit_struct(shape):
 
 
 def _infer_output_type(name, binding, dag):
-    if isinstance(binding, Field) and isinstance(binding.source, (StepCall, MappedStep)):
+    if isinstance(binding, Field) and isinstance(binding.source, StepCall):
         step = binding.source
         out_type = (step.task or {}).get('outputs', {}).get(binding.name, {}).get('type', 'str')
         wdl_t = _wdl_type(out_type)

@@ -1,6 +1,6 @@
 import json
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, MappedStep, Record, StepCall
+from swl.ir.dag import DAG, Field, Input, Literal, Merge, Record, StepCall
 
 
 def transpile_dag_file(path):
@@ -250,7 +250,7 @@ def _binding_to_channel(binding, channels, current_step):
 
     if isinstance(binding, Field):
         source_ch = _binding_to_channel(binding.source, channels, current_step)
-        if isinstance(binding.source, (StepCall, MappedStep)):
+        if isinstance(binding.source, StepCall):
             pname = _process_name(binding.source.id)
             ch = f'{pname}.out.{_nf_emit_name(binding.name)}'
             if getattr(binding.source, 'map', None) is not None:
@@ -274,7 +274,7 @@ def _binding_to_channel(binding, channels, current_step):
         mapped_steps = _collect_mapped_steps(current_step)
         return _dict_binding_to_channel(binding, channels, current_step, mapped_steps)
 
-    if isinstance(binding, (StepCall, MappedStep)):
+    if isinstance(binding, StepCall):
         pname = _process_name(binding.id)
         return f'{pname}.out'
 
@@ -412,7 +412,7 @@ def _wf_name(workflow_id):
 
 
 def _infer_output_type(name, binding, dag):
-    if isinstance(binding, Field) and isinstance(binding.source, (StepCall, MappedStep)):
+    if isinstance(binding, Field) and isinstance(binding.source, StepCall):
         step = binding.source
         out_type = (step.task or {}).get('outputs', {}).get(binding.name, {}).get('type', 'str')
         if getattr(step, 'map', None) is not None:
@@ -432,7 +432,7 @@ def _collect_mapped_steps(step):
         return set()
     mapped = set()
     for name, binding in step.bindings.items():
-        if isinstance(binding, Field) and isinstance(binding.source, (StepCall, MappedStep)):
+        if isinstance(binding, Field) and isinstance(binding.source, StepCall):
             if getattr(binding.source, 'map', None) is not None:
                 mapped.add(binding.source.id)
     return mapped

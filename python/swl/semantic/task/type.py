@@ -113,7 +113,7 @@ def types_compatible(output_type: TypeKind, input_type: TypeKind) -> bool:
 class Param:
     '''Semantic task parameter.'''
 
-    def __init__(self, name: str, typ: TypeKind = None, default=None, desc: str = None, parsed_default=None):
+    def __init__(self, name: str, typ: TypeKind | None = None, default: str | None = None, desc: str | None = None, parsed_default=None):
         self.name = name
         self.type = typ
         self.default = default

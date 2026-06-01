@@ -14,35 +14,27 @@ NodeType = Enum('NodeType', [
     'chain',
 ])
 
+REPR_FORMATS = {
+    NodeType.id: lambda self: getattr(self, 'name', '<missing>'),
+    NodeType.str: lambda self: getattr(self, 'value', '<missing>'),
+    NodeType.num: lambda self: getattr(self, 'value', '<missing>'),
+    NodeType.block: lambda self: '[' + '; '.join([f'{x}' for x in getattr(self, 'body', [])]) + ']',
+    NodeType.bind: lambda self: f'(= {getattr(self, "id", "<missing>")} {getattr(self, "value", "<missing>")})',
+    NodeType.rec: lambda self: '{' + ', '.join([f'{k}: {v}' for k, v in getattr(self, 'value', {}).items()]) + '}',
+    NodeType.get: lambda self: f'(. {getattr(self, "rec", "<missing>")} {getattr(self, "member", "<missing>")})',
+    NodeType.update: lambda self: f'(// {getattr(self, "left", "<missing>")} {getattr(self, "right", "<missing>")})',
+    NodeType.fun: lambda self: f'(\\ {getattr(self, "param", "<missing>")} {getattr(self, "body", "<missing>")})',
+    NodeType.apply: lambda self: f'($ {getattr(self, "fun", "<missing>")} {getattr(self, "arg", "<missing>")})',
+    NodeType.chain: lambda self: f'(| {getattr(self, "left", "<missing>")} {getattr(self, "right", "<missing>")})',
+}
+
 class Expr:
     type = None
     def __repr__(self):
-        if self.type == NodeType.id:
-            return f'{self.name}'
-        elif self.type == NodeType.str:
-            return f'"{self.value}"'
-        elif self.type == NodeType.num:
-            return f'{self.value}'
-        elif self.type == NodeType.block:
-            return '[' + '; '.join([f'{x}' for x in self.body]) + ']'
-        elif self.type == NodeType.bind:
-            return f'(= {self.id} {self.value})'
-        elif self.type == NodeType.rec:
-            return '{' + ', '.join(
-                    [f'{k}: {v}' for k, v in self.value.items()]
-                ) + '}'
-        elif self.type == NodeType.get:
-            return f'(. {self.rec} {self.member})'
-        elif self.type == NodeType.update:
-            return f'(// {self.left} {self.right})'
-        elif self.type == NodeType.fun:
-            return f'(\\ {self.param} {self.body})'
-        elif self.type == NodeType.apply:
-            return f'($ {self.fun} {self.arg})'
-        elif self.type == NodeType.chain:
-            return f'(| {self.left} {self.right})'
-        else:
-            return f'{self.type}'
+        fmt = REPR_FORMATS.get(self.type)
+        if fmt is not None:
+            return fmt(self)
+        return f'{self.type}'
 
 class Identifier(Expr):
     type = NodeType.id

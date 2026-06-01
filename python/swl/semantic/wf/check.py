@@ -151,15 +151,6 @@ class WorkflowCheck:
         self.root_input_type = root_input_type
         self.root_output_type = root_output_type
 
-    @property
-    def chain_errors(self):
-        return self.errors
-
-    @property
-    def issues(self):
-        return self.errors
-
-
 class Checker:
     def __init__(self, files=None):
         self._loading = []

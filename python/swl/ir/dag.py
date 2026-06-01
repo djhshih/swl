@@ -74,19 +74,7 @@ class StepCall:
     path: str
     bindings: Dict[str, object]
     outputs: List[str]
-    run: Dict[str, object] = field(default_factory=dict)
-    task: Optional[dict] = None
-    deps: List[str] = field(default_factory=list)
-    type: str = 'task'
-
-
-@dataclass
-class MappedStep:
-    id: str
-    path: str
-    source: object
-    bindings: Dict[str, object] = field(default_factory=dict)
-    outputs: List[str] = field(default_factory=list)
+    source: object = None
     run: Dict[str, object] = field(default_factory=dict)
     task: Optional[dict] = None
     deps: List[str] = field(default_factory=list)
@@ -135,9 +123,9 @@ class DAG:
                     'id': step.id,
                     'type': step.type,
                     'path': step.path,
-                    **({'map': step.map} if getattr(step, 'map', None) is not None else {}),
-                    **({'input_schema': step.input_schema} if getattr(step, 'input_schema', None) is not None else {}),
-                    **({'output_schema': step.output_schema} if getattr(step, 'output_schema', None) is not None else {}),
+                    **({'map': step.map} if step.map is not None else {}),
+                    **({'input_schema': step.input_schema} if step.input_schema is not None else {}),
+                    **({'output_schema': step.output_schema} if step.output_schema is not None else {}),
                     'deps': list(step.deps),
                     'inputs': dict(step.task.get('inputs', {})),
                     'bindings': {
@@ -197,16 +185,16 @@ class DAG:
             step_outputs = item.get('outputs', {})
             step_run = item.get('run', {})
             step_inputs = item.get('inputs', {})
-            step_cls = MappedStep if item.get('map') is not None else StepCall
+            step_cls = StepCall
             step = step_cls(
                 id=item['id'],
                 path=item['path'],
                 bindings={},
                 outputs=list(step_outputs.keys()),
                 run={
-                    name: _run_value_from_dict(name, spec, step_run, inputs, step_by_id)
+                    name: value
                     for name, spec in item.get('run', {}).items()
-                    if _run_value_from_dict(name, spec, step_run, inputs, step_by_id) is not None
+                    if (value := _run_value_from_dict(name, spec, step_run, inputs, step_by_id)) is not None
                 },
                 task=item.get('definition', {
                     'doc': None,
@@ -253,7 +241,7 @@ def _binding_to_dict(value):
     if isinstance(value, Literal):
         return {'source': 'literal', 'value': value.value}
     if isinstance(value, Field):
-        if isinstance(value.source, (StepCall, MappedStep)):
+        if isinstance(value.source, StepCall):
             return {'step': value.source.id, 'output': value.name}
         return {'source': 'field', 'field': value.name, 'value': _binding_to_dict(value.source)}
     if isinstance(value, Merge):
@@ -316,7 +304,7 @@ def _binding_to_binding_dict(value):
         return {}
     if isinstance(value, Literal):
         return {'value': value.value}
-    if isinstance(value, Field) and isinstance(value.source, (StepCall, MappedStep)):
+    if isinstance(value, Field) and isinstance(value.source, StepCall):
         return {'source': value.source.id, 'output': value.name}
     if isinstance(value, Field) and isinstance(value.source, Input):
         return {'kind': 'field', 'source': {'source': 'input', 'name': value.source.name}, 'field': value.name}

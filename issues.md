@@ -203,11 +203,13 @@ Called from `_force_apply()` (after each application) and `_final_outputs()` (at
 
 ### P4.2: Parser doesn't enforce spec's block grammar
 
+**Status: Fixed.**
+
 **Spec:** `block ::= (binding eol)* expr` — only bindings before the final expression.
 
 **Code:** `_parse_block()` allows any expression in any position, only validating that the final expression is not a `Binding`. `a = 1\nb\nc = 2\nd` parses without error despite `b` being a bare identifier in the middle.
 
-**Proposed solution:** In `_parse_block()`, add a check after parsing each expression (except the last) that it is a `Binding`. Raise `ValueError` if a non-binding expression appears mid-block. This makes the parser match the spec grammar exactly.
+**Fix:** Modified `_parse_block()` to check that every expression before the final one is a `Binding`. The check fires after consuming the `eol` separator — if execution continues past the `eol`, the expression is mid-block and must be a binding. Final expression detection (eof or `bend`) happens before the check, so trailing-comment blocks (`x = 1\nx\n# done`) parse correctly.
 
 ---
 
@@ -215,9 +217,7 @@ Called from `_force_apply()` (after each application) and `_final_outputs()` (at
 
 ### P5.1: `syntax/wf/node.py`: `Expr.__repr__` accesses subclass-only attributes
 
-`__repr__` dispatches on `self.type` and accesses attributes (`self.name`, `self.body`, `self.fun`, etc.) that only exist on specific subclasses. Adding a new `NodeType` without updating `__repr__` causes `AttributeError` at display time.
-
-**Proposed solution:** Replace the single `__repr__` with a per-subclass `__repr__` or a dispatcher dict that maps `NodeType` → format function. Use `getattr(self, field, '<missing>')` as a fallback for defensive access.
+**Status: Fixed.** Replaced `__repr__` with a `getattr`-based dispatcher dict. Each `NodeType` maps to a format function that uses `getattr(self, attr, '<missing>')` for defensive attribute access. Unknown/undefined nodes fall back to `<expr type=??>`.
 
 ---
 
@@ -233,41 +233,31 @@ Called from `_force_apply()` (after each application) and `_final_outputs()` (at
 
 ### P5.3: `ir/dag.py`: `StepCall` and `MappedStep` serialization type confusion
 
-`to_dict()` uses `getattr(step, 'map', None)` on all steps, relying on the attribute being absent on `StepCall`. `from_dict()` checks for the `map` key to decide which class to instantiate. If a `StepCall` somehow acquires map data, it's silently dropped during serialization.
-
-**Proposed solution:** Use a single step class with an optional `map` field, or add an explicit `type` discriminator to `to_dict()` output that `from_dict()` uses regardless of key presence. If keeping two classes, use `@dataclass` inheritance with a discriminator field.
+**Status: Fixed.** Unified `StepCall` and `MappedStep` into a single `StepCall` class with an optional `map` field. Removed the `MappedStep` alias entirely — all references replaced with `StepCall` directly. Fixed `cwl/emit.py:_canonical_binding()` to check `getattr(value.source, 'map', None)` instead of class name string comparison.
 
 ---
 
 ### P5.4: `ir/dag.py`: `_run_value_from_dict` called twice per item
 
-The dict comprehension in `from_dict` calls `_run_value_from_dict` in both the value expression and the `if` filter, doubling execution. The function returns `None` for multiple semantically different reasons (param not found, value equals default, unparseable value) without distinguishing them.
-
-**Proposed solution:** Replace the dict comprehension with a `for` loop that calls the function once, captures the result, and conditionally includes it. Return an explicit sentinel (e.g., `_SKIP = object()`) instead of `None` for the "skip this param" case, so `None` is reserved for actual errors.
+**Status: Fixed.** Replaced the dict comprehension with a walrus operator pattern (`if (value := func(...)) is not None`) so the function is called once per item. The original double call was both wasteful and misleading — the function may have side effects or expensive computation in future changes.
 
 ---
 
 ### P5.5: `semantic/task/type.py`: `Param.__init__` type annotations mismatch
 
-`Param.__init__` declares `typ: TypeKind`, `default: str`, `desc: str` (all non-optional), but `None` is regularly passed for all three throughout the codebase. This produces LSP type errors in every file that constructs `Param` with missing metadata.
-
-**Proposed solution:** Change the annotation to `typ: TypeKind | None = None`, `default: str | None = None`, `desc: str | None = None`. Fix all call sites that already pass `None` explicitly.
+**Status: Fixed.** Changed annotations to `typ: TypeKind | None = None`, `default: str | None = None`, `desc: str | None = None` in `Param.__init__`.
 
 ---
 
 ### P5.6: `compile.py`: All exceptions handled identically
 
-The `__main__` block catches all exceptions and prints the traceback to stdout with `os.EX_DATAERR`. There is no distinction between user errors (bad workflow input) and internal bugs. Traceback goes to stdout instead of stderr.
-
-**Proposed solution:**
-1. Print traceback to `sys.stderr` instead of stdout.
-2. Define custom exception classes (`UserError` vs `InternalError`). User errors (bad syntax, type mismatch) print only the message; internal errors (unexpected `None`, attribute errors) print the full traceback.
-3. Add `--verbose` flag to force full tracebacks for user errors during debugging.
+**Status: Fixed.**
+1. Traceback printed to `sys.stderr` instead of stdout.
+2. Added `UserError` exception class — user errors (bad syntax, type mismatch) print only the message; internal errors print full traceback.
+3. Added `--verbose` flag to force full tracebacks for user errors during debugging.
 
 ---
 
 ### P5.7: `WorkflowCheck.chain_errors` and `WorkflowCheck.issues` are vestigial
 
-Both properties in `WorkflowCheck` return `self.errors`. They are unused aliases from an earlier design that distinguished error categories.
-
-**Proposed solution:** Remove both properties. Callers should access `check.errors` directly. If a future error-category distinction is needed, it should use a dedicated error type with a `category` field, not method aliases.
+**Status: Fixed.** Removed both properties. Callers access `check.errors` directly.

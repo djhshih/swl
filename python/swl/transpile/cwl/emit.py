@@ -217,12 +217,12 @@ def _canonical_binding(value):
         return ('input', value.name)
     if kind == 'Literal':
         return ('literal', value.value)
-    if kind == 'Field' and value.source.__class__.__name__ == 'MappedStep':
-        return ('tab_column_step_output', value.source, value.name)
-    if kind == 'Field' and value.source.__class__.__name__ == 'StepCall':
-        return ('step_output', value.source, value.name)
     if kind == 'Field' and value.source.__class__.__name__ == 'Input':
         return ('input_field', value.source.name, value.name)
+    if kind == 'Field' and getattr(value.source, 'map', None) is not None:
+        return ('tab_column_step_output', value.source, value.name)
+    if kind == 'Field':
+        return ('step_output', value.source, value.name)
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
 
 
