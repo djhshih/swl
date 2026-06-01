@@ -130,6 +130,13 @@ _IMPORT_PARTIAL_INNER = '''w = import "partial_inner.swl"
 w
 '''
 
+_BATCH_WORKFLOW_PARTIAL = '''mkp = import "mk_align_partial.swl"
+merge = import "merge.sh"
+\\xs ->
+    ys = map mkp xs
+    merge { bam: ys.bam, outbase: "merged" }
+'''
+
 _CYCLE_A = '''b = import "b.swl"
 b
 '''
@@ -418,6 +425,23 @@ class TestWorkflowCheck(ut.TestCase):
             {k: getattr(getattr(v, 'type', None), 'value', None) for k, v in result.imports['w'].signature.inputs.items()},
             {'fastq1': 'file', 'fastq2': 'file', 'outbase': 'str'},
         )
+
+    def test_batch_imported_workflow_with_inner_partial_propagates_concrete_table_columns(self):
+        root = self._make_fixture_dir()
+        self._write(root, 'mk_align_partial.swl', _PARTIAL_INNER_WORKFLOW)
+        path = self._write(root, 'batch_workflow_partial.swl', _BATCH_WORKFLOW_PARTIAL)
+        result = Checker().load(path)
+        self.assertEqual(result.errors, [])
+        self.assertTrue(isinstance(result.root_input_type, wf_type.TableType))
+        self.assertEqual(
+            result.root_input_type.columns,
+            {
+                'fastq1': wf_type.FILE,
+                'fastq2': wf_type.FILE,
+                'outbase': wf_type.STR,
+            },
+        )
+        self.assertEqual(sorted(result.signature.inputs.keys()), ['fastq1', 'fastq2', 'outbase'])
 
     def test_circular_workflow_import_fails(self):
         root = self._make_fixture_dir()

@@ -157,6 +157,8 @@ call  = import "call.sh"
         files, root = self._files()
         dag = force_file(os.path.join(root, 'batch.swl'), files)
         data = dag.to_dict()
+        self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
+        self.assertEqual(sorted(data['steps'][0]['map']['source']['columns'].keys()), ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
 
@@ -164,6 +166,7 @@ call  = import "call.sh"
         files, root = self._files()
         dag = force_file(os.path.join(root, 'map_root.swl'), files)
         data = dag.to_dict()
+        self.assertEqual(data['steps'][0]['map']['source'], {'source': 'input', 'name': 'xs'})
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
 

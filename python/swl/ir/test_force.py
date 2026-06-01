@@ -417,7 +417,26 @@ class TestForce(ut.TestCase):
         data = force_file(os.path.join(root, 'map_workflow_partial.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['mkp', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
+        self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
+        self.assertEqual(sorted(data['steps'][0]['map']['source']['columns'].keys()), ['fastq1', 'fastq2', 'outbase'])
         self.assertEqual(data['steps'][0]['input_schema'], {'fastq1': 'file', 'fastq2': 'file', 'outbase': 'str'})
+
+    def test_mapped_table_source_uses_explicit_logical_table_metadata(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'batch.swl'), files).to_dict()
+        source = data['steps'][0]['map']['source']
+        self.assertEqual(source['source'], 'table')
+        self.assertEqual(source['name'], 'table')
+        self.assertEqual(
+            source['columns'],
+            {
+                'fastq1': {'source': 'input', 'name': 'fastq1'},
+                'fastq2': {'source': 'input', 'name': 'fastq2'},
+                'outbase': {'source': 'input', 'name': 'outbase'},
+                'ref': {'source': 'input', 'name': 'ref'},
+                'ref_fai': {'source': 'input', 'name': 'ref_fai'},
+            },
+        )
 
     def test_force_rejects_unnormalized_map_callable(self):
         with self.assertRaisesRegex(ValueError, 'map requires normalized executable callable during forcing'):
