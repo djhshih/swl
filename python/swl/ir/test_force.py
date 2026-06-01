@@ -366,7 +366,8 @@ class TestForce(ut.TestCase):
         data = force_file(os.path.join(root, 'batch.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['align', 'merge'])
         self.assertIn('map', data['steps'][0])
-        self.assertEqual(data['steps'][0]['map']['source']['source'], 'record')
+        self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
+        self.assertEqual(sorted(data['steps'][0]['map']['source']['columns'].keys()), ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
         self.assertEqual(data['steps'][1]['bindings']['bam']['source'], 'align')
         self.assertEqual(data['steps'][1]['deps'], ['align'])
 
@@ -398,7 +399,7 @@ class TestForce(ut.TestCase):
         data = force_file(os.path.join(root, 'map_partial.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['map_partial_1', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
-        self.assertEqual(data['steps'][0]['map']['source']['source'], 'record')
+        self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
         self.assertEqual(data['steps'][1]['bindings']['bam']['source'], 'map_partial_1')
 
     def test_map_imported_workflow_produces_mapped_step(self):
@@ -406,7 +407,7 @@ class TestForce(ut.TestCase):
         data = force_file(os.path.join(root, 'map_workflow.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['mk', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
-        self.assertEqual(data['steps'][0]['map']['source']['source'], 'record')
+        self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
         self.assertEqual(data['steps'][0]['input_schema'], {'fastq1': 'file', 'fastq2': 'file', 'outbase': 'str', 'ref': 'file', 'ref_fai': 'file'})
         self.assertEqual(sorted(data['inputs'].keys()), ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
         self.assertIn('fastq1', data['inputs'])

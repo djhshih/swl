@@ -21,6 +21,12 @@ class Record:
 
 
 @dataclass(frozen=True)
+class TableSource:
+    name: str
+    columns: Dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Field:
     source: object
     name: str
@@ -200,6 +206,8 @@ def _binding_to_dict(value):
         return {'source': 'merge', 'left': _binding_to_dict(value.left), 'right': _binding_to_dict(value.right)}
     if isinstance(value, Record):
         return {'source': 'record', 'fields': {name: _binding_to_dict(v) for name, v in value.fields.items()}}
+    if isinstance(value, TableSource):
+        return {'source': 'table', 'name': value.name, 'columns': {name: _binding_to_dict(v) for name, v in value.columns.items()}}
     if isinstance(value, StepCall):
         return {'source': 'step_call', 'step': value.id}
     if isinstance(value, ForcedFunction):
@@ -231,6 +239,14 @@ def _binding_from_dict(data, inputs, steps):
             name: _binding_from_dict(value, inputs, steps)
             for name, value in data.get('fields', {}).items()
         })
+    if source == 'table':
+        return TableSource(
+            data['name'],
+            {
+                name: _binding_from_dict(value, inputs, steps)
+                for name, value in data.get('columns', {}).items()
+            },
+        )
     if source == 'step':
         step = steps[data['step']]
         return Field(step, data['output'])

@@ -1,7 +1,7 @@
 from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
-from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep
+from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, MappedStep, TableSource
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import signature_from_task
 from swl.syntax.task import interpolation as interp
@@ -379,7 +379,19 @@ class Forcer:
         return step
 
     def _mapped_step_bindings(self, fn, source):
-        return {}, {'source': _binding_to_public_dict(source)}
+        logical_source = self._logical_table_source(source)
+        return {}, {'source': _binding_to_public_dict(logical_source)}
+
+    def _logical_table_source(self, source):
+        if isinstance(source, Record):
+            input_fields = {
+                name: value
+                for name, value in source.fields.items()
+                if isinstance(value, Input)
+            }
+            if input_fields and len(input_fields) == len(source.fields):
+                return TableSource('table', dict(input_fields))
+        return source
 
     def _as_array_type(self, typ):
         if typ is None or (isinstance(typ, str) and typ.startswith('[') and typ.endswith(']')):
@@ -826,6 +838,8 @@ def _binding_to_public_dict(value):
         return {'source': 'step', 'step': value.source.id, 'output': value.name}
     if isinstance(value, Record):
         return {'source': 'record', 'fields': {name: _binding_to_public_dict(item) for name, item in value.fields.items()}}
+    if isinstance(value, TableSource):
+        return {'source': 'table', 'name': value.name, 'columns': {name: _binding_to_public_dict(item) for name, item in value.columns.items()}}
     return {'source': 'value'}
 
 
