@@ -36,7 +36,9 @@ run_unit_tests() {
 		swl.ir.test_lower \
 		swl.ir.test_force \
 		swl.ir.test_force_codec \
-		swl.transpile.cwl.test_emit
+		swl.transpile.cwl.test_emit \
+		swl.transpile.wdl.test_emit \
+		swl.transpile.nf.test_emit
 	printf "unit tests passed\n\n"
 }
 
@@ -226,6 +228,23 @@ else
 	compare_files tests/wdl/pipe.wdl tests/wdl/function.wdl
 	compare_files tests/wdl/explicit.wdl tests/wdl/function.wdl
 	WDL_COMPARE_COUNT=$((WDL_COMPARE_COUNT + 3))
+
+	mkdir -p tests/nf
+	PYTHONPATH=python python -m swl.transpile.nf tests/dag/function.json \
+		-o tests/nf/function.nf
+	PYTHONPATH=python python -m swl.transpile.nf tests/dag/pipe.json \
+		-o tests/nf/pipe.nf
+	PYTHONPATH=python python -m swl.transpile.nf tests/dag/explicit.json \
+		-o tests/nf/explicit.nf
+	PYTHONPATH=python python -m swl.transpile.nf tests/dag/panel.json \
+		-o tests/nf/panel.nf
+	PYTHONPATH=python python -m swl.transpile.nf tests/dag/map.json \
+		-o tests/nf/map.nf
+	PYTHONPATH=python python -m swl.transpile.nf tests/dag/map_by.json \
+		-o tests/nf/map_by.nf
+
+	compare_files tests/nf/pipe.nf tests/nf/function.nf
+	compare_files tests/nf/explicit.nf tests/nf/function.nf
 
 	print_summary
 fi
