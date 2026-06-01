@@ -2,7 +2,7 @@ import os
 import unittest as ut
 
 from swl.ir import node as ir
-from swl.ir.dag import Literal, Merge, Record
+from swl.ir.dag import Literal, Merge, Record, StepCall
 from swl.ir.force import Forcer, ForceEnv, force_file
 from swl.ir.lower import lower_file
 
@@ -497,6 +497,32 @@ class TestForce(ut.TestCase):
             None,
         )
         self.assertEqual(value.value, 2)
+
+    def test_table_update_on_step_call_raises_error(self):
+        env = ForceEnv()
+        step = StepCall(id='align', path='/a.sh', bindings={}, outputs=['bam'])
+        env.bind('ys', step)
+        with self.assertRaisesRegex(ValueError, 'Record update.*on a task/workflow call result'):
+            Forcer().force_value(
+                ir.Update(
+                    ir.Name('ys'),
+                    ir.Record({'extra': ir.Literal('x')}),
+                ),
+                env,
+            )
+
+    def test_table_update_right_side_step_call_raises_error(self):
+        env = ForceEnv()
+        step = StepCall(id='align', path='/a.sh', bindings={}, outputs=['bam'])
+        env.bind('ys', step)
+        with self.assertRaisesRegex(ValueError, 'Record update.*on a task/workflow call result'):
+            Forcer().force_value(
+                ir.Update(
+                    ir.Record({'extra': ir.Literal('x')}),
+                    ir.Name('ys'),
+                ),
+                env,
+            )
 
     def test_dependency_extraction_walks_merged_record_inputs(self):
         files, root = self._files()

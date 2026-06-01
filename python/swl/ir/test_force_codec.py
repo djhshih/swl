@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest as ut
 
+from swl.ir.dag import StepCall
 from swl.ir.force import DAG, force_file
 from swl.ir.lower import Lowerer
 
@@ -190,6 +191,40 @@ call  = import "call.sh"
         self.assertEqual(data['steps'][0]['run']['cpu']['value'], 4)
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
+
+    def test_dag_validate_detects_circular_dependency(self):
+        dag = DAG(
+            inputs={},
+            steps=[
+                StepCall(id='a', path='/a.sh', bindings={}, outputs=[], task={'body': '', 'inputs': {}, 'outputs': {}, 'run': {}}, deps=['b']),
+                StepCall(id='b', path='/b.sh', bindings={}, outputs=[], task={'body': '', 'inputs': {}, 'outputs': {}, 'run': {}}, deps=['a']),
+            ],
+            outputs={},
+        )
+        with self.assertRaisesRegex(ValueError, 'Circular dependency detected in DAG involving step: '):
+            dag.validate()
+
+    def test_dag_validate_detects_self_loop(self):
+        dag = DAG(
+            inputs={},
+            steps=[
+                StepCall(id='a', path='/a.sh', bindings={}, outputs=[], task={'body': '', 'inputs': {}, 'outputs': {}, 'run': {}}, deps=['a']),
+            ],
+            outputs={},
+        )
+        with self.assertRaisesRegex(ValueError, 'Circular dependency detected in DAG involving step: a'):
+            dag.validate()
+
+    def test_dag_validate_detects_unknown_dependency(self):
+        dag = DAG(
+            inputs={},
+            steps=[
+                StepCall(id='a', path='/a.sh', bindings={}, outputs=[], task={'body': '', 'inputs': {}, 'outputs': {}, 'run': {}}, deps=['nonexistent']),
+            ],
+            outputs={},
+        )
+        with self.assertRaisesRegex(ValueError, 'depends on unknown step'):
+            dag.validate()
 
     def test_dag_from_dict_rejects_unknown_binding_source(self):
         with self.assertRaisesRegex(ValueError, 'Unsupported binding source'):

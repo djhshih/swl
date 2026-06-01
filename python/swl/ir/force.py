@@ -126,8 +126,16 @@ class Forcer:
         if isinstance(node, ir.Update):
             left = self.force_value(node.left, env)
             right = self.force_value(node.right, env)
-            if isinstance(left, StepCall) or isinstance(right, StepCall):
-                raise ValueError('table update semantics are not implemented')
+            if isinstance(left, StepCall):
+                raise ValueError(
+                    f'Record update (//) on a task/workflow call result is not supported: '
+                    f'left operand is a step call ({left.id})'
+                )
+            if isinstance(right, StepCall):
+                raise ValueError(
+                    f'Record update (//) on a task/workflow call result is not supported: '
+                    f'right operand is a step call ({right.id})'
+                )
             return self._merge_values(left, right)
 
         if isinstance(node, ir.Function):
