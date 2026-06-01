@@ -105,93 +105,32 @@ Lower priority. Time can be emitted as hints. `expr` can pass through with `Inli
 
 ---
 
-## Priority 3: WDL 1.1 transpiler
-
-### Why
-
-WDL is a major workflow language (Cromwell, MiniWDL, Terra.bio). A WDL transpiler unlocks the broadest set of execution platforms.
-
-### Scope
-
-Full implementation plan in `wdl.md`. Seven phases:
-
-| Phase | Feature | Key code |
-|-------|---------|----------|
-| 1 | Scaffolding + task definitions | `transpile/wdl/emit.py`: `_task_to_wdl()` |
-| 2 | Workflow block + call wiring | `_dag_to_wdl()`, `_binding_to_wdl_expr()` |
-| 3 | Mapped steps → scatter | `_mapped_step_to_wdl()` |
-| 4 | `map_by` → `collect_by_key()` + scatter | `_mapped_by_step_to_wdl()` |
-| 5 | Sub-workflows | `_subworkflow_to_wdl()` |
-| 6 | Records → struct definitions | `_collect_structs()`, `_emit_struct()` |
-| 7 | Hardening (optional types, escaping, aliases) | — |
-
-### Package structure
-
-```
-swl/transpile/wdl/
-    __init__.py
-    cli.py          # CLI entry point
-    emit.py         # core transpilation logic
-    test_emit.py    # tests
-```
-
-### Dependencies
-
-- Phase 1-3: no external dependencies (standard Python + DAG data classes)
-- Phase 4 (`map_by`): relies on `dag.md §R1` — `map.scatter`/`map.broadcast` being serialized (Priority 1a)
-- Phase 6 (structs): relies on record bindings being present in DAG (may require compiler changes if non-saturating records are eliminated per `dag.md §R2`)
-
----
-
-## Priority 4: Nextflow transpiler
-
-### Why
-
-Nextflow is the dominant workflow language in bioinformatics (nf-core, Seqera). A Nextflow transpiler provides access to the nf-core ecosystem and cloud execution via Tower.
-
-### Scope
-
-Full implementation plan in `nf.md`. Phases:
-
-| Phase | Feature |
-|-------|---------|
-| 1 | Scaffolding + process definitions |
-| 2 | Workflow block + channel wiring |
-| 3 | Mapped steps → `Channel.fromX` + `.map` |
-| 4 | `map_by` → `.groupTuple()` |
-| 5 | Sub-workflows → `module` inclusion |
-| 6 | Records → tuple construction |
-| 7 | Hardening |
-
-### Package structure
-
-```
-swl/transpile/nextflow/
-    __init__.py
-    cli.py
-    emit.py
-    test_emit.py
-```
-
----
-
 ## Priority 5: Remaining spec-compliance gaps
 
 ### 5a. Table update semantics (`tab // rec`, `rec // tab`, `tab // tab`)
 
-Currently fails with explicit error. Full implementation deferred (rarely used). Tighten error messages if needed.
+~~Currently fails with explicit error. Full implementation deferred (rarely used). Tighten error messages if needed.~~
+
+**Status: DONE.** The semantic checker (`semantic/wf/check.py`) already handles `tab // rec`, `rec // tab`, and `tab // tab`. The force phase (`ir/force.py`) raises `ValueError` when a `StepCall` appears on either side of `//` because the forcing logic cannot flatten merges involving step call results. Error message tightened. Test added.
 
 **Files:** `semantic/wf/check.py`, `ir/force.py`
 
 ### 5b. DAG circularity validation
 
-Add validation pass in `DAG.validate()` or `force.py` that checks for cycles before emitting.
+~~Add validation pass in `DAG.validate()` or `force.py` that checks for cycles before emitting.~~
+
+**Status: DONE.** `DAG.validate()` in `ir/dag.py` already implements DFS-based cycle detection and is called from `Forcer._finalize_dag()` in `ir/force.py`. Test for cycle detection added.
 
 **Files:** `ir/dag.py` or `ir/force.py`
 
 ### 5c. `expr` interpolation validation
 
-Currently `expr` parts are accepted by the compiler but rejected by CWL transpiler. The `dag.md §6.2` table clarifies per-target handling. Add per-transpiler validation.
+~~Currently `expr` parts are accepted by the compiler but rejected by CWL transpiler. The `dag.md §6.2` table clarifies per-target handling. Add per-transpiler validation.~~
+
+**Status: DONE.** Per-transpiler validation already exists:
+- **CWL:** `_interp_to_cwl_glob()` rejects `expr` parts with `ValueError` (tested in `test_rejects_output_expr_interpolation`)
+- **WDL:** `_interp_to_wdl()` accepts `expr` parts as `~{text}` — WDL supports expressions in string interpolation
+- **Nextflow:** `_interp_to_nf()` accepts `expr` parts as `${text}` — Nextflow supports shell-compatible expressions
 
 ---
 
@@ -200,7 +139,9 @@ Currently `expr` parts are accepted by the compiler but rejected by CWL transpil
 | File | What changes |
 |------|-------------|
 | `ir/dag.py` | Add `scatter`/`broadcast` to map field; add `optional` to InputSpec/ParamSpec; change outputs format to include `type`/`desc`/`value` |
-| `ir/force.py` | Add merge flattening pass; populate `map.scatter`/`map.broadcast`; populate output types |
+| `ir/force.py` | Add merge flattening pass; populate `map.scatter`/`map.broadcast`; populate output types; tightened table update error message (P5a) |
+| `ir/test_force.py` | Added tests for table update error (P5a) |
+| `ir/test_force_codec.py` | Added tests for DAG circularity validation (P5b) |
 | `transpile/cwl/emit.py` | Implement `map_by` (Phase 1), record bindings (Phase 3), time hints (Phase 4), expr passthrough (Phase 5), nested fields (Phase 6); remove merge rejection |
 | `transpile/cwl/test_emit.py` | Tests for all new features |
 | `transpile/wdl/emit.py` | New file — WDL 1.1 transpiler |
