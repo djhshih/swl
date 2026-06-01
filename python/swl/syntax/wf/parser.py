@@ -199,7 +199,7 @@ class Parser:
         # (a record may have a member function)
         while self._at().type == TokenType.chain:
             self._eat()  # eat chain token
-            right = self._parse_update_expr()
+            right = self._parse_expr()
             left = node.Chain(left, right)
 
         return left

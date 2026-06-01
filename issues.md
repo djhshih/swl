@@ -175,11 +175,13 @@ Also handle the case where a default is a single `Expr` (e.g., `${sample_id + "_
 
 ### P4.1: Parser doesn't allow lambda on the right side of `|`
 
+**Status: Fixed.** `_parse_chain_expr()` right operand changed from `_parse_update_expr()` to `_parse_expr()`. Now `a | \x -> body` parses as `Chain(a, Function(\x -> body))`.
+
 **Spec:** `chain ::= expr ( "|" expr)+` where `expr ::= ... | lambda`. Precedence: `->` > `|`. So `a | \x -> body` should parse as `a | (\x -> body)`.
 
-**Code:** `_parse_chain_expr()` calls `_parse_update_expr()` for the right operand, which reaches `_parse_term()` — and `_parse_term` doesn't handle `\`. Lambda on the right of `|` is a parse error.
+**Root cause:** `_parse_chain_expr()` called `_parse_update_expr()` for the right operand, which reaches `_parse_term()` — and `_parse_term` doesn't handle `\`.
 
-**Proposed solution:** In `_parse_chain_expr()`, change the right operand call from `_parse_update_expr()` to `_parse_expr()`. The precedence is already correct: `_parse_expr` handles `\` before delegating to `_parse_simple_expr`, and `->` binds tighter than `|` per spec, so `\x -> a | b` still parses as `\x -> (a | b)`.
+**Fix:** Changed the right operand call from `_parse_update_expr()` to `_parse_expr()` in `parser.py:202`. The precedence is already correct: `_parse_expr` handles `\` before delegating to `_parse_simple_expr`, and `->` binds tighter than `|` per spec, so `\x -> a | b` still parses as `\x -> (a | b)`.
 
 ---
 
