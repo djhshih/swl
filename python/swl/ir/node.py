@@ -15,6 +15,13 @@ class Literal(Node):
 
 
 @dataclass(frozen=True)
+class Input(Node):
+    name: str
+    type: Optional[str] = None
+    desc: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class Unknown(Node):
     pass
 

@@ -11,7 +11,7 @@ The pipeline evaluates the program three times with different value domains:
 | Pass | Input | Domain | Output |
 |------|-------|--------|--------|
 | Checker | WF AST | `OpenRecord`, `FunctionValue`, `ClosureValue`, `ComputationValue`, ... | `WorkflowCheck` (signature + type) |
-| Lowerer | WF AST | `ir.Name`, `ir.Ref`, `ir.Variable`, `ir.Apply`, `ir.Lambda` | IR tree |
+| Lowerer | WF AST | `ir.Name`, `ir.Input`, `ir.Ref`, `ir.Variable`, `ir.Apply`, `ir.Lambda` | IR tree |
 | Forcer | IR tree | `dag.Input`, `dag.Record`, `dag.Field`, `dag.StepCall`, `ForcedFunction` | `DAG` |
 
 The Checker's analysis is not embedded in the IR. The Forcer re-derives everything from scratch. Three architectural issues follow from this.
@@ -33,29 +33,21 @@ The Checker's analysis is not embedded in the IR. The Forcer re-derives everythi
 
 ### P1.2: Checker-inferred input metadata is lost between checker and DAG output
 
+**Status: Fixed.** Implemented the thorough solution: added `ir.Input(name, type, desc)` as a first-class IR node. The lowerer creates `ir.Input` for names that the checker identified as demanded workflow inputs. The forcer handles `ir.Input` nodes directly, creating `dag.Input` with the metadata from the checker's `TaskSignature`.
+
 **Root cause:** The checker infers `inputs = {a: file, b: str}` and produces a `TaskSignature`. The lowerer receives this signature and attaches it to the root `ir.Lambda`, but the forcer's `_input()` method (`force.py:723`) only receives a `spec` parameter when the caller happens to pass one. The `_refine_input_metadata()` recovery pass (`force.py:556`) scans step-level task input specs for matching names — input names that are only used as lambda parameters or record fields never get type/desc metadata.
 
-**Spec violation (Sec 4):** Inferred inputs should carry proper type and description metadata. The spec requires that "field requirements are inferred from unsatisfied task inputs and field accesses" — the checker does this inference but the result is not propagated to the DAG.
-
-**Proposed solution:** Two options, one minimal and one thorough:
-
-*Minimal:* Attach the checker's full `TaskSignature` dict to the root IR node so the forcer can look up each input name's type/desc spec. In `force.py:_input()`, if the name exists in the root signature, use its type/desc instead of `None`. This is a data-flow fix: the information exists in the `WorkflowCheck` but is not passed into the forcer.
-
-*Thorough:* Add `ir.Input(name, type, desc)` as a first-class IR node. The lowerer creates `ir.Input` for names that the checker identified as demanded workflow inputs (vs names that are lambda parameters or local variables). The forcer then never creates `Input` implicitly — it only receives them from the IR. A name that was never declared as an `ir.Input` and is not in the `ForceEnv` becomes a compile error, not a silent input.
+**Fix:** (a) Added `ir.Input(name, type, desc)` to `ir/node.py`. (b) The `Lowerer` stores the checker's `TaskSignature` as `self.signature`; when lowering a `NodeType.id` that is not in env or imports but matches a signature input name, it emits `ir.Input(name, type, desc)` instead of `ir.Name`. (c) `force_value()` in `force.py` handles `ir.Input` by creating `dag.Input(name, type, desc)` directly, carrying the checker-inferred metadata forward to the DAG.
 
 ---
 
 ### P1.3: IR has no way to distinguish "workflow input" from "undefined variable"
 
-**Root cause:** The IR has no `ir.Input` node. The lowerer produces `ir.Name(expr.name)` for any identifier not found in its environment — whether that identifier is a workflow input parameter or a typo. The forcer can't tell the difference. When it sees `ir.Name("align_inpt")` not in the `ForceEnv`, its only option is to create a new `Input`, silently accepting a typo as a workflow input.
+**Status: Fixed.** Added `ir.Input(name, type, desc)` IR node. The lowerer creates `ir.Input` for checker-demanded workflow inputs and raises `ValueError` for undefined identifiers. The forcer handles `ir.Input` directly; `ir.Name` only looks up `ForceEnv` and raises an error if not found.
 
-**Spec violation:** Violates the "fail fast" principle. A misspelled variable name should produce a compile-time "undefined variable" error.
+**Root cause:** The IR had no `ir.Input` node. The lowerer produced `ir.Name(expr.name)` for any identifier not found in its environment — whether that identifier is a workflow input parameter or a typo. The forcer couldn't tell the difference. When it saw `ir.Name("align_inpt")` not in the `ForceEnv`, its only option was to create a new `Input`, silently accepting a typo as a workflow input.
 
-**Proposed solution (same thorough option as P1.2):**
-1. Add `ir.Input(name, type, desc)` as an IR node.
-2. The lowerer creates `ir.Input` for names that the checker identified as demanded workflow inputs. For lambda parameters it creates `ir.Name` (which gets bound in the `ForceEnv`). For truly undefined names (not in env, not in imports, not demanded by checker), it raises a compile error.
-3. The forcer's `force_value()` for `ir.Input` returns the corresponding `dag.Input` from its inputs dict. For `ir.Name` it only looks in the `ForceEnv` — if absent, it's a forcing-time error.
-4. This eliminates the fallback path where `ir.Name` becomes an implicit input.
+**Fix:** (a) Added `ir.Input(name, type, desc)` to `ir/node.py`. (b) The `Lowerer` stores the checker's `TaskSignature` as `self.signature`; when lowering a `NodeType.id` not in env/imports, it checks `signature.inputs` — if the name is a demanded workflow input, it emits `ir.Input(name, type, desc)`; otherwise it raises `ValueError(f'Undefined variable: {name}')`. (c) In `force.py`, `ir.Input` creates `dag.Input` with metadata; `ir.Name` only resolves through `ForceEnv` — unbound names raise `ValueError(f'Undefined variable during forcing: {name}')`. No implicit `Input` creation from `ir.Name`.
 
 ---
 

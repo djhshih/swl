@@ -65,6 +65,8 @@ def _strip_ids(node, root_name=None):
         return ('Function', node.name, node.kind)
     if isinstance(node, ir.Name):
         return ('Name', '$root' if node.name == root_name else node.name)
+    if isinstance(node, ir.Input):
+        return ('Input', node.name, node.type, node.desc)
     if isinstance(node, ir.Literal):
         return ('Literal', node.value)
     return node.__class__.__name__

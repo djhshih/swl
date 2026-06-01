@@ -459,13 +459,15 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
 
     def test_force_rejects_unnormalized_map_callable(self):
+        env = ForceEnv()
+        env.bind('xs', Literal(42))
         with self.assertRaisesRegex(ValueError, 'map requires normalized executable callable during forcing'):
             Forcer().force_value(
                 ir.Map(
                     ir.Lambda('x', ir.Block([], ir.Record({'bam': ir.Field(ir.Name('x'), 'bam')}))),
                     ir.Name('xs'),
                 ),
-                ForceEnv(),
+                env,
             )
 
     def test_force_rejects_unsupported_ir_node(self):

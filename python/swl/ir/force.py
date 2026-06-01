@@ -90,13 +90,16 @@ class Forcer:
         if isinstance(node, ir.Literal):
             return Literal(node.value)
 
+        if isinstance(node, ir.Input):
+            if node.name not in self.inputs:
+                self.inputs[node.name] = Input(node.name, node.type, node.desc)
+            return self.inputs[node.name]
+
         if isinstance(node, ir.Name):
             value = env.lookup(node.name)
             if value is not None:
                 return value
-            if node.name not in self.inputs:
-                self.inputs[node.name] = Input(node.name)
-            return self.inputs[node.name]
+            raise ValueError(f'Undefined variable during forcing: {node.name}')
 
         if isinstance(node, ir.Ref):
             return self._force_ref(node, env)

@@ -14,14 +14,24 @@ class Lowerer:
         self.function_cache = {}
         self.next_var_id = 1
         self.next_generated_id = 1
+        self.signature = None
 
     def lower_file(self, path: str):
         result = self.checker.load(path)
         if result.errors:
             raise ValueError('\n'.join(result.errors))
+        self.signature = result.signature
         return self.lower_tree(result.tree, result.imports, result.signature)
 
     def lower_tree(self, tree, imports, signature=None):
+        old_sig = self.signature
+        self.signature = signature
+        try:
+            return self._lower_tree_impl(tree, imports, signature)
+        finally:
+            self.signature = old_sig
+
+    def _lower_tree_impl(self, tree, imports, signature=None):
         env = {}
         if tree.type != wf_node.NodeType.block:
             return self.normalize(self._ensure_block_root(self.lower_expr(tree, env, imports), signature))
@@ -60,7 +70,12 @@ class Lowerer:
                 return env[expr.name]
             if expr.name in imports:
                 return self._function_from_import(expr.name, imports[expr.name])
-            return ir.Name(expr.name)
+            if self.signature is not None and expr.name in self.signature.inputs:
+                param = self.signature.inputs[expr.name]
+                typ = param.type.value if param.type is not None else None
+                desc = param.desc
+                return ir.Input(expr.name, typ, desc)
+            raise ValueError(f'Undefined variable: {expr.name}')
 
         if expr.type == wf_node.NodeType.num:
             return ir.Literal(expr.value)
