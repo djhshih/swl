@@ -1,839 +1,383 @@
-# Plan: transpile compiled SWL DAG JSON to packed CWL
-
-This note describes:
-- how to map the current compiled SWL JSON into packed CWL
-- what additional information CWL generation needs
-- what should change in the compiled SWL JSON so CWL transpilation is straightforward and reliable
-
-Target:
-- emit a single packed CWL document with `cwlVersion` and `$graph`
-- include one `Workflow` node for the compiled SWL workflow
-- include one `CommandLineTool` node per distinct task definition used by the workflow
-- use `InitialWorkDirRequirement` to materialize each task script into the execution directory
-
-Reference style examined:
-- `cipher.pack.cwl`
+# CWL Transpilation: Status and Implementation Plan
 
 ---
 
-## 1. What the current compiled SWL JSON already gives us
+## 1. What is Implemented
 
-The current DAG JSON already contains several things needed for CWL generation:
+The CWL transpiler lives at `swl/transpile/cwl/emit.py`. It reads DAG JSON and emits a packed CWL v1.0 document (`cwlVersion: v1.0`) with a `$graph` containing one `Workflow` node and one `CommandLineTool` per distinct task.
 
-- top-level workflow inputs
-- top-level workflow outputs
-- task call instances with dependency order
-- task input bindings
-- task output declarations
-- normalized run values
-- embedded task script text
-- task source path and task name
+### 1.1 Task step → CommandLineTool
 
-This is enough to generate a first packed CWL file for simple workflows.
+| DAG feature | CWL output | Test |
+|---|---|---|
+| `step.type == "task"` with embedded script | `CommandLineTool` + `InitialWorkDirRequirement` materializing `script.sh` | `test_transpile_function_workflow` |
+| Input params (`file`/`str`/`int`/`float`) | Tool `inputs` with `type: File`/`string`/`int`/`float` | same |
+| Output params with interpolation | `outputBinding.glob` as `$(inputs.var + '.ext')` expression | `test_output_glob_uses_cwl_expression` |
+| CPU resource (`run.cpu`) | `ResourceRequirement.coresMin` | `test_transpile_function_workflow` |
+| Memory resource (`run.memory`) | `ResourceRequirement.ramMin` (value in MB) | same |
+| Docker image (`run.image`) | `DockerRequirement.dockerPull` | same |
+| `run.time` | Silently dropped (CWL has no standard time limit) | none |
 
-In particular, each compiled task already contains enough information to generate a `CommandLineTool` body:
-- interface
-- script body
-- resource-like run fields (`cpu`, `memory`, `time`, `image`)
+### 1.2 Workflow block
 
-And each task call already contains enough information to generate a workflow step:
-- step id
-- step inputs
-- step outputs
-- edges to upstream steps or workflow inputs
+| DAG feature | CWL output | Test |
+|---|---|---|
+| Workflow inputs | `Workflow.inputs` with `type` and optional `doc` | `test_transpile_function_workflow` |
+| Step calls with bindings | `Workflow.steps[]` with `in` array wiring inputs | same |
+| Input binding (workflow input) | Source `#main/input_name` | same |
+| Step output binding | Source `#main/step_id/output_name` | same |
+| Literal binding | `default` value on step input port | `test_rejects_non_task_workflow_output` (indirect) |
+| Field projection (step output) | Source `#main/step_id/field_name` | `_canonical_binding` handling |
+| Field projection (input field) | Source `#main/input_name/field_name` | same |
+| Workflow outputs | `Workflow.outputs` with `outputSource` and inferred type | `test_transpile_function_workflow` |
+| Sub-workflow step | Embedded `Workflow` node in `$graph` | `test_imported_workflow_output_transpiles_as_workflow_step` |
 
----
+### 1.3 Mapped steps (`map` → scatter)
 
-## 2. Packed CWL structure to generate
+| DAG feature | CWL output | Test |
+|---|---|---|
+| `MappedStep` without `group_by` | `scatter` on input ports + `scatterMethod: dotproduct` | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` |
+| Mapped workflow | Scattered step referencing sub-workflow | `test_batch_mapped_workflow_emits_scattered_subworkflow` |
+| Mapped lambda (generated sub-workflow) | Generated `Workflow` node + scattered call | `test_batch_mapped_simple_lambda_emits_generated_scattered_subworkflow` |
+| Root partial `map` | Scattered sub-workflow from partial application | `test_root_partial_map_transpiles_as_scattered_subworkflow` |
+| `map.source` via `input` | Each schema column gets a workflow input + scatter port | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` |
+| `map.source` via `table` | Column bindings resolved to workflow input references | same (table branch) |
 
-The generated CWL should look like:
+### 1.4 Rejected (clear error)
 
-```json
-{
-  "cwlVersion": "v1.0",
-  "$graph": [
-    { "id": "#align", "class": "CommandLineTool", ... },
-    { "id": "#sort", "class": "CommandLineTool", ... },
-    { "id": "#function", "class": "Workflow", ... }
-  ]
-}
-```
-
-Target version:
-- `v1.0`
-
-The transpiler should emit CWL `v1.0` to match the style of `cipher.pack.cwl`.
-
-The packed file should contain:
-
-1. one `CommandLineTool` entry per distinct task definition
-2. one `Workflow` entry representing the compiled DAG
-
-Distinct task definitions should be deduplicated by task path or another stable task identity, not by step id.
-
----
-
-## 3. Mapping SWL task definitions to CWL CommandLineTool
-
-## 3.1 Tool identity
-
-For each imported task definition, create a packed tool entry.
-
-Tool id rule:
-- derive the tool id from the variable name bound to the task import in the SWL source
-- example:
-
-```swl
-align = import "align.sh"
-sort  = import "sort.sh"
-```
-
-should produce packed tool ids:
-- `#align`
-- `#sort`
-
-This matches the language-level naming the user wrote, and gives stable readable ids.
-
-The ids only need to be unique within the packed CWL file. They do not need to include the source file name.
+| Feature | Error message | Test |
+|---|---|---|
+| `map_by` (any `group_by`) | `CWL transpilation does not yet support map_by grouping` | `test_map_by_transpile_reports_explicit_grouping_not_supported` |
+| Merge bindings in step inputs | `merge values are not supported` | `test_rejects_merged_task_input_binding` |
+| Record bindings in step inputs | `record values are not supported` | (via `_step_input_error`) |
+| Function-valued outputs | `function outputs are not supported` | (via `_workflow_output_error`) |
+| Literal workflow outputs | `literal outputs are not supported` | `test_rejects_non_task_workflow_output` |
+| `expr` interpolation in output paths | `Unsupported interpolation for CWL glob` | `test_rejects_output_expr_interpolation` |
+| Merge/Record workflow outputs | `merge outputs are not supported` / `record outputs are not supported` | (via `_workflow_output_error`) |
+| Merge bindings at deserialization | `Unsupported step binding during deserialization` | `test_rejects_merged_task_input_binding` |
+| Nested `Field(Field(...))` | `field source ... is not supported` | (via `_step_input_error`) |
 
 ---
 
-## 3.2 Base command
+## 2. What is Not Implemented
 
-Since SWL tasks currently embed shell script bodies, the simplest CWL lowering is:
+### 2.1 `map_by` (grouped scatter)
 
-```json
-"baseCommand": ["bash", "script.sh"]
-```
+**Status:** Explicitly rejected at `emit.py:195`.
 
-and then use:
+**DAG signal:** `MappedStep` with `map.group_by` set.
 
-```json
-{
-  "class": "InitialWorkDirRequirement",
-  "listing": [
-    {
-      "entryname": "script.sh",
-      "entry": "...task shell body..."
-    }
-  ]
-}
-```
+**Reference:** `map_by_cwl.md` describes the full approach.
 
-This matches the style in `cipher.pack.cwl`.
+**What's needed:** Replace the rejection with a two-phase emission:
+- **Phase 1 — Grouping:** An `ExpressionTool` with `InlineJavascriptRequirement` that reads the table columns as arrays, partitions rows by the key column, and writes per-group JSON files.
+- **Phase 2 — Scatter:** A generated wrapper `CommandLineTool` (or `Workflow` for mapped workflows) that reads each group JSON and invokes the original function's script once per row, collecting outputs.
 
-Notes:
-- later we may want `ShellCommandRequirement` and inline command fragments, but script materialization is simpler and closer to current SWL task semantics
-- one script filename per tool is enough if the file is local to the tool execution directory
+**Edge cases to handle:**
+- The mapped function is a task vs. a workflow (different wrapper generation)
+- The mapped function's inputs include array-typed params (arrays-of-arrays — reject initially)
+- Large number of groups (thousands of JSON files)
+- `expr` interpolation inside the wrapped function (must reject)
 
----
+### 2.2 Record bindings
 
-## 3.3 Tool inputs
+**Status:** Rejected at `emit.py:238`.
 
-Each compiled task input should become a CWL input parameter.
+**DAG signal:** Binding with `{source: "record", fields: {...}}`.
 
-Example current SWL task metadata:
+**What's needed:** A record binding represents a constructed value (e.g., `{ bam: calls.bam, outbase: "merged" }`). CWL has no native record literal. Options:
+- **Option A:** Flatten the record at compiler time: if the record directly saturates a task call, expand its fields into individual step inputs. This is already partially done by forcing (partial application produces flat inputs when the record saturates a task). For non-saturating records, emit an `ExpressionTool` that constructs the record from individual inputs.
+- **Option B:** Emit an intermediate `ExpressionTool` step that takes each field as a separate input and produces the record as a JSON output. Downstream steps reference the JSON's field via `$(step.field)`.
 
-```json
-"inputs": {
-  "bam": {"type": "file", "desc": "input bam"},
-  "outbase": {"type": "str", "desc": "output base name"}
-}
-```
+### 2.3 Merge bindings
 
-Possible CWL lowering:
+**Status:** Rejected. The DAG serializer cannot even represent merge bindings in step bindings (`dag.py:_binding_to_binding_dict` raises on Merge), and the CWL transpiler rejects them.
 
-```json
-"inputs": [
-  {"id": "#tool/sort/bam", "type": "File", "doc": "input bam"},
-  {"id": "#tool/sort/outbase", "type": "string", "doc": "output base name"}
-]
-```
+**DAG signal:** Binding with `{source: "merge", left: ..., right: ...}`.
 
-Type mapping plan:
+**What's needed:** Merge bindings arise from `A | B | C` pipeline desugaring and from explicit `//` operators. In most cases the compiler's chain desugaring already produces flat bindings. Remaining case: explicit record update expressions that reach the DAG. Fix should be at the compiler level (in `force.py`), not in the transpiler:
+- Add merge-flattening logic to forcing so that merge bindings are resolved to flat per-field bindings before DAG output.
+- If a merge cannot be flattened (e.g., merging two non-overlapping records that feed a single port), reject at the DAG validation level with a clear message.
 
-- `file` -> `File`
-- `str` -> `string`
-- `int` -> `int`
-- `float` -> `float` if later added
-- `bool` -> `boolean` if later added
-- `memory` -> likely `int` in MiB for resource fields, not a normal CLI file/string input
-- `time` -> likely `int` in minutes for resource fields, not a normal CLI file/string input
+### 2.4 Nested field projections
 
-For now, task `run` fields should not necessarily become ordinary CWL formal inputs unless they are intended to be overridable at workflow runtime.
+**Status:** Rejected at `emit.py:242`.
 
----
+**DAG signal:** `Field(Field(...), name)` — a field projection whose source is itself a field projection.
 
-## 3.4 Tool outputs
+**What's needed:** Nested field projections (`x.y.z`) require the intermediate value to be resolved. CWL cannot chain field accesses natively. Options:
+- **Option A:** Flatten at compiler time: if `x` is a step output and its type is known, resolve `x.y.z` to a direct step output reference.
+- **Option B:** Emit an intermediate `ExpressionTool` that takes `x` as input and emits `x.y.z`.
 
-Each compiled task output should become a CWL output parameter.
+### 2.5 `expr` interpolation in output paths
 
-Current SWL compiled JSON already includes output defaults in interpolation form, for example:
+**Status:** Rejected at `emit.py:336-337`.
 
-```json
-"outputs": {
-  "bam": {
-    "type": "file",
-    "default": {
-      "kind": "word",
-      "parts": [
-        {"kind": "var", "name": "outbase"},
-        {"kind": "literal", "text": ".bam"}
-      ]
-    }
-  }
-}
-```
+**DAG signal:** Interpolation part with `kind: "expr"` (e.g., `${outbase / 2}`).
 
-This can lower to:
+**What's needed:** `expr` parts are arbitrary expressions, not simple variable references. CWL `$( ... )` expressions are JavaScript — they can represent arbitrary expressions if `InlineJavascriptRequirement` is declared. Options:
+- **Prefix CWL requirement:** If the task or workflow has any `expr` interpolation, add `InlineJavascriptRequirement` and emit the expression as-is wrapped in `$( ... )`.
+- **Keep rejecting:** Arbitrary SWL expressions may reference variables or operators that don't map to CWL's JS expression scope. Conservative approach: continue rejecting.
 
-```json
-{
-  "id": "#tool/sort/bam",
-  "type": "File",
-  "outputBinding": {
-    "glob": "$(inputs.outbase + '.bam')"
-  }
-}
-```
+### 2.6 Time resource
 
-So the transpiler needs a conversion from SWL interpolation JSON to CWL expression strings.
+**Status:** Silently dropped at `emit.py:175-183`.
 
-That is feasible for:
-- literal pieces
-- variable references
-- simple concatenation
+**DAG signal:** `run.time.value` is present but `_resource_requirement` only reads `cpu` and `memory`.
 
-Potentially not feasible yet for arbitrary `${expr}` fragments unless we define a translation subset.
+**What's needed:** CWL v1.0 has no standard time limit in `ResourceRequirement`. Options:
+- Emit as a hints entry: `{"class": "Hint", "timeLimit": <value>}`
+- Emit in a non-standard extension namespace
+- Continue dropping (current behavior)
+
+### 2.7 Optional type serialization
+
+**Status:** DAG does not serialize optionality. The `?` suffix in task annotations (e.g., `file?`) is used during semantic checking but is not present in the DAG output.
+
+**What's needed:** If optionality is to be represented in CWL:
+- Store optional flag in the DAG `InputSpec`
+- CWL represents optional types as `["null", "File"]` (union with null)
+- This depends on DAG schema changes first
+
+### 2.8 Merge workflow outputs
+
+**Status:** Rejected at `emit.py:255`.
+
+**DAG signal:** `dag.outputs` containing `{source: "merge", ...}`.
+
+**What's needed:** Same root cause as §2.3. Fix at compiler level: flatten merge bindings before DAG output so the transpiler never sees them.
+
+### 2.9 Record workflow outputs
+
+**Status:** Rejected at `emit.py:257`.
+
+**DAG signal:** `dag.outputs` containing `{source: "record", ...}`.
+
+**What's needed:** Records at workflow output level mean the workflow returns a constructed record, not a step output. Options:
+- Decompose at compiler time: add synthetic steps to construct the record
+- Support at transpiler time: emit `ExpressionTool` output construction
 
 ---
 
-## 3.5 Tool resource requirements
+## 3. Gap Analysis Summary
 
-Current SWL run fields:
-- `cpu`
-- `memory`
-- `time`
-- `image`
-
-Reasonable CWL lowering:
-
-### cpu
-
-```json
-{
-  "class": "ResourceRequirement",
-  "coresMin": 4
-}
-```
-
-### memory
-
-Current SWL semantic normalization is MiB.
-That maps well to:
-
-```json
-{
-  "class": "ResourceRequirement",
-  "ramMin": 8192
-}
-```
-
-### time
-
-CWL core does not have a standard runtime time limit field.
-Options:
-- ignore in first pass
-- preserve as extension metadata
-- emit in `hints`
-
-Recommended first-pass behavior:
-- preserve `time` in a non-standard `hints` or extension field
-- do not pretend it is standard CWL runtime semantics
-
-### image
-
-This wants container lowering:
-
-```json
-{
-  "class": "DockerRequirement",
-  "dockerPull": "djhshih/seqkit:0.1"
-}
-```
-
-So SWL `run.image` can map cleanly to CWL `DockerRequirement`.
+| Feature | Severity | Root cause layer | Fix layer |
+|---|---|---|---|
+| `map_by` (grouped scatter) | **Blocking** for `map_by` workflows | Transpiler lacks two-phase emission | Transpiler: add ExpressionTool grouping + wrapper scatter (map_by_cwl.md) |
+| Record bindings in step inputs | High | Transpiler rejects; compiler may not flatten all cases | Both: flatten in compiler, support remainder in transpiler |
+| Merge bindings | High | Chain desugaring handles `\|`, explicit `//` may not flatten | Compiler: merge-flatten in force.py |
+| Nested field projections | Medium | Compiler emits `Field(Field(...))` for multi-level access | Transpiler: ExpressionTool intermediary |
+| `expr` interpolation | Medium | SWL arbitrary expressions don't map to CWL JS | Transpiler: optional InlineJavascriptRequirement + passthrough |
+| Time resource | Low | CWL lacks standard time limit | Transpiler: emit as hints entry |
+| Optional type serialization | Low | DAG schema missing optional flag | DAG schema: add optional field |
+| Merge workflow outputs | Medium | Same as merge bindings | Compiler: merge-flatten |
+| Record workflow outputs | Low | Rare in practice; compiler may emit for lambda results | Transpiler: ExpressionTool construction |
+| `run` params missing in DAG | Low | Workflow steps' definition.run may be empty when inherited | Compiler: propagate run params to definition |
 
 ---
 
-## 4. Mapping SWL DAG task calls to CWL Workflow steps
+## 4. Implementation Plan
 
-Each compiled `tasks[]` item becomes one CWL workflow step.
+### Phase 1: `map_by` via ExpressionTool grouping + scattered wrapper
 
-Example SWL step-like data:
+**Goal:** Replace `_validate_supported` rejection of `group_by` with full two-phase emission.
 
-```json
-{
-  "id": "t2",
-  "name": "sort",
-  "inputs": {
-    "bam": {"source": "task", "task": "t1", "output": "bam"},
-    "outbase": {"source": "input", "name": "outbase"}
-  },
-  "outputs": {...}
-}
-```
+**Implementation steps:**
 
-Lower to CWL step:
+1. **Add `_validate_map_by_preconditions(step)`** — check that:
+   - `map.source` is present and is either `input` or `table`
+   - `map.group_by` names a column in `map.source.columns` or `step.input_schema`
+   - The mapped function's inputs do not include array types (arrays-of-arrays not representable; reject with clear message)
+   - The mapped function's output paths contain no `expr` interpolation
 
-```json
-{
-  "id": "#main/t2",
-  "run": "#tool/sort",
-  "in": [
-    {"id": "#main/t2/bam", "source": "#main/t1/bam"},
-    {"id": "#main/t2/outbase", "source": "#main/outbase"}
-  ],
-  "out": ["#main/t2/bam", "#main/t2/bai"]
-}
-```
+2. **Implement `_emit_grouping_expression_tool(step)`** — generate a CWL `ExpressionTool`:
+   - Inputs: one per column in `step.input_schema` (typed as arrays matching the CWL array-of-items form), plus a `key_name: string` input
+   - Requirements: `InlineJavascriptRequirement`
+   - Outputs: `groups: File[]` with `outputBinding.glob: "groups/*.json"`
+   - Expression (JavaScript): partition rows by key, write one JSON file per group using `fs.writeFileSync`
+   - Structure of each group JSON:
+     ```json
+     { "key": "sample_A", "columns": { "fastq1": [...], "fastq2": [...] } }
+     ```
 
-The `deps` field is useful for validation and ordering, but not necessary for final CWL edges because CWL step dependencies are derived from `source` links.
+3. **Implement `_emit_group_wrapper_tool(step)`** — generate a `CommandLineTool`:
+   - Input: a single `File` (the group JSON); additional broadcast inputs from non-scatter bindings
+   - Script: reads the group JSON, iterates over rows, calls the original tool's script for each row, collects outputs
+   - Outputs: generated from `step.output_schema` (arrays — each group produces one output row)
 
----
+4. **Implement `_emit_map_by_workflow_step(step, ...)`** that emits two CWL workflow steps:
+   - Grouping step: calls the ExpressionTool
+   - Processing step: calls the wrapper tool, `scatter` on the group file input
 
-## 5. Mapping top-level SWL DAG inputs to CWL Workflow inputs
+5. **Handle the mapped function being a sub-workflow** (not just a task):
+   - The wrapper is a generated `Workflow` (using `SubworkflowFeatureRequirement`) that reads group JSON via inline `ExpressionTool`, calls the inner sub-workflow per row, and collects outputs.
 
-Current compiled JSON top-level inputs:
+6. **Update `_step_to_cwl` or call site:** When `step.map.group_by` is present, call `_emit_map_by_workflow_step` instead of the normal scatter path.
 
-```json
-"inputs": {
-  "fastq1": {"type": "file", "desc": "paired-end reads"},
-  "outbase": {"type": "str", "desc": "output base name"}
-}
-```
+7. **Tests:**
+   - `test_map_by_task_transpiles_to_grouping_and_scatter` — full DAG with simple `map_by` on a task
+   - `test_map_by_workflow_transpiles` — `map_by` on a sub-workflow
+   - `test_map_by_rejects_array_inputs` — verify rejection of array-typed inputs in mapped function
+   - `test_map_by_rejects_expr_interpolation` — verify rejection of `expr` in wrapped function's outputs
 
-Lower to workflow inputs:
+**Complexity assessment:** ~250-350 lines of new Python code + ~100 lines of tests. The ExpressionTool JS and the wrapper bash script are the riskiest parts — they need careful quoting and edge-case handling.
 
-```json
-"inputs": [
-  {"id": "#main/fastq1", "type": "File", "doc": "paired-end reads"},
-  {"id": "#main/outbase", "type": "string", "doc": "output base name"}
-]
-```
+### Phase 2: Merge flattening at compiler level
 
-This part is already fairly direct.
+**Goal:** Eliminate merge bindings from DAG output so the transpiler never sees them.
 
----
+**Implementation steps:**
 
-## 6. Mapping top-level SWL DAG outputs to CWL Workflow outputs
+1. **Identify merge sources:** Merge bindings in the DAG come from:
+   - Pipeline chain desugaring (`A | B` → `x // a` bindings) — already flat in most cases
+   - Explicit record update expressions (`r1 // r2`) in the SWL source
+   - Partial application with `//` in the call site
 
-Current compiled JSON top-level outputs reference:
-- task outputs
-- sometimes input/literal/record/merge/function-shaped values
+2. **Add flattening pass in `force.py`** (after IR forcing, before DAG construction):
+   - Walk all step bindings. When a binding is a `Merge`, recursively decompose it:
+     - If both sides are `Input` or `Field(StepCall)`, flatten to individual per-field bindings
+     - If one side cannot be decomposed (e.g., a `TableSource`), raise a compile-time error
+   - Walk `dag.outputs`. Same treatment.
 
-For CWL workflow outputs, the easiest supported case is:
-- output bound directly to a step output
+3. **Remove rejection in `_validate_supported`:** Once merges are flattened by the compiler, the transpiler never encounters them.
 
-Example:
+4. **Tests:**
+   - Verify that existing pipeline tests (`function.swl`, `pipe.swl`) produce no merge bindings in DAG
+   - Add test for explicit `//` in source that should be flattened
+   - Add test for `//` that cannot be flattened (e.g., record-update on a table column) → expected compile error
 
-```json
-"outputs": {
-  "bam": {"source": "task", "task": "t2", "output": "bam"}
-}
-```
+### Phase 3: Record bindings via ExpressionTool
 
-Lower to:
+**Goal:** Support record bindings that reach the transpiler (non-saturating records).
 
-```json
-{
-  "id": "#main/bam",
-  "type": "File",
-  "outputSource": "#main/t2/bam"
-}
-```
+**Implementation steps:**
 
-Harder cases:
-- record-valued outputs
-- merged outputs
-- function-valued outputs
-- literal outputs that are not files
+1. **Determine if record can be saturated:** If the record binding is in a step's bindings for a named input, check whether the step's task expects a single record-typed input. If yes, the record is "saturating" and its fields should be flattened into individual inputs at compiler time.
 
-For first-pass CWL transpilation, we should restrict support to compiled DAGs whose final outputs are flat named bindings to:
-- workflow inputs
-- task outputs
-- maybe literals
+2. **For non-saturating records at transpiler time:**
+   - Generate an `ExpressionTool` that takes each record field as a separate input
+   - The tool constructs the record as a JSON object and emits it as a `File`
+   - Replace the record binding in downstream steps with a reference to the ExpressionTool's file output
 
-If compiled output still contains `source: function`, CWL transpilation should fail clearly.
+3. **Tests:**
+   - Create a DAG where a record does not saturate a task call
+   - Verify that transpilation produces an intermediate ExpressionTool step
 
----
+### Phase 4: Time resource hints
 
-## 7. InitialWorkDirRequirement usage
+**Goal:** Preserve `run.time` in CWL output (currently dropped).
 
-Use `InitialWorkDirRequirement` in each generated `CommandLineTool`.
+**Implementation steps:**
 
-Planned form:
+1. **Modify `_resource_requirement` (or create `_emit_runtime`):** After emitting `ResourceRequirement`, emit `time` as a hints entry:
+   ```python
+   hints = []
+   if 'time' in run:
+       hints.append({'class': 'TimeLimit', 'timeLimit': run['time'].get('value')})
+   ```
 
-```json
-{
-  "class": "InitialWorkDirRequirement",
-  "listing": [
-    {
-      "entryname": "script.sh",
-      "entry": "...shell script text..."
-    }
-  ]
-}
-```
+2. **If hint approach is too non-standard:** Emit as a custom extension:
+   ```python
+   {'extension': 'https://swl-lang.org/timeLimit', 'value': run['time'].get('value')}
+   ```
 
-This is appropriate because SWL compiled JSON already embeds the exact shell body needed for execution.
+3. **Tests:**
+   - Verify that function workflow CWL output includes time hint
 
-Longer-term option:
-- also materialize small helper files if SWL later grows that concept
+### Phase 5: `expr` interpolation passthrough
 
----
+**Goal:** Support `expr` interpolation parts by adding `InlineJavascriptRequirement` and passing the expression through.
 
-## 8. What in the current SWL JSON is awkward for CWL transpilation
+**Implementation steps:**
 
-The current compiled JSON is close, but some parts are still too executor-internal or too syntax-shaped.
+1. **Modify `_interp_to_cwl_glob`:** Instead of raising on `expr` parts, emit the expression text as-is within `$( ... )`.
 
-Main issues:
+2. **Add `InlineJavascriptRequirement` to tool requirements** if any output uses `expr` interpolation.
 
-1. task outputs store SWL interpolation syntax trees, not already-lowered filename expressions
-2. task inputs do not distinguish ordinary CLI inputs from run/resource controls
-3. top-level outputs can still contain non-CWL-friendly binding forms
-4. task command construction relies on implicit shell variable naming rather than explicit input binding metadata
-5. there is no explicit per-task CWL-friendly command template
-6. file-vs-value distinctions are present, but not rich enough for all CWL lowering decisions
+3. **Tests:**
+   - Create a `.swl` file with `expr` interpolation in output path
+   - Verify transpilation succeeds and includes `InlineJavascriptRequirement`
+   - Verify the emitted expression preserves the original expression text
 
----
+### Phase 6: Nested field projections
 
-## 9. Recommended changes to compiled SWL JSON
+**Goal:** Support `Field(Field(...), ...)` patterns.
 
-This section is the main design recommendation.
+**Implementation steps:**
 
-## 9.1 Add explicit task interface sections by role
+1. **Add `_emit_field_resolution_expression_tool(binding)`:** For a nested field chain like `x.y.z`:
+   - Create an ExpressionTool that takes the source binding as input
+   - Resolve the field chain via JS expression: `$(inputs.source.y.z)`
+   - Output the resolved value
 
-Current task entry shape roughly has:
-- `inputs`
-- `outputs`
-- `run`
-- `script`
+2. **Wire the ExpressionTool output** as the input to the downstream step.
 
-Keep that, but make each parameter more explicit about execution role.
+3. **Tests:**
+   - Construct a DAG with `Field(Field(step_output, "inner"), "leaf")`
+   - Verify transpilation produces an intermediate ExpressionTool
 
-Recommended normalized param schema:
+### Phase 7: Optional type support
 
-```json
-{
-  "type": "file",
-  "desc": "input bam",
-  "role": "input"
-}
-```
+**Goal:** Represent optional types in CWL as union types.
 
-and for outputs:
+**Implementation steps:**
 
-```json
-{
-  "type": "file",
-  "desc": "output alignment",
-  "role": "output",
-  "path": {
-    "engine": "swl_interp",
-    "value": {...}
-  }
-}
-```
+1. **Add optional flag to DAG `InputSpec`:** Requires DAG schema change (add optional `optional: bool` field).
 
-and for run params:
+2. **Modify `_cwl_type`:** When `optional=True`, emit `["null", <type>]` instead of just `<type>`.
 
-```json
-{
-  "type": "int",
-  "desc": null,
-  "role": "resource",
-  "value": 4,
-  "resource": "cpu"
-}
-```
-
-Why:
-- CWL lowering needs to know whether a field is a real workflow/CLI input, a declared output path, or a resource/container setting
-- right now this is implied by section location, but making it explicit simplifies a separate transpiler
+3. **Tests:**
+   - Transpile a DAG with optional input and verify CWL type is `["null", "File"]`
 
 ---
 
-## 9.2 Add explicit output path expressions
+## 5. Effort Summary
 
-Current output `default` values are SWL interpolation trees.
-That is good raw information, but the transpiler should not have to infer semantics from generic `default`.
+| Phase | Feature | Layer | Estimated effort |
+|---|---|---|---|
+| 1 | `map_by` | Transpiler | ~350 lines emit.py, ~100 lines tests |
+| 2 | Merge flattening | Compiler (force.py) | ~80 lines force.py, ~40 lines tests |
+| 3 | Record bindings | Transpiler | ~150 lines emit.py, ~60 lines tests |
+| 4 | Time resource hints | Transpiler | ~20 lines emit.py, ~20 lines tests |
+| 5 | `expr` interpolation | Transpiler | ~30 lines emit.py, ~30 lines tests |
+| 6 | Nested field projections | Transpiler | ~100 lines emit.py, ~50 lines tests |
+| 7 | Optional types | DAG schema + transpiler | ~40 lines across dag.py + emit.py, ~30 lines tests |
 
-Recommended change:
-- rename task output `default` to something output-specific, such as `path` or `glob`
+**Total estimate:** ~800 lines Python + ~330 lines tests.
 
-Example:
+---
 
-```json
-"outputs": {
-  "bam": {
-    "type": "file",
-    "desc": "output alignment",
-    "path": {
-      "kind": "word",
-      "parts": [
-        {"kind": "var", "name": "outbase"},
-        {"kind": "literal", "text": ".bam"}
-      ]
-    }
-  }
-}
+## 6. Dependencies and Ordering
+
+```
+Phase 2 (merge flattening) ─┐
+                              ├──→ Phase 6 (field projections) can start
+Phase 1 (map_by) ────────────┤     after Phase 2 (fewer edge cases)
+                              │
+Phase 3 (record bindings) ───┘
+
+Phase 4 (time hints) ─── independent
+Phase 5 (expr interp) ─── independent
+Phase 7 (optional types) ─── depends on DAG schema change
 ```
 
-Better yet, include both preserved SWL form and pre-rendered target-friendly forms:
-
-```json
-"outputs": {
-  "bam": {
-    "type": "file",
-    "desc": "output alignment",
-    "path": {
-      "swl": {...},
-      "cwl": "$(inputs.outbase + '.bam')"
-    }
-  }
-}
-```
-
-Why:
-- CWL `outputBinding.glob` is path-oriented
-- task output defaults in SWL are not really defaults in the same sense as input defaults
-- explicit path semantics make the contract clearer
+Phase 2 should be done first because it cleans up the DAG and reduces the number of edge cases the transpiler must handle. Phase 1 is the highest user value (unblocks `map_by`). Phases 4-7 are incremental improvements.
 
 ---
 
-## 9.3 Add explicit task command description, not just raw script
-
-Current compiled task JSON stores only:
-
-```json
-"script": "...bash text..."
-```
-
-For CWL, that is enough if we always use `bash script.sh`.
-But it would help to carry an explicit execution stanza:
-
-```json
-"execution": {
-  "kind": "bash_script",
-  "script_name": "script.sh",
-  "script": "...bash text..."
-}
-```
-
-Why:
-- makes the compiled JSON less ad hoc
-- separates execution model from arbitrary top-level field naming
-- gives future room for non-bash task kinds
-
----
-
-## 9.4 Add explicit CWL-friendly value kinds for bindings
-
-Current binding forms are:
-- `input`
-- `task`
-- `literal`
-- `record`
-- `merge`
-- `field`
-- `task_call`
-- `function`
-
-For CWL transpilation, the supported subset should be made explicit.
-
-Recommended addition:
-- define and document which output/input binding forms are valid for CWL lowering
-- optionally add a derived normalized subset, e.g.:
-
-```json
-"cwl_binding": {
-  "kind": "step_output",
-  "step": "t2",
-  "output": "bam"
-}
-```
-
-or
-
-```json
-"cwl_binding": {
-  "kind": "workflow_input",
-  "name": "outbase"
-}
-```
-
-Why:
-- a transpiler should not need to reverse-engineer arbitrary merge trees if the DAG finalization phase can already flatten them
-- forcing is the best place to reject or normalize non-CWL-friendly output shapes
-
----
-
-## 9.5 Add explicit output types at top-level workflow outputs
-
-Current top-level outputs are only bindings.
-For CWL workflow outputs, a type is required.
-
-Recommended compiled output shape:
-
-```json
-"outputs": {
-  "bam": {
-    "type": "file",
-    "desc": "output alignment",
-    "value": {"source": "task", "task": "t2", "output": "bam"}
-  }
-}
-```
-
-instead of only:
-
-```json
-"outputs": {
-  "bam": {"source": "task", "task": "t2", "output": "bam"}
-}
-```
-
-Why:
-- CWL workflow outputs require declared types
-- inferring them again during transpilation is possible, but unnecessary duplication
-
-This is one of the most important JSON changes.
-
----
-
-## 9.6 Distinguish task-definition identity from task-call identity
-
-Current JSON has:
-- task call `id` like `t1`
-- task `name`
-- task `path`
-
-For packed CWL we need two identities:
-- definition id for the deduplicated `CommandLineTool`
-- call id for each workflow step instance
-
-Recommended task call addition:
-
-```json
-{
-  "id": "t2",
-  "tool": "tool/sort",
-  "name": "sort",
-  ...
-}
-```
-
-and top-level packed-tool table, or enough stable identity to derive it cleanly.
-
-Why:
-- several steps may refer to the same tool definition
-- packed CWL needs a separate reusable tool id
-
----
-
-## 9.7 Preserve container/resource info in a normalized role-aware form
-
-Current `run` values are useful, but for CWL lowering we should make standard resource mappings explicit.
-
-Recommended normalized shape:
-
-```json
-"run": {
-  "cpu": {"type": "int", "value": 4, "cwl_resource": "coresMin"},
-  "memory": {"type": "memory", "value": 8192, "unit": "MiB", "cwl_resource": "ramMin"},
-  "image": {"type": "str", "value": "ubuntu:22.04", "cwl_requirement": "DockerRequirement"},
-  "time": {"type": "time", "value": 30, "unit": "minutes", "cwl_hint": "timeLimit"}
-}
-```
-
-Why:
-- avoids hard-coding SWL built-in run names in the transpiler
-- makes the JSON more target-aware without fully baking in CWL
-
----
-
-## 9.8 Add a compiled-workflow name/id
-
-Workflow id rule:
-- always use `#main` for the packed CWL workflow id
-
-This matches the style of `cipher.pack.cwl` and avoids carrying unnecessary workflow naming metadata through the compiled JSON.
-
-We do not need a workflow name field in the compiled SWL JSON for CWL transpilation.
-
----
-
-## 10. Proposed transpilation algorithm
-
-## Phase A: load and validate compiled DAG JSON
-
-1. load JSON
-2. validate supported binding/output forms for CWL lowering
-3. ensure no top-level output is function-valued
-4. ensure task definitions are present and self-contained
-
-Reject clearly if unsupported:
-- `source: function`
-- complex record/merge outputs not flattened to named workflow outputs
-- output path expressions outside supported interpolation subset
-
----
-
-## Phase B: build packed tool table
-
-1. collect distinct task definitions by stable task identity
-2. for each unique task definition:
-   - create `CommandLineTool`
-   - map inputs
-   - map outputs
-   - create `InitialWorkDirRequirement`
-   - map `run` values into `ResourceRequirement`, `DockerRequirement`, and optional hints
-
----
-
-## Phase C: build workflow node
-
-1. create workflow inputs from top-level DAG inputs
-2. create a step for each compiled task call
-3. wire each step input from:
-   - workflow input
-   - upstream step output
-   - literal/default strategy if supported
-4. create workflow outputs from top-level DAG outputs
-
----
-
-## Phase D: emit packed CWL
-
-Emit:
-
-```json
-{
-  "cwlVersion": "v1.0",
-  "$graph": [tools..., workflow]
-}
-```
-
-Tool nodes may appear before or after workflow; either is fine as long as ids resolve.
-
----
-
-## 11. Important first implementation constraints
-
-To keep the first transpiler tractable, the supported subset should be explicit and enforced:
-
-1. task bodies are shell scripts lowered through `InitialWorkDirRequirement`
-2. the packed workflow id is always `#main`
-3. workflow outputs must be direct task-output references
-   - literal outputs are rejected
-   - record outputs are rejected
-   - merge outputs are rejected
-   - function-valued outputs are rejected
-4. step input sources may be only:
-   - workflow input
-   - upstream task output
-   - scalar literal
-   - merge inputs are rejected
-   - record inputs are rejected
-   - function-valued inputs are rejected
-5. output path interpolation must stay within:
-   - literals
-   - `${name}` variable substitution
-   - concatenation
-   - unsupported interpolation forms should fail clearly
-6. tool ids come from import binding names and must not collide across distinct tool definitions
-7. only one top-level workflow is emitted
-8. no attempt yet to lower lazy function-valued outputs to CWL
-
-That subset already covers the current `pipe/function/explicit` style examples.
-
----
-
-## 12. Recommended implementation steps
-
-1. implement the transpiler under:
-   - `python/swl/transpile/cwl/`
-
-   Recommended layout:
-   - `python/swl/transpile/cwl/__init__.py`
-   - `python/swl/transpile/cwl/emit.py`
-   - `python/swl/transpile/cwl/types.py`
-   - `python/swl/transpile/cwl/cli.py` if a dedicated CLI is added
-
-2. add a CLI:
-   - `python -m swl.cwl tests/function.swl`
-   - or transpile from compiled JSON directly
-
-3. decide the entrypoint:
-   - preferred: transpile from compiled DAG JSON, not directly from `.swl`
-   - this keeps CWL generation downstream of forcing and avoids duplicating semantic/lowering logic
-
-4. first make forcing emit CWL-friendly metadata additions:
-   - workflow id/name
-   - top-level output types
-   - explicit output path field
-   - stable tool identity
-
-5. implement a strict transpiler for the supported subset
-6. add golden tests comparing generated packed CWL JSON structure
-
----
-
-## 13. Summary of required SWL JSON changes
-
-Minimum strongly recommended changes:
-
-1. **top-level workflow metadata**
-   - no workflow name field is required for CWL transpilation
-   - packed CWL workflow id should simply be `#main`
-
-2. **top-level outputs**
-   - change from raw binding only to:
-     - `type`
-     - optional `desc`
-     - `value`
-
-3. **task output metadata**
-   - rename/clarify output `default` as output path semantics
-   - ideally expose `path` instead of generic `default`
-
-4. **task/tool identity**
-   - preserve the variable name bound to each imported task
-   - derive the packed `CommandLineTool` id from that import-bound variable name
-   - keep per-call task ids separate from per-definition tool ids
-   - task/tool ids only need to be unique within the packed document; they do not need source file names
-
-5. **task execution metadata**
-   - wrap `script` in an explicit execution object, or at least standardize script file metadata
-
-6. **run/resource metadata**
-   - preserve normalized values
-   - optionally add explicit target-neutral mapping hints like `resource: cpu`, `unit: MiB`
-
-7. **CWL-friendly output normalization**
-   - ensure forcing can flatten final outputs into simple named values suitable for CWL outputSource lowering
-
-These changes would make a packed-CWL transpiler much simpler and less inference-heavy.
-
----
-
-## 14. Recommended design principle
-
-Do not make the CWL transpiler recover hidden semantics from low-level executor JSON if forcing can expose them directly.
-
-Best boundary:
-- SWL semantic/lowering/forcing should produce a self-contained compiled artifact with explicit task interface, output-path, resource, and workflow-output metadata
-- CWL transpilation should mostly be a deterministic format conversion on that compiled artifact
-
-That keeps CWL support maintainable and avoids duplicating compiler logic in the transpiler.
+## 7. Reference: Key Code Locations
+
+| What | File | Lines |
+|---|---|---|
+| Transpiler entry point | `swl/transpile/cwl/emit.py` | 7-49 |
+| Task → CommandLineTool | `_tool_to_cwl` | 52-89 |
+| Step → CWL step (includes scatter) | `_step_to_cwl` | 111-141 |
+| Workflow inputs/outputs | `_workflow_input_to_cwl`, `_workflow_output_to_cwl` | 92-108 |
+| Binding validation (rejections) | `_validate_supported` | 193-211 |
+| Canonical binding classification | `_canonical_binding` | 214-226 |
+| CWL type mapping | `_cwl_type` | 306-323 |
+| Interpolation → CWL glob | `_interp_to_cwl_glob` | 326-339 |
+| `map_by` rejection | `_validate_supported` | 195-196 |
+| `map_by` analysis | `map_by_cwl.md` | full file |
+| DAG data model | `swl/ir/dag.py` | full file |
+| DAG JSON format specification | `dag.md` | full file |
