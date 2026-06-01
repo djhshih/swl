@@ -100,15 +100,26 @@ class Parser:
             self._expect(TokenType.bstart)
         while not self.eof():
             last = self._parse_expr()
-            exprs.append(last)
             if inner and self._end_block():
+                exprs.append(last)
                 break
             # check for early break because 
             # below tokens are optional right before eof
-            if self.eof(): break
+            if self.eof():
+                exprs.append(last)
+                break
             self._expect(TokenType.eol)
             if inner and self._end_block():
+                exprs.append(last)
                 break
+            if self.eof():
+                exprs.append(last)
+                break
+            if last.type != NodeType.bind:
+                raise ValueError(
+                    f'Mid-block expression must be a binding, got {last.type.name}: {last}'
+                )
+            exprs.append(last)
         if last and last.type == NodeType.bind:
             raise ValueError('Final line in a block must be an expr')
         return node.Block(exprs)
