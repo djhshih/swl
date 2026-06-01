@@ -349,35 +349,34 @@ def _mapped_by_step_to_call(step, channels, processes):
     group_key = map_info.get('group_by')
     pname = _process_name(step.id)
 
-    col_names = list((step.input_schema or {}).keys())
-    if group_key and group_key not in col_names:
-        col_names = [group_key] + col_names
+    source_type = source.get('source') if isinstance(source, dict) else None
+    src_ch = None
+    if source_type == 'input':
+        src_ch = channels.get(source.get('name')) or _channel_name(source['name'])
 
-    join_expr = None
-    for col_name in col_names:
-        binding = step.bindings.get(col_name)
-        if binding is None and isinstance(source, dict) and source.get('source') == 'table':
-            col_binding = source.get('columns', {}).get(col_name)
-            if col_binding:
-                binding = _binding_from_dict(col_binding)
-        if binding is None:
-            ch = channels.get(col_name)
-            if ch is None:
-                continue
+    if source_type == 'input' and src_ch is not None:
+        group_key_nf = group_key.replace('-', '_')
+        ch_var = f'{step.id}_records'
+        lines = [f'    {ch_var} = {src_ch}.flatten()']
+        grouped_var = f'{step.id}_groups'
+        lines.append(f'    {grouped_var} = {ch_var}')
+        lines.append(f'        .map{{ rec -> tuple(groupKey(rec.{group_key_nf}), rec) }}')
+        lines.append(f'        .groupTuple()')
+    else:
+        ch_var = f'{step.id}_vals'
+        if source_type == 'table':
+            col_binding = source.get('columns', {}).get(group_key, {})
+            col_src = col_binding.get('name', group_key)
+            src_ch = channels.get(col_src) or _channel_name(col_src)
+            lines = [f'    {ch_var} = {src_ch}']
         else:
-            ch = _binding_to_channel(binding, channels, step)
-        join_expr = ch if join_expr is None else f'{join_expr}.join({ch})'
+            lines = [f'    {ch_var} = {src_ch or "Channel.empty()"}']
+        grouped_var = f'{step.id}_groups'
+        lines.append(f'    {grouped_var} = {ch_var}')
+        lines.append(f'        .map{{ val -> tuple(groupKey(val), val) }}')
+        lines.append(f'        .groupTuple()')
 
-    ch_var = f'{step.id}_rows'
-    lines = [f'    {ch_var} = {join_expr}']
     lines.append('')
-
-    key_idx = col_names.index(group_key) if group_key in col_names else 0
-    grouped_var = f'{step.id}_groups'
-    lines.append(f'    {grouped_var} = {ch_var}')
-    lines.append(f'        .groupTuple(by: {key_idx})')
-    lines.append('')
-
     lines.append(f'    {pname}({grouped_var})')
 
     for out_name in step.outputs:
