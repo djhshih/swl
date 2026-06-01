@@ -168,53 +168,57 @@ class Forcer:
         key = self._apply_key(node.function, fn, arg)
         if key is not None and key in self.apply_cache:
             return self.apply_cache[key]
-        result = self._apply(fn, arg)
+        satisfied = getattr(node, 'satisfied', set())
+        result = self._apply(fn, arg, satisfied)
         if key is not None:
             self.apply_cache[key] = result
         return result
 
-    def _apply(self, fn, arg):
+    def _apply(self, fn, arg, satisfied=None):
+        if satisfied is None:
+            satisfied = set()
         if isinstance(fn, ForcedFunction) and isinstance(fn.function, ir.Function) and fn.function.kind == 'builtin' and fn.function.name in ('map', 'map_by'):
             if fn.function.name == 'map':
                 if fn.bound is None:
-                    return ForcedFunction(fn.function, Record({'f': arg}), fn.signature)
+                    return ForcedFunction(fn.function, Record({'f': arg}), fn.signature, satisfied)
                 if isinstance(fn.bound, Record) and 'f' in fn.bound.fields:
                     return self._force_map(fn.bound.fields['f'], arg)
                 bound = self._merge_bound(fn.bound, arg)
-                return ForcedFunction(fn.function, bound, fn.signature)
+                return ForcedFunction(fn.function, bound, fn.signature, satisfied)
             if fn.bound is None:
-                return ForcedFunction(fn.function, Record({'f': arg}), fn.signature)
+                return ForcedFunction(fn.function, Record({'f': arg}), fn.signature, satisfied)
             if isinstance(fn.bound, Record) and 'f' in fn.bound.fields and 'key' not in fn.bound.fields:
-                return ForcedFunction(fn.function, Record({'f': fn.bound.fields['f'], 'key': arg}), fn.signature)
+                return ForcedFunction(fn.function, Record({'f': fn.bound.fields['f'], 'key': arg}), fn.signature, satisfied)
             if isinstance(fn.bound, Record) and 'f' in fn.bound.fields and 'key' in fn.bound.fields:
                 key_value = fn.bound.fields['key']
                 key = key_value.value if isinstance(key_value, Literal) else None
                 return self._force_map(fn.bound.fields['f'], arg, key=key)
             bound = self._merge_bound(fn.bound, arg)
-            return ForcedFunction(fn.function, bound, fn.signature)
+            return ForcedFunction(fn.function, bound, fn.signature, satisfied)
         if isinstance(arg, MappedStep):
             return self._apply_mapped(fn, arg)
         if not isinstance(fn, ForcedFunction):
             raise ValueError(f'Cannot apply non-function value during forcing: {fn!r}')
 
         bound = self._merge_bound(fn.bound, arg)
+        accumulated = fn.satisfied | satisfied
 
         if isinstance(fn.function, ir.Function):
             if fn.function.kind == 'task':
                 if not self._saturated_task(fn.function, bound):
-                    return ForcedFunction(fn.function, bound, fn.signature)
-                return self._emit_task_call(fn.function, bound)
+                    return ForcedFunction(fn.function, bound, fn.signature, accumulated)
+                return self._emit_task_call(fn.function, bound, accumulated)
             if fn.function.kind == 'workflow':
                 if not self._saturated_signature(fn.function, bound):
-                    return ForcedFunction(fn.function, bound, fn.signature)
-                return self._emit_workflow_call(fn.function, bound)
+                    return ForcedFunction(fn.function, bound, fn.signature, accumulated)
+                return self._emit_workflow_call(fn.function, bound, accumulated)
 
         if isinstance(fn.function, ir.Lambda):
             if not isinstance(bound, Record):
-                return ForcedFunction(fn.function, bound, fn.signature)
+                return ForcedFunction(fn.function, bound, fn.signature, accumulated)
             return self._force_lambda(fn.function, bound)
 
-        return ForcedFunction(fn.function, bound, fn.signature)
+        return ForcedFunction(fn.function, bound, fn.signature, accumulated)
 
     def _register_block(self, bindings):
         for bind in bindings:
@@ -331,8 +335,9 @@ class Forcer:
             return Field(value, name)
         return value
 
-    def _emit_task_call(self, function, bound):
+    def _emit_task_call(self, function, bound, satisfied=None):
         inputs = self._normalize_task_inputs(function, bound)
+        self._validate_bindings(inputs, satisfied, function.name)
         key = self._step_call_key(function, inputs)
         if key in self.step_cache:
             return self.step_cache[key]
@@ -422,8 +427,9 @@ class Forcer:
             return name
         return f'{name}_{count}'
 
-    def _emit_workflow_call(self, function, bound):
+    def _emit_workflow_call(self, function, bound, satisfied=None):
         inputs = self._normalize_task_inputs(function, bound)
+        self._validate_bindings(inputs, satisfied, function.name)
         key = self._step_call_key(function, inputs)
         if key in self.step_cache:
             return self.step_cache[key]
@@ -443,6 +449,18 @@ class Forcer:
         result = Record({name: Field(call, name) for name in outputs})
         self.step_cache[key] = result
         return result
+
+    def _validate_bindings(self, inputs, satisfied, function_name):
+        if not satisfied:
+            return
+        bound_names = set(inputs.keys())
+        missing = satisfied - bound_names
+        if missing:
+            raise ValueError(
+                f'Step call to {function_name} has bindings {bound_names} '
+                f'but checker predicted satisfied inputs: {satisfied}. '
+                f'Missing: {missing}'
+            )
 
     def _is_batch_function(self, fn):
         function = fn.function if isinstance(fn, ForcedFunction) else fn

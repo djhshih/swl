@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,7 @@ class ForcedFunction:
     function: object
     bound: Optional[object] = None
     signature: Optional[object] = None
+    satisfied: Set[str] = field(default_factory=set)
 
 
 @dataclass(init=False)

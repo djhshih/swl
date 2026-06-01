@@ -20,14 +20,19 @@ The Checker's analysis is not embedded in the IR. The Forcer re-derives everythi
 
 ### P1.1: Partial application model drops provenance between checker and forcer
 
+**Status: Fixed.**
+
 **Root cause:** Checker and forcer each evaluate partial application independently with different value domains. The checker produces `ClosureValue(function, bound_fields)` where `bound_fields` is `ClosedRecord` of `UnknownValue` entries — it remembers that fields are bound but not what they are bound to. The forcer produces `ForcedFunction(node, bound_value, signature)` with concrete bound values. There is no validation that the forcer's concrete evaluation agrees with the checker's abstract prediction.
 
 **Spec violation:** "Partial application returns a new function." The checker's `ClosureValue` loses the bound values, so later stages may produce different step call bindings than the checker assumed. The checker also eagerly creates `ComputationValue` (treating a function as applied) when the bound record is an `OpenRecord`, making inference approximate.
 
-**Proposed solution:** Thread the checker's type/constraint map through the IR so the forcer can use it:
-1. Add a type-constraint field to `ir.Lambda` and `ir.Function` nodes that records which inputs the checker determined as demanded vs satisfied.
-2. In `force.py:_input()`, consult this constraint map to set `type` and `desc` on newly created `Input` nodes instead of defaulting to `None`.
-3. Add `force.py:_validate_bindings()` that cross-checks each step call's bindings against the checker's predicted input set and reports mismatches as compile errors.
+**Fix:** Threaded the checker's satisfied-input information through the IR and into the forcer:
+1. Added `satisfied: Set[str] = field(default_factory=set)` to `ir.Apply` (`ir/node.py`).
+2. Checker records satisfied input sets per Apply AST node in `Checker._record_apply_satisfied()` (`semantic/wf/check.py`). For `ComputationValue` (full application), satisfied = all function input names. For `ClosureValue` (partial), satisfied = only explicitly-bound fields (where `_is_explicitly_bound_value()` returns True).
+3. Lowerer reads `checker._apply_satisfied[id(expr)]` and passes as `satisfied=` to `ir.Apply` (`ir/lower.py:127`).
+4. Added `satisfied: Set[str]` to `dag.ForcedFunction` (`ir/dag.py`) so partial applications carry accumulated satisfied provenance across multiple apply steps.
+5. Forcer's `_force_apply()` extracts `satisfied` from `ir.Apply` and passes to `_apply()`. The `_apply()` method accumulates `fn.satisfied | satisfied` and stores it on new `ForcedFunction` instances for partial applications or passes it to emit methods for full applications (`ir/force.py`).
+6. Added `Forcer._validate_bindings(inputs, satisfied, function_name)` that raises `ValueError` when step call bindings differ from the checker's predicted satisfied input set (`ir/force.py`). Called from both `_emit_task_call()` and `_emit_workflow_call()`.
 
 ---
 

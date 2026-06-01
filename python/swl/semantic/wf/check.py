@@ -127,6 +127,7 @@ class Checker:
     def __init__(self, files=None):
         self._loading = []
         self.files = files or {}
+        self._apply_satisfied = {}
 
     def load(self, path: str) -> WorkflowCheck:
         full_path = os.path.abspath(path)
@@ -627,7 +628,9 @@ class Checker:
                 return self._apply_map_by_partial(mapped_fun, issues)
             fun = self._eval_expr(expr.fun, imports, env, demanded, issues)
             arg = self._eval_expr(expr.arg, imports, env, demanded, issues)
-            return self._apply(fun, arg, demanded, issues)
+            result = self._apply(fun, arg, demanded, issues)
+            self._record_apply_satisfied(expr, fun, arg, result)
+            return result
 
         if expr.type == wf_node.NodeType.block:
             local_env = dict(env)
@@ -832,6 +835,18 @@ class Checker:
         if key not in target.signature.outputs:
             issues.append(f'map_by output must preserve grouping key: {key}')
         return TableValue({name: UnknownValue() for name in target.signature.outputs.keys()})
+
+    def _record_apply_satisfied(self, expr, fun, arg, result):
+        if isinstance(result, ComputationValue):
+            satisfied = set(result.function.signature.inputs.keys())
+            self._apply_satisfied[id(expr)] = satisfied
+        elif isinstance(result, ClosureValue):
+            bound = result.bound_value
+            if isinstance(bound, (OpenRecord, ClosedRecord)):
+                satisfied = {name for name, value in bound.fields.items() if _is_explicitly_bound_value(value)}
+            else:
+                satisfied = set()
+            self._apply_satisfied[id(expr)] = satisfied
 
     def _apply(self, fun, arg, demanded, issues):
         if isinstance(fun, ClosureValue):

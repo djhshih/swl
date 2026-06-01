@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from swl.semantic.task.type import TaskSignature
 
@@ -136,6 +136,7 @@ class Apply(Node):
     function: Node
     arg: Node
     signature: Optional[TaskSignature] = None
+    satisfied: Set[str] = field(default_factory=set)
 
     def __repr__(self):
         return (
