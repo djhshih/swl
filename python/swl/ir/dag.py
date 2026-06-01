@@ -38,6 +38,7 @@ class Input:
     name: str
     type: Optional[str] = None
     desc: Optional[str] = None
+    optional: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,7 @@ class DAG:
                 name: {
                     'type': value.type,
                     'desc': value.desc,
+                    'optional': value.optional,
                 }
                 for name, value in self.inputs.items()
             },
@@ -175,7 +177,7 @@ class DAG:
     @classmethod
     def from_dict(cls, data):
         inputs = {
-            name: Input(name, item.get('type'), item.get('desc'))
+            name: Input(name, item.get('type'), item.get('desc'), item.get('optional', False))
             for name, item in data.get('inputs', {}).items()
         }
         steps_data = data.get('steps', [])
@@ -264,7 +266,7 @@ def _binding_from_dict(data, inputs, steps):
     source = data.get('source')
     if source == 'input':
         name = data['name']
-        return inputs.get(name, Input(name))
+        return inputs.get(name, Input(name, optional=False))
     if source == 'value':
         return _binding_from_dict(data['value'], inputs, steps)
     if source == 'literal':

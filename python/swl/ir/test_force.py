@@ -2,7 +2,7 @@ import os
 import unittest as ut
 
 from swl.ir import node as ir
-from swl.ir.dag import Literal, Merge, Record, StepCall
+from swl.ir.dag import Input, Literal, Merge, Record, StepCall
 from swl.ir.force import Forcer, ForceEnv, force_file
 from swl.ir.lower import lower_file
 
@@ -451,6 +451,18 @@ class TestForce(ut.TestCase):
             },
         )
 
+    def test_mapped_step_contains_scatter_and_broadcast_ports(self):
+        files, root = self._files()
+        data = force_file(os.path.join(root, 'batch.swl'), files).to_dict()
+        map_info = data['steps'][0]['map']
+        self.assertIn('scatter', map_info)
+        self.assertIn('broadcast', map_info)
+        self.assertEqual(
+            sorted(map_info['scatter']),
+            ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'],
+        )
+        self.assertEqual(map_info['broadcast'], [])
+
     def test_map_by_imported_workflow_preserves_grouping_metadata(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'map_by_workflow.swl'), files).to_dict()
@@ -538,6 +550,63 @@ class TestForce(ut.TestCase):
             )
         )
         self.assertEqual(sorted(outputs.keys()), ['a', 'b', 'c'])
+
+    def test_merge_flattening_collapses_record_merges_in_outputs(self):
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x')
+        forcer.steps = []
+        outputs = forcer._flatten_outputs({
+            'result': Merge(
+                Record({'a': Literal(1), 'b': Literal(2)}),
+                Record({'c': Literal(3)}),
+            )
+        })
+        self.assertEqual(sorted(outputs.keys()), ['a', 'b', 'c'])
+        self.assertIsInstance(outputs['a'], Literal)
+
+    def test_merge_flattening_collapses_input_record_merge_in_outputs(self):
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x')
+        forcer.steps = []
+        outputs = forcer._flatten_outputs({
+            'result': Merge(
+                Input('x'),
+                Record({'y': Literal(1)}),
+            )
+        })
+        self.assertEqual(sorted(outputs.keys()), ['y'])
+        self.assertEqual(outputs['y'].value, 1)
+
+    def test_merge_flattening_step_bindings(self):
+        forcer = Forcer()
+        step = StepCall(id='test', path='/test.sh', bindings={
+            'input': Merge(
+                Record({'x': Literal(1)}),
+                Record({'y': Literal(2)}),
+            ),
+        }, outputs=['out'])
+        forcer.steps = [step]
+        forcer._flatten_step_bindings()
+        self.assertEqual(sorted(step.bindings.keys()), ['x', 'y'])
+
+    def test_merge_flattening_rejects_incompatible_non_record(self):
+        forcer = Forcer()
+        with self.assertRaisesRegex(ValueError, 'Cannot flatten merge'):
+            forcer._flatten_merge_value(
+                Merge(Literal(1), Literal(2)),
+            )
+
+    def test_merge_flattening_preserves_single_non_record(self):
+        forcer = Forcer()
+        result = forcer._flatten_merge_value(
+            Merge(
+                Record({'a': Literal(1)}),
+                Input('x'),
+            )
+        )
+        self.assertIsInstance(result, Record)
+        self.assertIn('a', result.fields)
+        self.assertEqual(result.fields['a'].value, 1)
 
 
 if __name__ == '__main__':

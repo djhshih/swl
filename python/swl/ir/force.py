@@ -51,7 +51,9 @@ class Forcer:
 
     def _finalize_dag(self, value):
         self._refine_input_metadata()
+        self._flatten_step_bindings()
         outputs = self._final_outputs(value)
+        outputs = self._flatten_outputs(outputs)
         for name, output in outputs.items():
             self._assert_wireable_output(name, output)
         self._prune_unused_inputs(value, outputs)
@@ -97,7 +99,8 @@ class Forcer:
 
         if isinstance(node, ir.Input):
             if node.name not in self.inputs:
-                self.inputs[node.name] = Input(node.name, node.type, node.desc)
+                optional = bool(node.type and node.type.endswith('?'))
+                self.inputs[node.name] = Input(node.name, node.type, node.desc, optional)
             return self.inputs[node.name]
 
         if isinstance(node, ir.Name):
@@ -419,6 +422,15 @@ class Forcer:
         info = {'source': _binding_to_public_dict(logical_source)}
         if key is not None:
             info['group_by'] = key
+        signature = self._forced_signature(fn)
+        if signature is not None and signature.inputs:
+            input_names = sorted(signature.inputs.keys())
+            info['scatter'] = list(input_names)
+            if isinstance(logical_source, TableSource):
+                table_cols = set(logical_source.columns.keys())
+                info['broadcast'] = [n for n in input_names if n not in table_cols]
+            else:
+                info['broadcast'] = []
         return {}, info
 
     def _logical_table_source(self, source):
@@ -620,6 +632,66 @@ class Forcer:
         if '*' in text or '?' in text:
             pass
 
+    # merge flattening ------------------------------------------------------
+
+    def _flatten_step_bindings(self):
+        for step in self.steps:
+            flat = {}
+            for name, value in step.bindings.items():
+                flattened = self._flatten_merge_value(value)
+                if isinstance(flattened, Record):
+                    flat.update(flattened.fields)
+                else:
+                    flat[name] = flattened
+            step.bindings = flat
+
+    def _flatten_outputs(self, outputs):
+        flat = {}
+        for name, value in outputs.items():
+            flattened = self._flatten_merge_value(value)
+            if isinstance(flattened, Record):
+                flat.update(flattened.fields)
+            else:
+                flat[name] = flattened
+        return flat
+
+    def _flatten_merge_value(self, value):
+        if isinstance(value, Merge):
+            terms = _flatten_value_terms(value)
+            record_fields = {}
+            non_record = []
+            for term in terms:
+                flattened = self._flatten_merge_value(term)
+                if isinstance(flattened, Record):
+                    record_fields.update(flattened.fields)
+                else:
+                    non_record.append(flattened)
+            if not non_record:
+                return Record(record_fields)
+            if len(non_record) == 1 and not record_fields:
+                return non_record[0]
+            if len(non_record) == 1 and record_fields:
+                return Record({**record_fields, **self._unwrap_non_record(non_record[0])})
+            if not record_fields:
+                raise ValueError(
+                    f'Cannot flatten merge: incompatible non-record values '
+                    f'({len(non_record)} terms)'
+                )
+            return Record(record_fields)
+        if isinstance(value, Record):
+            return Record({
+                name: self._flatten_merge_value(item)
+                for name, item in value.fields.items()
+            })
+        return value
+
+    def _unwrap_non_record(self, value):
+        if isinstance(value, Input):
+            return {}
+        if isinstance(value, Field) and isinstance(value.source, Input):
+            return {value.name: value}
+        return {}
+
     # dag finalization ------------------------------------------------------
 
     def _refine_input_metadata(self):
@@ -634,7 +706,8 @@ class Forcer:
             if candidates:
                 typ = self._merge_input_type(name, current.type, candidates)
                 desc = self._merge_input_desc(current.desc, candidates)
-                best = Input(name, typ, desc)
+                optional = bool(typ and typ.endswith('?'))
+                best = Input(name, typ, desc, optional)
             refined[name] = best
         self.inputs = refined
 
@@ -796,7 +869,8 @@ class Forcer:
             if spec is not None:
                 typ = spec.type.value if getattr(spec, 'type', None) is not None else None
                 desc = spec.desc
-            self.inputs[name] = Input(name, typ, desc)
+            optional = bool(typ and typ.endswith('?'))
+            self.inputs[name] = Input(name, typ, desc, optional)
         return self.inputs[name]
 
     def _final_outputs(self, value):

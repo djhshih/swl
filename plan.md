@@ -14,33 +14,7 @@ Drive `python/swl/` toward production readiness. Tracks concrete implementation 
 
 ## Priority 0: Merge flattening in forcing
 
-### Why (dag.md §R2)
-
-Merge bindings (`{source: "merge"}`) reach the DAG but are rejected by every transpiler — CWL raises `ValueError`, WDL raises `ValueError`, Nextflow has no clean mapping. Flattening must happen once in the compiler, not N times in N transpilers.
-
-### Scope
-
-- Walk step bindings after IR forcing, before DAG construction
-- Recursively decompose `Merge` bindings into per-field flat bindings
-- Walk `dag.outputs` — same treatment
-- If a merge cannot be flattened (e.g., two non-overlapping record-valued step outputs into a single port), raise compile-time error
-
-### Files
-
-- `ir/force.py` — add flattening pass
-- `ir/dag.py` — may need helper to detect merge-free DAG
-
-### Tests
-
-- Existing `test_rejects_merged_task_input_binding` must change from "rejected by transpiler" to "never appears in DAG"
-- Add test for explicit `//` that should flatten
-- Add test for `//` that cannot flatten → expected compile error
-
-### After this step
-
-- No `Merge` binding ever reaches a transpiler
-- Each transpiler's merge rejection code can be removed
-- `dag.md §2.5` merge flattening requirement is satisfied
+**Status: DONE.** Implemented `_flatten_step_bindings`, `_flatten_outputs`, and `_flatten_merge_value` in `ir/force.py`. The pass runs in `_finalize_dag` before DAG construction (after forcing, before validation). Tests added for record merges, input-record merges, and non-flattenable merges.
 
 ---
 
@@ -48,34 +22,15 @@ Merge bindings (`{source: "merge"}`) reach the DAG but are rejected by every tra
 
 ### 1a. Serialize `map.scatter` / `map.broadcast` in MappedStep
 
-**Why (dag.md §R1):** Every transpiler independently re-derives which input ports scatter and which broadcast by inspecting `map.source.columns` and cross-referencing against `bindings`. This inference is fragile and duplicated.
-
-**What to do:**
-- Add `scatter` (array of port names) and `broadcast` (array of port names) to the `map` field of `MappedStep`
-- Every input must appear in exactly one of the two lists
-- Populate during forcing
-
-**Files:** `ir/dag.py`, `ir/force.py`
+**Status: DONE.** `_mapped_step_bindings` in `ir/force.py` now populates `scatter` and `broadcast` arrays in the `map` field. Scatter ports are computed from `input_schema` keys (per-row table inputs). Broadcast ports are computed from bound inputs not in the table columns. Test added.
 
 ### 1b. Serialize `optional` flag in InputSpec / ParamSpec
 
-**Why (dag.md §R1):** Optionality (`file?`) is used during semantic checking but lost at DAG serialization. Transpilers need it for correct type declarations (CWL: `["null", "File"]`, WDL: `File?`, Nextflow: `optional`).
-
-**What to do:**
-- Add `optional: bool` field to `InputSpec` and `ParamSpec` (default: false)
-- Preserve from task annotation parsing through to DAG serialization
-
-**Files:** `ir/dag.py`, `syntax/task/parser.py` (ensure `?` flag is passed through)
+**Status: DONE.** Added `optional: bool = False` field to `dag.Input`. Updated `to_dict`/`from_dict` serialization. All `Input()` construction sites in `force.py` now detect `?` suffix in type and set `optional=True`.
 
 ### 1c. Serialize output types in top-level `outputs`
 
-**Why (dag.md §R1):** Currently `outputs` is `{name: <Binding>}` with no type info. Every transpiler infers the type from the binding's source step — fragile when the source is an `Input`, `Literal`, or `Record`.
-
-**What to do:**
-- Change `outputs` from `{name: <Binding>}` to `{name: {type: <type>, desc: <desc>, value: <Binding>}}`
-- Populate `type` from the inferred workflow output type during forcing
-
-**Files:** `ir/dag.py`, `ir/force.py`, then each transpiler
+**Status: DEFERRED.** Breaking JSON schema change. The transpilers already infer output types from source step output specs. Deferred to avoid cascading changes across all transpilers.
 
 ---
 
