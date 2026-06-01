@@ -618,14 +618,14 @@ def _output_to_emit(name, binding, channels):
 
 ## 10. Implementation Order
 
-### Phase 1: Scaffolding + basic task processes
+### Phase 1: Scaffolding + basic task processes ✓
 
 1. Create `swl/transpile/nf/` package with `__init__.py`, `cli.py`, `__main__.py`.
 2. Implement `transpile_dag_dict()` skeleton: validate, iterate steps, call `_validate_supported`.
 3. Implement `_task_to_process()`: emit a Nextflow `process` block from a `StepCall` with all directives, inputs, outputs, and script.
 4. Test: round-trip a simple single-task DAG (like `partial.swl` from the CWL tests).
 
-### Phase 2: Workflow block + channel wiring
+### Phase 2: Workflow block + channel wiring ✓
 
 5. Implement `_dag_to_nf()`: emit the top-level `workflow { }` block.
 6. Implement `_binding_to_channel()`: handle `input`, `literal`, `step_output`, `field` bindings.
@@ -633,36 +633,36 @@ def _output_to_emit(name, binding, channels):
 8. Implement workflow output wiring.
 9. Test: transpile `function.swl` (three tasks in a pipeline) and verify channel wiring.
 
-### Phase 3: Mapped steps (map)
+### Phase 3: Mapped steps (map) ✓
 
 10. Implement `_mapped_step_to_call()`: join column channels into tuples, emit process call.
 11. Modify `_task_to_process()` to emit `tuple` input when step has a `map` field.
 12. Test: transpile `batch.swl` (map align over samples) and verify scatter.
 
-### Phase 4: map_by (grouped scatter)
+### Phase 4: map_by (grouped scatter) ✓
 
 13. Implement `_mapped_by_step_to_call()`: emit `.groupTuple(by: ...)` chain.
 14. Test: transpile a simple `map_by` workflow and verify `groupTuple` call.
 
-### Phase 5: Sub-workflows
+### Phase 5: Sub-workflows ✓
 
 15. Implement `_subworkflow_to_module()`: recursively transpile `definition.dag`.
 16. Implement `include` statement emission for sub-workflow references.
 17. Test: transpile `import_partial.swl` (workflow step containing sub-workflow).
 
-### Phase 6: Interpolation + run parameters
+### Phase 6: Interpolation + run parameters ✓
 
 18. Implement `_interp_to_nf()` for output path templates.
 19. Wire interpolation into process `output:` declarations.
 20. Verify `test_output_glob_uses_cwl_expression` equivalent works for Nextflow.
 
-### Phase 7: Record merge + field projection
+### Phase 7: Record merge + field projection ✓
 
 21. Implement `Merge` binding → `.join()` emission.
 22. Implement `Record` binding → tuple construction.
 23. Implement nested field projection → `.map{ it.field }`.
 
-### Phase 8: Edge cases and hardening
+### Phase 8: Edge cases and hardening ✓
 
 24. Handle special characters in process names.
 25. Handle empty inputs.
@@ -709,25 +709,25 @@ def _validate_binding(value, step):
 ## 12. Feature Support Summary
 
 | DAG feature | Nextflow support | Status |
-|---|---|---|
-| Task step | `process` with `script:` | Planned Phase 1 |
-| Input binding | `Channel.fromPath()` / `Channel.value()` | Planned Phase 2 |
-| Step output binding | `PROCESS.out.emit_name` | Planned Phase 2 |
-| Literal binding | `Channel.value(val)` | Planned Phase 2 |
-| Field projection | `.map{ it.field }` | Planned Phase 7 |
-| Record merge | `.join()` | Planned Phase 7 |
-| Record binding | Tuple construction | Planned Phase 7 |
-| `map` (scatter) | `.join()` → tuple input with implicit scatter | Planned Phase 3 |
-| `map_by` | `.groupTuple(by: idx)` | Planned Phase 4 |
-| Sub-workflow | `include` + `workflow` block | Planned Phase 5 |
-| CPU directive | `cpus <value>` | Planned Phase 1 |
-| Memory directive | `memory '<val> MB'` | Planned Phase 1 |
-| Docker image | `container '<val>'` | Planned Phase 1 |
-| Time directive | `time '<val>m'` | Planned Phase 1 |
-| Output glob | `path "${var}.bam"` | Planned Phase 6 |
-| Interpolation (var) | `"${var}"` in path templates | Planned Phase 6 |
-| Interpolation (expr) | `"${expr}"` pass-through | Planned Phase 6 |
-| Table binding | Channel-of-tuples from column joins | Planned Phase 3 |
+|---|---|---|---|
+| Task step | `process` with `script:` | Implemented (Phase 1) |
+| Input binding | `Channel.fromPath()` / `Channel.value()` | Implemented (Phase 2) |
+| Step output binding | `PROCESS.out.emit_name` | Implemented (Phase 2) |
+| Literal binding | `Channel.value(val)` | Implemented (Phase 2) |
+| Field projection | `.map{ it.field }` | Implemented (Phase 7) |
+| Record merge | `.join()` | Implemented (Phase 7) |
+| Record binding | Tuple construction | Implemented (Phase 7) |
+| `map` (scatter) | `.join()` → tuple input with implicit scatter | Implemented (Phase 3) |
+| `map_by` | `.groupTuple(by: idx)` | Implemented (Phase 4) |
+| Sub-workflow | Recursive `transpile_dag_dict` (inline) | Implemented (Phase 5) |
+| CPU directive | `cpus <value>` | Implemented (Phase 1) |
+| Memory directive | `memory '<val> MB'` | Implemented (Phase 1) |
+| Docker image | `container '<val>'` | Implemented (Phase 1) |
+| Time directive | `time '<val>m'` | Implemented (Phase 1) |
+| Output glob | `path "${var}.bam"` | Implemented (Phase 6) |
+| Interpolation (var) | `"${var}"` in path templates | Implemented (Phase 6) |
+| Interpolation (expr) | `"${expr}"` pass-through | Implemented (Phase 6) |
+| Table binding | Channel-of-tuples from column joins | Implemented (Phase 3) |
 
 ---
 

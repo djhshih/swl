@@ -552,11 +552,11 @@ The following information is embedded directly in the DAG JSON. No `path` field 
 | Merge flattening guarantee | Force phase does not yet flatten all merge bindings; transpilers still encounter them |
 | `map_by` transpilation (CWL) | Planned: ExpressionTool grouping + scattered wrapper (`map_by_cwl.md`) |
 | `map_by` transpilation (WDL) | Implemented: `collect_by_key()` + scatter (`wdl.md §5`) |
-| `map_by` transpilation (Nextflow) | Planned: `groupTuple()` (`nf.md §5`) |
+| `map_by` transpilation (Nextflow) | Implemented: `groupTuple()` (`nf.md §5`) |
 | `map.scatter` / `map.broadcast` serialization | Required by all three transpiler plans; not yet emitted by compiler |
 | Record binding transpilation | CWL: ExpressionTool; WDL: struct literal; Nextflow: tuple/channel construction |
 | Expr interpolation (`expr` kind) in CWL | Planned: optional `InlineJavascriptRequirement` passthrough |
 | Time resource in CWL | Planned: emit as hints entry |
 | Table update semantics (`t // r`) | Rarely used; implementation deferred |
-| Nextflow transpiler | Planned (`nf.md`) |
+| Nextflow transpiler | Implemented (`nf.md`, `python/swl/transpile/nf/`) — Phases 1–8 complete |
 | WDL transpiler | Implemented (`wdl.md`, `python/swl/transpile/wdl/`) — Phases 1–7 complete |
