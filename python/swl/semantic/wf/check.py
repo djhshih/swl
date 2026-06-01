@@ -602,10 +602,7 @@ class Checker:
         if expr.type == wf_node.NodeType.update:
             left = self._eval_expr(expr.left, imports, env, demanded, issues)
             right = self._eval_expr(expr.right, imports, env, demanded, issues)
-            if isinstance(left, TableValue) or isinstance(right, TableValue):
-                issues.append('table update semantics are not implemented')
-                return UnknownValue()
-            return self._merge_records(left, right)
+            return self._merge_update_values(left, right, issues)
 
         if expr.type == wf_node.NodeType.apply:
             path = self._match_import(expr)
@@ -984,6 +981,34 @@ class Checker:
 
     def _merge_records(self, left, right):
         return self._merge_arg_values(left, right)
+
+    def _merge_update_values(self, left, right, issues):
+        if isinstance(left, TableValue) and isinstance(right, TableValue):
+            return self._merge_tables(left, right, issues)
+        if isinstance(left, TableValue):
+            return self._merge_table_record(left, right)
+        if isinstance(right, TableValue):
+            return self._merge_table_record(right, left)
+        return self._merge_records(left, right)
+
+    def _merge_table_record(self, table, record):
+        record_fields = self._field_map(record)
+        if record_fields is None:
+            return UnknownValue()
+        merged = dict(table.columns)
+        merged.update(record_fields)
+        return TableValue(merged, placeholder=table.placeholder)
+
+    def _merge_tables(self, left, right, issues):
+        merged = dict(left.columns)
+        for name, value in right.columns.items():
+            if name in merged:
+                left_type = self._value_type(merged[name])
+                right_type = self._value_type(value)
+                if left_type != wf_type.UNKNOWN and right_type != wf_type.UNKNOWN and left_type != right_type:
+                    issues.append(f'Type mismatch for "{name}": {left_type} -> {right_type}')
+            merged[name] = value
+        return TableValue(merged, placeholder=left.placeholder and right.placeholder)
 
     def _merge_arg_values(self, left, right):
         left_fields = self._field_map(left)
