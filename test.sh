@@ -6,6 +6,7 @@ TASK_COUNT=0
 WF_COUNT=0
 COMPARE_COUNT=0
 CWL_COMPARE_COUNT=0
+WDL_COMPARE_COUNT=0
 
 EXPECT_COMPILE_FAIL=(
 	tests/bad_explicit.swl
@@ -152,7 +153,7 @@ PY
 compare_files() {
 	local left="$1"
 	local right="$2"
-	CWL_COMPARE_COUNT=$((CWL_COMPARE_COUNT + 1))
+	COMPARE_COUNT=$((COMPARE_COUNT + 1))
 	echo "compare: $left == $right"
 	diff -u "$left" "$right" >/dev/null
 	echo "result: ok"
@@ -166,6 +167,7 @@ print_summary() {
 	echo "  workflow files checked: $WF_COUNT"
 	echo "  dag equality checks: $COMPARE_COUNT"
 	echo "  cwl golden checks: $CWL_COMPARE_COUNT"
+	echo "  wdl golden checks: $WDL_COMPARE_COUNT"
 }
 
 if (( $# > 0 )); then
@@ -205,6 +207,25 @@ else
 
 	compare_files tests/cwl/pipe.cwl tests/cwl/function.cwl
 	compare_files tests/cwl/explicit.cwl tests/cwl/function.cwl
+	CWL_COMPARE_COUNT=$((CWL_COMPARE_COUNT + 2))
+
+	mkdir -p tests/wdl
+	PYTHONPATH=python python -m swl.transpile.wdl tests/dag/function.json \
+		-o tests/wdl/function.wdl
+	PYTHONPATH=python python -m swl.transpile.wdl tests/dag/pipe.json \
+		-o tests/wdl/pipe.wdl
+	PYTHONPATH=python python -m swl.transpile.wdl tests/dag/explicit.json \
+		-o tests/wdl/explicit.wdl
+	PYTHONPATH=python python -m swl.transpile.wdl tests/dag/panel.json \
+		-o tests/wdl/panel.wdl
+	PYTHONPATH=python python -m swl.transpile.wdl tests/dag/map.json \
+		-o tests/wdl/map.wdl
+	PYTHONPATH=python python -m swl.transpile.wdl tests/dag/map_by.json \
+		-o tests/wdl/map_by.wdl
+
+	compare_files tests/wdl/pipe.wdl tests/wdl/function.wdl
+	compare_files tests/wdl/explicit.wdl tests/wdl/function.wdl
+	WDL_COMPARE_COUNT=$((WDL_COMPARE_COUNT + 3))
 
 	print_summary
 fi
