@@ -35,10 +35,10 @@ Transpile SWL compiled DAG JSON to Nextflow DSL2 workflows. Follows the same pat
 Follow the CWL module (`swl/transpile/cwl`):
 
 ```
-swl/transpile/nextflow/
+swl/transpile/nf/
     __init__.py       # package marker
     cli.py            # CLI entry point: nf transpile <dag.json> -o <output.nf>
-    __main__.py        # python -m swl.transpile.nextflow
+    __main__.py        # python -m swl.transpile.nf
     emit.py            # core transpilation logic
     test_emit.py       # tests
 ```
@@ -49,7 +49,7 @@ swl/transpile/nextflow/
 # cli.py
 import argparse, json, sys
 from swl.ir.dag import DAG
-from swl.transpile.nextflow.emit import transpile_dag_dict
+from swl.transpile.nf.emit import transpile_dag_dict
 
 def main():
     ap = argparse.ArgumentParser('Transpile compiled DAG JSON to Nextflow DSL2')
@@ -620,7 +620,7 @@ def _output_to_emit(name, binding, channels):
 
 ### Phase 1: Scaffolding + basic task processes
 
-1. Create `swl/transpile/nextflow/` package with `__init__.py`, `cli.py`, `__main__.py`.
+1. Create `swl/transpile/nf/` package with `__init__.py`, `cli.py`, `__main__.py`.
 2. Implement `transpile_dag_dict()` skeleton: validate, iterate steps, call `_validate_supported`.
 3. Implement `_task_to_process()`: emit a Nextflow `process` block from a `StepCall` with all directives, inputs, outputs, and script.
 4. Test: round-trip a simple single-task DAG (like `partial.swl` from the CWL tests).
