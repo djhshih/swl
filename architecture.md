@@ -156,7 +156,7 @@ Task(
 
 1. **Import resolution** (`_load_imports`): Scans top-level bindings for `name = import("path")` calls. `.sh` paths → task imports; `.swl` paths → workflow imports (recursively loaded). Circular imports are detected via a `_loading` stack.
 
-2. **Scope checking** (`_check_scope`): Walks the AST ensuring no duplicate variable names within the same scope. Nested scopes (lambda params, inner blocks) may shadow outer names.
+2. **Scope checking** (`_check_scope`): Walks the AST ensuring no duplicate variable names within the same scope. Also checks for forward references (a binding referencing a later binding in the same block) and self-references (a binding referencing itself). Nested scopes (lambda params, inner blocks) may shadow outer names.
 
 3. **Chain type checking** (`_check_chains`): Detects `A | B` chains in the AST and calls the task-level `TypeChecker.check_chain()` for any pair of known tasks.
 
@@ -262,8 +262,7 @@ Lambda(
 | `Field` | Projection of a field from a step or input |
 | `Merge` | A transient merge of two DAG values (left // right) during forcing |
 | `StepCall` | A concrete task or workflow invocation |
-| `MappedStep` | A task invocation wrapped in map/map_by |
-| `Output` | A named workflow output |
+| `OutputSpec` | A named workflow output with type/desc/optionality/value |
 | `ForcedFunction` | A partially-saturated function reference |
 | `DAG` | The top-level container: `inputs`, `steps`, `outputs` |
 
@@ -275,8 +274,8 @@ The `Forcer` "forces" the IR by resolving all function applications into concret
    - `Literal` → `dag.Literal`
    - `Name` → either a `ForcedFunction` (if it's a known variable bound to a function) or an `Input` (workflow input)
    - `Record` → `dag.Record` with forced fields
-   - `Field` → `dag.Field` with attempted projection
-   - `Update` → `dag.Merge` or record merge
+   - `Field` → `dag.Field` with attempted projection (resolves record fields when possible, otherwise creates a `Field` chain)
+   - `Update` → checks for unsupported operands (StepCall, Input+Record), rejects with clear error; otherwise produces `dag.Merge` or record merge
    - `Function` / `Lambda` → `ForcedFunction` wrapper
    - `Apply` → tries to apply the function to the argument
    - `Map` → maps function over table source
@@ -285,28 +284,33 @@ The `Forcer` "forces" the IR by resolving all function applications into concret
 
 2. **Function application** (`_apply`):
    - If the function is a built-in (`map`, `map_by`), handles partial application (binding `f`, then `key`/`xs`).
-   - If the argument is a `MappedStep`, delegates to `_apply_mapped`.
+   - If the argument is a mapped/table source, delegates to `_apply_mapped`.
    - For tasks: checks saturation — if all required inputs are available in the bound record, emits a `StepCall` via `_emit_task_call`. Otherwise returns a `ForcedFunction` (partial application).
    - For workflows: similar saturation check, emits `StepCall` with `type='workflow'`.
    - For lambdas: if the bound argument is a `Record`, evaluates the lambda body directly.
 
 3. **Step call emission** (`_emit_task_call` / `_emit_workflow_call`):
    - Normalizes task inputs by projecting named fields from the bound argument.
-   - Creates a `StepCall` or `MappedStep` with unique ID, dependencies, and tool definition.
+   - Creates a `StepCall` with unique ID, dependencies, and tool definition.
    - Caches step calls by function path + input keys to deduplicate.
 
 4. **Map emission** (`_emit_mapped_step`):
-   - Creates a `MappedStep` with map source information (table columns, grouping key for `map_by`).
-   - Sets `input_schema` / `output_schema` from the function signature.
+   - Creates a `StepCall` with `map` metadata: source type (table/input), columns, grouping key for `map_by`.
+   - Classifies step inputs into `scatter` (vary per table row) and `broadcast` (same for all rows). Inputs matching table columns are scattered; non-matching inputs are broadcasted. For generated workflows with a single record input, all inputs are scattered.
+   - Validation: `DAG._validate_mapped_ports` ensures every input in `input_schema` belongs to exactly one of `scatter` / `broadcast`.
 
 5. **Root forcing** (`_force_root`):
    - If the final value is a `ForcedFunction`, applies it to synthetic input placeholders to saturate it.
    - For batch workflows, creates a table input placeholder and applies `map`.
 
 6. **DAG finalization** (`_finalize_dag`):
-   - `_refine_input_metadata()`: Materializes workflow input metadata by merging inferred interface information with task input specs, including type, description, and optionality where available.
-   - `_final_outputs()`: Converts the forced root value into the explicit top-level workflow outputs required by `dag.md`, collecting top-level record fields as named outputs or wrapping a single value as `result`.
-   - `_prune_unused_inputs()`: Removes input ports that aren't actually referenced by any step or output.
+   - `_refine_input_metadata()`: Materializes workflow input metadata by merging inferred interface information with task input specs, including type, description, and optionality (detected via `?` suffix on type strings).
+   - `_flatten_step_bindings()`: Expands `Record` and `Merge` bindings in step inputs into individual named bindings, flattening deeply nested merge trees via `_flatten_merge_value`.
+   - `_final_outputs()`: Converts the forced root value into explicit top-level workflow outputs. `Merge` trees are canonicalized (record-record merges collapse); remaining merge trees are flattened by `_flatten_outputs`.
+   - `_build_output_specs()`: Wraps each output in an `OutputSpec` with inferred type, optionality, and the binding value.
+   - `_assert_wireable_output()`: Rejects outputs that can't be expressed as `Input`, `Literal`, or `Field(Input|StepCall)`.
+   - `_prune_unused_inputs()`: Removes input ports that aren't referenced by any step or output.
+   - `dag.validate()`: Checks dependency DAG for cycles, unknown deps, and validates mapped-port scatter/broadcast classification.
    - Returns a `DAG(inputs, steps, outputs)` that satisfies the normalized DAG contract.
 
 ### Normalization obligations before final DAG emission
