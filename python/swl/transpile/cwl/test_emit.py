@@ -288,14 +288,14 @@ map call_variant
         step = next(step for step in workflow['steps'] if step['run'].startswith('#map_lambda'))
         self.assertEqual(step['scatterMethod'], 'dotproduct')
 
-    def test_map_by_transpile_reports_explicit_grouping_not_supported(self):
-        bad = {
+    def test_map_by_transpile_emits_grouping_and_wrapper(self):
+        dag_dict = {
             'inputs': {'sample': {'type': '[str]', 'desc': None}},
             'steps': [{
                 'id': 'grouped',
                 'type': 'workflow',
                 'path': '/tmp/grouped.swl',
-                'map': {'source': {'source': 'table', 'name': 'table', 'columns': {'sample': {'source': 'input', 'name': 'sample'}}}, 'group_by': 'sample'},
+                'map': {'source': {'source': 'table', 'name': 'table', 'columns': {'sample': {'source': 'input', 'name': 'sample'}}}, 'group_by': 'sample', 'scatter': ['sample'], 'broadcast': []},
                 'input_schema': {'sample': 'str'},
                 'output_schema': {'sample': 'str'},
                 'deps': [],
@@ -308,8 +308,34 @@ map call_variant
             }],
             'outputs': {'sample': {'step': 'grouped', 'output': 'sample'}},
         }
-        with self.assertRaisesRegex(ValueError, 'CWL transpilation does not yet support map_by grouping'):
-            transpile_dag_dict(bad)
+        cwl = transpile_dag_dict(dag_dict)
+        self.assertEqual(cwl['cwlVersion'], 'v1.0')
+        tool_ids = [item['id'] for item in cwl['$graph'] if item.get('class') in ('ExpressionTool', 'CommandLineTool')]
+        self.assertIn('#group_grouped', tool_ids)
+        self.assertIn('#wrap_grouped', tool_ids)
+        workflow = cwl['$graph'][-1]
+        step_ids = [s['id'] for s in workflow['steps']]
+        self.assertIn('#main/group_grouped', step_ids)
+        self.assertIn('#main/grouped', step_ids)
+        wrap_step = next(s for s in workflow['steps'] if s['id'] == '#main/grouped')
+        self.assertIn('scatter', wrap_step)
+        self.assertEqual(wrap_step['scatterMethod'], 'dotproduct')
+
+    def test_map_by_from_compiled_dag_emits_correct_structure(self):
+        files, root = self._files()
+        files[os.path.join(root, 'map_by_test.swl')] = (
+            'tool = import "align.sh"\n'
+            'map_by tool "outbase"\n'
+        )
+        dag = force_file(os.path.join(root, 'map_by_test.swl'), files)
+        cwl = transpile_dag_dict(dag.to_dict())
+        self.assertEqual(cwl['cwlVersion'], 'v1.0')
+        expr_tools = [item for item in cwl['$graph'] if item.get('class') == 'ExpressionTool']
+        self.assertTrue(expr_tools, 'Should have at least one ExpressionTool for grouping')
+        wrap_tools = [item for item in cwl['$graph'] if item.get('class') == 'CommandLineTool' and 'wrap' in item.get('id', '')]
+        self.assertTrue(wrap_tools, 'Should have wrapper tools')
+        workflow = cwl['$graph'][-1]
+        self.assertTrue(any('scatter' in s for s in workflow['steps']), 'Should have scattered steps')
 
     def test_root_partial_map_transpiles_as_scattered_subworkflow(self):
         files, root = self._files()
@@ -347,6 +373,113 @@ map call_variant
         time_hints = [h for h in align['hints'] if h.get('class') == 'TimeLimit']
         self.assertEqual(len(time_hints), 1)
         self.assertEqual(time_hints[0]['timeLimit'], 3150)
+
+    def test_record_binding_in_step_input_emits_expression_tool(self):
+        producer = StepCall(
+            id='producer',
+            path='/tmp/producer.sh',
+            bindings={},
+            outputs=['result'],
+            task={
+                'body': 'echo produce\n',
+                'inputs': {},
+                'outputs': {'result': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
+                'run': {},
+            },
+        )
+        consumer = StepCall(
+            id='consumer',
+            path='/tmp/consumer.sh',
+            bindings={
+                'input_x': Record({
+                    'field_a': Input('workflow_input'),
+                    'field_b': Field(producer, 'result'),
+                    'field_c': Literal(42),
+                }),
+            },
+            outputs=['out'],
+            task={
+                'body': 'echo consume\n',
+                'inputs': {'input_x': {'type': 'str', 'desc': None}},
+                'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
+                'run': {},
+            },
+            deps=['producer'],
+        )
+        dag = DAG(
+            inputs={'workflow_input': Input('workflow_input', type='str', desc=None)},
+            steps=[producer, consumer],
+            outputs={'out': Field(consumer, 'out')},
+        )
+        cwl = transpile_dag_dict(dag.to_dict())
+        self.assertEqual(cwl['cwlVersion'], 'v1.0')
+        expr_tools = [item for item in cwl['$graph'] if item.get('class') == 'ExpressionTool']
+        self.assertEqual(len(expr_tools), 1, 'Should have exactly one ExpressionTool for record construction')
+        rec_tool = expr_tools[0]
+        self.assertIn('rec_consumer_input_x', rec_tool['id'])
+        self.assertIn('InlineJavascriptRequirement', [r['class'] for r in rec_tool['requirements']])
+        self.assertIn('record.json', rec_tool['expression'])
+        inputs_by_id = {i['id']: i for i in rec_tool['inputs']}
+        self.assertIn('field_a', str(inputs_by_id))
+        self.assertIn('field_b', str(inputs_by_id))
+        workflow = cwl['$graph'][-1]
+        step_ids = [s['id'] for s in workflow['steps']]
+        rec_step_id = next(sid for sid in step_ids if 'rec_consumer_input_x' in sid)
+        consumer_step_idx = step_ids.index('#main/consumer')
+        rec_step_idx = step_ids.index(rec_step_id)
+        self.assertLess(rec_step_idx, consumer_step_idx, 'Record step should precede consumer step')
+        consumer_step = next(s for s in workflow['steps'] if s['id'] == '#main/consumer')
+        x_input = next(i for i in consumer_step['in'] if i['id'] == '#main/consumer/input_x')
+        self.assertIn('rec_consumer_input_x', x_input['source'])
+
+    def test_record_workflow_output_emits_expression_tool(self):
+        producer = StepCall(
+            id='producer',
+            path='/tmp/producer.sh',
+            bindings={},
+            outputs=['result'],
+            task={
+                'body': 'echo produce\n',
+                'inputs': {},
+                'outputs': {'result': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
+                'run': {},
+            },
+        )
+        dag = DAG(
+            inputs={'inp': Input('inp', type='str', desc=None)},
+            steps=[producer],
+            outputs={'rec_out': Record({'a': Input('inp'), 'b': Field(producer, 'result')})},
+        )
+        cwl = transpile_dag_dict(dag.to_dict())
+        self.assertEqual(cwl['cwlVersion'], 'v1.0')
+        expr_tools = [item for item in cwl['$graph'] if item.get('class') == 'ExpressionTool']
+        self.assertEqual(len(expr_tools), 1, 'Should have exactly one ExpressionTool for record output')
+        workflow = cwl['$graph'][-1]
+        out = next(o for o in workflow['outputs'] if o['id'] == '#main/rec_out')
+        self.assertEqual(out['type'], 'File')
+        self.assertIn('rec_outputs_rec_out', out['outputSource'])
+
+    def test_record_binding_no_longer_rejected(self):
+        dag = DAG(
+            inputs={'a': Input('a', type='file', desc=None)},
+            steps=[
+                StepCall(
+                    id='tool',
+                    path='/tmp/tool.sh',
+                    bindings={'x': Record({'a': Input('a')})},
+                    outputs=['out'],
+                    task={
+                        'body': 'echo hi\n',
+                        'inputs': {'x': {'type': 'file', 'desc': None}},
+                        'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
+                        'run': {},
+                    },
+                ),
+            ],
+            outputs={'out': Input('a')},
+        )
+        cwl = transpile_dag_dict(dag.to_dict())
+        self.assertEqual(cwl['cwlVersion'], 'v1.0')
 
     def test_nested_field_binding_uses_valueFrom(self):
         nest = StepCall(

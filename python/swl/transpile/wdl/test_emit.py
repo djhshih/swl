@@ -339,6 +339,54 @@ map call_variant
         self._assert_wdl_contains(wdl, 'version 1.1')
         self._assert_wdl_contains(wdl, 'workflow main {')
 
+    def test_struct_emits_field_types_from_bindings(self):
+        from swl.ir.dag import Input as DagInput, Literal, Record, StepCall, Field
+        producer = StepCall(
+            id='producer', path='/tmp/p.sh', bindings={}, outputs=['bam'],
+            task={
+                'body': 'echo', 'inputs': {},
+                'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'o.bam'}]}, 'desc': None}},
+                'run': {},
+            },
+        )
+        consumer = StepCall(
+            id='consumer', path='/tmp/c.sh',
+            bindings={
+                'rec': Record({
+                    'f_file': DagInput('inp_file'),
+                    'f_str': DagInput('inp_str'),
+                    'f_int': Literal(42),
+                    'f_step': Field(producer, 'bam'),
+                }),
+            },
+            outputs=['out'],
+            task={
+                'body': 'echo', 'inputs': {'rec': {'type': 'str', 'desc': None}},
+                'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'o.txt'}]}, 'desc': None}},
+                'run': {},
+            },
+            deps=['producer'],
+        )
+        dag = DAG(
+            inputs={
+                'inp_file': DagInput('inp_file', type='file', desc=None),
+                'inp_str': DagInput('inp_str', type='str', desc=None),
+            },
+            steps=[producer, consumer],
+            outputs={'out': Field(consumer, 'out')},
+        )
+        wdl = transpile_dag_dict(dag.to_dict())
+        self.assertIn('struct _Rec_F_file_F_int_F_step_F_str {', wdl)
+        self.assertIn('File f_file', wdl)
+        self.assertIn('String f_str', wdl)
+        self.assertIn('Int f_int', wdl)
+        self.assertIn('File f_step', wdl)
+
+    def test_none_literal_raises_error(self):
+        from swl.transpile.wdl.emit import _literal_to_wdl
+        with self.assertRaisesRegex(ValueError, 'None/null literals'):
+            _literal_to_wdl(None)
+
 
 if __name__ == '__main__':
     unittest.main()

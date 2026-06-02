@@ -306,6 +306,8 @@ def _binding_to_binding_dict(value):
         return {}
     if isinstance(value, Literal):
         return {'value': value.value}
+    if isinstance(value, Record):
+        return {'source': 'record', 'fields': {name: _binding_to_dict(v) for name, v in value.fields.items()}}
     if isinstance(value, Field) and isinstance(value.source, StepCall):
         return {'source': value.source.id, 'output': value.name}
     if isinstance(value, Field) and isinstance(value.source, Input):
@@ -334,6 +336,11 @@ def _binding_from_binding_dict(name, data, inputs, steps):
         return Literal(data.get('value'))
     if data.get('kind') == 'field':
         return Field(_binding_from_dict(data['source'], inputs, steps), data['field'])
+    if data.get('source') == 'record':
+        return Record({
+            fname: _binding_from_dict(fdata, inputs, steps)
+            for fname, fdata in data.get('fields', {}).items()
+        })
     source = data.get('source')
     if source is None:
         if 'output' in data or any(key not in {'source'} for key in data.keys()):

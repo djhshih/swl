@@ -72,7 +72,7 @@ def _wf_name(workflow_id):
         name = 'main'
     if name[0].isdigit():
         name = '_' + name
-    return name
+    return name.lower()
 
 
 def _call_alias(step_id):
@@ -81,7 +81,7 @@ def _call_alias(step_id):
         name = 'step'
     if name[0].isdigit():
         name = '_' + name
-    return name
+    return name.lower()
 
 
 def _task_to_wdl(step):
@@ -319,7 +319,7 @@ def _literal_to_wdl(value):
     if isinstance(value, bool):
         return 'true' if value else 'false'
     if value is None:
-        return 'None'
+        raise ValueError('None/null literals cannot be represented in WDL')
     return str(value)
 
 
@@ -529,30 +529,16 @@ def _collect_structs(dag):
     for step in dag.steps:
         for binding in step.bindings.values():
             if isinstance(binding, Record):
-                shape = _record_shape(binding)
+                shape = tuple(sorted(binding.fields.keys()))
                 if shape and shape not in seen:
                     seen.add(shape)
-                    structs.append(_emit_struct(shape))
+                    structs.append(_emit_struct(binding))
             if isinstance(binding, dict) and binding.get('source') == 'record':
-                shape = _dict_record_shape(binding)
+                shape = tuple(sorted(binding.get('fields', {}).keys()))
                 if shape and shape not in seen:
                     seen.add(shape)
-                    structs.append(_emit_struct(shape))
+                    structs.append(_emit_dict_struct(binding))
     return structs
-
-
-def _record_shape(binding):
-    if not isinstance(binding, Record):
-        return None
-    keys = tuple(sorted(binding.fields.keys()))
-    return keys
-
-
-def _dict_record_shape(binding):
-    if not isinstance(binding, dict) or binding.get('source') != 'record':
-        return None
-    keys = tuple(sorted(binding.get('fields', {}).keys()))
-    return keys
 
 
 def _struct_name_for(binding):
@@ -565,11 +551,35 @@ def _struct_name_for(binding):
     return '_Rec_' + '_'.join(k.capitalize() for k in keys)
 
 
-def _emit_struct(shape):
-    name = _struct_name_for(shape)
+def _infer_field_wdl_type(fbinding):
+    if isinstance(fbinding, Input):
+        return _wdl_type(fbinding.type or 'str')
+    if isinstance(fbinding, Literal):
+        return _infer_literal_type(fbinding.value)
+    if isinstance(fbinding, Field):
+        if isinstance(fbinding.source, StepCall):
+            out_type = (fbinding.source.task or {}).get('outputs', {}).get(fbinding.name, {}).get('type', 'str')
+            return _wdl_type(out_type)
+        if isinstance(fbinding.source, Input):
+            return _wdl_type(fbinding.source.type or 'str')
+    return 'String'
+
+
+def _emit_struct(record):
+    name = _struct_name_for(record)
     lines = [f'struct {name} {{']
-    for field_name in shape:
-        lines.append(f'    String {field_name}')
+    for fname in sorted(record.fields.keys()):
+        typ = _infer_field_wdl_type(record.fields[fname])
+        lines.append(f'    {typ} {fname}')
+    lines.append('}')
+    return '\n'.join(lines)
+
+
+def _emit_dict_struct(binding):
+    name = _struct_name_for(binding)
+    lines = [f'struct {name} {{']
+    for fname in sorted(binding.get('fields', {}).keys()):
+        lines.append(f'    String {fname}')
     lines.append('}')
     return '\n'.join(lines)
 

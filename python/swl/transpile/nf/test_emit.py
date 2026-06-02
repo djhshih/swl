@@ -299,6 +299,24 @@ map call_variant
         nf = transpile_dag_dict(dag.to_dict())
         self._assert_nf_contains(nf, 'workflow {')
 
+    def test_rejects_record_binding(self):
+        dag = DAG(
+            inputs={'a': Input('a', type='file', desc=None)},
+            steps=[StepCall(
+                id='tool', path='/tmp/t.sh',
+                bindings={'x': Record({'a': Input('a')})},
+                outputs=['out'],
+                task={
+                    'body': 'echo', 'inputs': {'x': {'type': 'file', 'desc': None}},
+                    'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'o.txt'}]}, 'desc': None}},
+                    'run': {},
+                },
+            )],
+            outputs={'out': Input('a')},
+        )
+        with self.assertRaisesRegex(ValueError, 'flattened before Nextflow'):
+            transpile_dag_dict(dag.to_dict())
+
 
 if __name__ == '__main__':
     unittest.main()

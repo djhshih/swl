@@ -264,11 +264,9 @@ def _binding_to_channel(binding, channels, current_step):
         return f'{left}.join({right})'
 
     if isinstance(binding, Record):
-        field_exprs = []
-        for fname, fbinding in binding.fields.items():
-            fch = _binding_to_channel(fbinding, channels, current_step)
-            field_exprs.append(f'{fname}: {fch}')
-        return f'channel.of([{", ".join(field_exprs)}])'
+        raise ValueError(
+            'Record bindings must be flattened before Nextflow transpilation'
+        )
 
     if isinstance(binding, dict):
         mapped_steps = _collect_mapped_steps(current_step)
@@ -298,11 +296,9 @@ def _dict_binding_to_channel(binding, channels, current_step, mapped_steps=None)
             ch += '.toList()'
         return ch
     if source == 'record':
-        field_exprs = []
-        for fname, fbinding in binding.get('fields', {}).items():
-            fch = _dict_binding_to_channel(fbinding, channels, current_step, mapped_steps)
-            field_exprs.append(f'{fname}: {fch}')
-        return f'channel.of([{", ".join(field_exprs)}])'
+        raise ValueError(
+            'Record bindings must be flattened before Nextflow transpilation'
+        )
     if source == 'merge':
         raise ValueError(
             'Merge bindings must be flattened before Nextflow transpilation'
@@ -385,14 +381,6 @@ def _mapped_by_step_to_call(step, channels, processes):
     return lines
 
 
-def _binding_from_dict(data):
-    if isinstance(data, dict) and data.get('source') == 'input':
-        return Input(data['name'])
-    if isinstance(data, dict) and data.get('source') == 'literal':
-        return Literal(data.get('value'))
-    return None
-
-
 def _subworkflow_to_nf(step, parent_id):
     definition = step.task or {}
     dag_data = definition.get('dag', {})
@@ -409,22 +397,6 @@ def _wf_name(workflow_id):
     if name[0].isdigit():
         name = '_' + name
     return name.upper()
-
-
-def _infer_output_type(name, binding, dag):
-    if isinstance(binding, Field) and isinstance(binding.source, StepCall):
-        step = binding.source
-        out_type = (step.task or {}).get('outputs', {}).get(binding.name, {}).get('type', 'str')
-        if getattr(step, 'map', None) is not None:
-            return 'path' if out_type == 'file' else 'val'
-        return 'path' if out_type == 'file' else 'val'
-    if isinstance(binding, Input):
-        spec = dag.inputs.get(binding.name)
-        st = spec.type if spec else 'str'
-        return 'path' if st == 'file' else 'val'
-    if isinstance(binding, Literal):
-        return 'val'
-    return 'val'
 
 
 def _collect_mapped_steps(step):
