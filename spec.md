@@ -187,6 +187,22 @@ ws            ::= [ \t\n]+
 - String interpolation: `${outbase}.bam`
 - Descriptions: prefixed by `|` can occur on the same line or on continuation lines
 
+### Variable interpolation
+
+Variable interpolations can occur in the annotation block or the command block,
+including
+
+- **simple interpolation**: `${name}` or `$name`
+  - references a single named variable in scope
+- **extended interpolation**: `${expr}` where `expr` is not a single name
+  - represents an expression to be evaluated by the eventual execution target or rejected if unsupported
+
+Scope rules:
+- In an output default, interpolation names are resolved against the task's input and run parameters.
+- In a run-parameter default, interpolation names are resolved against parameters in scope for that task annotation.
+- Interpolations in the command block not defined in the annotation or command
+  block constitute compile-time errors.
+
 ---
 
 ## Type System
@@ -270,6 +286,8 @@ All other combinations are not allowed.
 - For `map_by f key xs`, the grouping key must name an existing top-level column of the input table.
 - During data validation, the input table will be checked for the named grouping key.
 
+The source language defines workflow meaning. The normalized compiler output is defined separately by `dag.md`. Source constructs may be normalized before DAG emission so long as workflow meaning is preserved.
+
 
 ## Pre-run-time Checks
 
@@ -305,6 +323,8 @@ Upon providing inputs to a workflow ...
 - Collection of key-value pairs
 - Keys are field names
 - Values are numbers, strings, records, functions, or arrays where the type system permits them
+- Record types are checked against statically known fields demanded by field access, task inputs, and workflow typing rules
+- A surrounding typing rule may infer an open record, but any field that is actually accessed must be statically known at that access site
 
 ### Tables
 - A table is the canonical batch value
@@ -312,6 +332,7 @@ Upon providing inputs to a workflow ...
 - A table has derived row semantics: row `i` is formed by taking element `i` from each field array
 - Field access on a table is ordinary record field access; if `xs : tab` and `field : [t]`, then `xs.field : [t]`
 - SWL does not define a separate array-of-record batch type for workflow semantics
+- A field accessed on a table must be present in the statically known table schema; otherwise the access is a compile-time error
 
 ### Functions
 - Importing a task or a workflow returns a function
@@ -332,7 +353,7 @@ Upon providing inputs to a workflow ...
 - `map_by` is a builtin
 - If `f : rec -> rec`, then `map_by f : str -> tab -> tab`
 - `map_by f key xs` partitions the logical rows of `xs` by equality of values in the column named by `key`
-- Each partition is presented to `f` as a grouped slice with record shape
+- Each partition is presented to `f` as a grouped record
 - The result of `f` is one output record per group
 - The result table therefore has one row per unique value of the grouping key
 - The grouping key is preserved in the output
@@ -343,9 +364,14 @@ More explicitly, if:
 - `f : rec{k:tk, a:[t1], b:[t2], ...} -> rec{k:tk, u1:v1, u2:v2, ...}`
 
 then:
+- the grouped input presented to `f` has schema `rec{ k:tk, a:[t1], b:[t2], ... }`
 - `map_by f "k" xs : tab{ k:[tk], u1:[v1], u2:[v2], ... }`
 
-where the output row count equals the number of distinct values in `xs.k`.
+with the following rules:
+- the grouping key `k` is presented to `f` as a scalar group key
+- each non-key grouped column is presented as an array containing the values from the rows in that group
+- within each grouped array, value order is the original input row order restricted to that group
+- the output row count equals the number of distinct values in `xs.k`
 
 ### Pipeline
 - `A | B | C` desugars to:
@@ -363,10 +389,21 @@ where the output row count equals the number of distinct values in `xs.k`.
 - Extra fields are allowed (ignored)
 - If a table `t` is updated with a record `r` via `t // r`, scalar properties in `r` are implicitly duplicated across all rows of `t` to preserve table length integrity. Similarly for `r // t`.
 - If both sides are tables, matching fields must remain array-typed and length-compatible.
+- Compilation to normalized DAG form may flatten update expressions into explicit field bindings so long as right-biased source semantics are preserved.
 
 ### Bindings
 
 Binding statements in a block can reference each other, but no recursion.
+
+### Field access
+
+Field access is type-directed.
+
+- If `r : rec{ ..., f:t, ... }`, then `r.f : t`
+- If `xs : tab{ ..., f:[t], ... }`, then `xs.f : [t]`
+- A field access is well-typed only when the referenced field is present in the statically known schema at that program point
+- Nested field access is therefore well-typed only if each intermediate access is well-typed and yields a value whose schema contains the next referenced field
+- Access to a field that is not statically known is a compile-time error
 
 ---
 
