@@ -209,7 +209,7 @@ Describes one normalized top-level workflow output. This exists so transpilers c
 
 ```json
 {
-  "type": "file" | "str" | "int" | "float" | "[file]" | "[str]" | "[int]" | "[float]" | null,
+  "type": "file" | "str" | "int" | "float" | "bool" | "file?" | "str?" | "int?" | "float?" | "bool?" | "[file]" | "[str]" | "[int]" | "[float]" | null,
   "desc": "human-readable description or null",
   "value": <Binding>
 }
@@ -217,14 +217,15 @@ Describes one normalized top-level workflow output. This exists so transpilers c
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | string or null | yes | Fully materialized workflow output type in normalized SWL form. Must already reflect final workflow cardinality. For mapped outputs this means the gathered type, e.g. `"[file]"` rather than per-row `"file"`. |
+| `type` | string or null | yes | Fully materialized workflow output type in normalized SWL form. Valid emitted values are `file`, `str`, `int`, `float`, `bool`, their optional forms (`file?`, `str?`, `int?`, `float?`, `bool?`), and gathered array forms (`[file]`, `[str]`, `[int]`, `[float]`). Must already reflect final workflow cardinality. For mapped outputs this means the gathered type, e.g. `"[file]"` rather than per-row `"file"`. |
 | `desc` | string or null | no | Human-readable description of the workflow output. |
 | `optional` | boolean | no | If true, the workflow output may be absent. Default: `false`. Omitted from JSON when `false`. |
 | `value` | Binding | yes | The normalized binding that supplies the workflow output value. |
 
 **OutputSpec contract:**
-- Every emitted workflow output must have an explicit `type`. Transpilers must not inspect `value` to infer output type.
+- Every emitted workflow output must have an explicit scalar or gathered-array `type`. Transpilers must not inspect `value` to infer output type.
 - `type` must describe the workflow-facing output shape after map/map_by gather semantics have been applied.
+- `OutputSpec.type` must never be `record`, `merge`, `table`, or any other structural binding kind. Structured workflow values must be flattened into named top-level outputs before emission.
 - If output optionality is known, it must be serialized in `optional` rather than left for transpilers to reconstruct.
 - `value` may use any final-DAG-supported binding form, but merge outputs must still be flattened before emission.
 
