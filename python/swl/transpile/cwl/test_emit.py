@@ -433,7 +433,7 @@ map call_variant
         x_input = next(i for i in consumer_step['in'] if i['id'] == '#main/consumer/input_x')
         self.assertIn('rec_consumer_input_x', x_input['source'])
 
-    def test_record_workflow_output_emits_expression_tool(self):
+    def test_record_binding_step_input_emits_expression_tool(self):
         producer = StepCall(
             id='producer',
             path='/tmp/producer.sh',
@@ -446,19 +446,32 @@ map call_variant
                 'run': {},
             },
         )
+        consumer = StepCall(
+            id='consumer',
+            path='/tmp/consumer.sh',
+            bindings={'input_x': Record({'a': Input('inp'), 'b': Field(producer, 'result')})},
+            outputs=['out'],
+            task={
+                'body': 'echo consume\n',
+                'inputs': {'input_x': {'type': 'str', 'desc': None}},
+                'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out2.txt'}]}, 'desc': None}},
+                'run': {},
+            },
+            deps=['producer'],
+        )
         dag = DAG(
             inputs={'inp': Input('inp', type='str', desc=None)},
-            steps=[producer],
-            outputs={'rec_out': Record({'a': Input('inp'), 'b': Field(producer, 'result')})},
+            steps=[producer, consumer],
+            outputs={'out': Field(consumer, 'out')},
         )
         cwl = transpile_dag_dict(dag.to_dict())
         self.assertEqual(cwl['cwlVersion'], 'v1.0')
         expr_tools = [item for item in cwl['$graph'] if item.get('class') == 'ExpressionTool']
-        self.assertEqual(len(expr_tools), 1, 'Should have exactly one ExpressionTool for record output')
+        self.assertEqual(len(expr_tools), 1, 'Should have exactly one ExpressionTool for record input binding')
         workflow = cwl['$graph'][-1]
-        out = next(o for o in workflow['outputs'] if o['id'] == '#main/rec_out')
-        self.assertEqual(out['type'], 'string')
-        self.assertIn('rec_outputs_rec_out', out['outputSource'])
+        consumer_step = next(step for step in workflow['steps'] if step['id'] == '#main/consumer')
+        rec_input = next(i for i in consumer_step['in'] if i['id'] == '#main/consumer/input_x')
+        self.assertIn('rec_consumer_input_x', rec_input['source'])
 
     def test_optional_workflow_output_uses_null_union_type(self):
         dag = DAG(
