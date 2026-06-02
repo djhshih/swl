@@ -62,7 +62,7 @@ The only sensible fix is to flatten merges in one place — the compiler — whe
 {
   "inputs": { "<name>": <InputSpec>, ... },
   "steps": [ <StepSpec>, ... ],
-  "outputs": { "<name>": { "type": <type string>, "desc": <string or null>, "value": <Binding> }, ... }
+  "outputs": { "<name>": <OutputSpec>, ... }
 }
 ```
 
@@ -70,7 +70,7 @@ The only sensible fix is to flatten merges in one place — the compiler — whe
 |-------|------|----------|-------------|
 | `inputs` | object | yes | Map of workflow input name → InputSpec |
 | `steps` | array | yes | Ordered list of step specifications |
-| `outputs` | object | yes | Map of workflow output name to output descriptor |
+| `outputs` | object | yes | Map of workflow output name to OutputSpec |
 
 ---
 
@@ -94,7 +94,7 @@ The type system uses SWL type names. These are normalized — `"File"` and `"str
 | `"[float]"` | array | Array of floats |
 | `null` | null | Unknown/inferred type |
 
-Optionality is serialized via the `"optional"` field on `InputSpec` and `ParamSpec` (§2.2, §2.3). When absent, the field is treated as required.
+Optionality is serialized via the `"optional"` field on `InputSpec`, `ParamSpec`, and `OutputSpec` (§2.2, §2.3, §2.6). When absent, the field is treated as required.
 
 ### 2.2 InputSpec
 
@@ -205,6 +205,37 @@ Used when a workflow value is explicitly represented as a record.
 ```
 Used in mapped steps to describe the table being scattered over.
 
+### 2.6 OutputSpec
+
+Describes one normalized top-level workflow output. This exists so transpilers can emit workflow outputs without re-deriving type, optionality, or gathered-vs-scalar shape from the binding source.
+
+```json
+{
+  "type": "file" | "str" | "int" | "float" | "[file]" | "[str]" | "[int]" | "[float]" | null,
+  "desc": "human-readable description or null",
+  "optional": true,
+  "value": <Binding>
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string or null | yes | Fully materialized workflow output type in normalized SWL form. Must already reflect final workflow cardinality. For mapped outputs this means the gathered type, e.g. `"[file]"` rather than per-row `"file"`. |
+| `desc` | string or null | no | Human-readable description of the workflow output. |
+| `optional` | boolean | no | If true, the workflow output may be absent. Default: false. |
+| `value` | Binding | yes | The normalized binding that supplies the workflow output value. |
+
+**OutputSpec contract:**
+- Every emitted workflow output must have an explicit `type`. Transpilers must not inspect `value` to infer output type.
+- `type` must describe the workflow-facing output shape after map/map_by gather semantics have been applied.
+- If output optionality is known, it must be serialized in `optional` rather than left for transpilers to reconstruct.
+- `value` may use any final-DAG-supported binding form, but merge outputs must still be flattened before emission.
+
+**Target motivation:**
+- **CWL** needs output typing without chasing back through `step.outputs` or guessing for non-step bindings.
+- **WDL** requires explicit declared workflow output types before the binding expression is emitted.
+- **Nextflow** benefits from explicit output shape when deciding whether a workflow output is scalar, collected, or grouped.
+
 ---
 
 ## 3. Computation Model: Steps
@@ -271,7 +302,9 @@ A mapped step adds a `map` field to the step object:
 
 The `scatter` and `broadcast` fields disambiguate how each binding is applied during batch execution. Every input parameter must appear in exactly one of `scatter` or `broadcast`. The compiler must populate both fields in the final DAG so transpilers can consume batch semantics without re-inferring compiler intent.
 
-The `input_schema` and `output_schema` contain the **per-row** types (not array-wrapped). Transpilers use these to:
+The `input_schema` and `output_schema` contain the **per-row** types (not array-wrapped). `output_schema` therefore describes one mapped invocation result row, while top-level `OutputSpec.type` describes the final workflow-visible type after gather or grouping semantics.
+
+Transpilers use these to:
 - Declare scatter port types (CWL: `type: File` not `type: {type: array, items: File}`)
 - Construct per-row input records for the mapped function
 - Derive output table column types
@@ -396,6 +429,7 @@ The following information is embedded directly in the DAG JSON. No `path` field 
 | Bash script body | `steps[].script` | `"bwa mem -t ${cpu} ..."` |
 | Input parameter specs | `steps[].inputs` | `{"fastq1": {"type": "file", "desc": "read 1"}}` |
 | Output parameter specs | `steps[].outputs` | `{"bam": {"type": "file", "default": {"kind": "word", ...}}}` |
+| Workflow output specs | `outputs.<name>` | `{"type": "[file]", "desc": "aligned bams", "value": {"step": "align_all", "output": "bam"}}` |
 | Runtime resources | `steps[].run` | `{"cpu": {"type": "int", "value": 4}}` |
 | Sub-workflow DAG | `steps[].definition.dag` (recursive) | full nested DAG |
 | Task documentation | `steps[].task.doc` (embedded in task dict) | `"Align reads"` |
@@ -411,6 +445,7 @@ The following information is embedded directly in the DAG JSON. No `path` field 
 | Workflow step | `Workflow` + `steps[].run` → embedded `Workflow` | `workflow` + process `call` | `workflow` + `call` |
 | Input binding | `source: "#main/name"` | `Channel.fromPath` / `take` | input variable |
 | Step output binding | `source: "#main/step_id/out"` | process output channel | `call.step_name.output_name` |
+| Workflow output spec | `Workflow.outputs` entry with explicit type | workflow `emit:`/named channel with explicit shape | `output { Type name = expr }` |
 | Literal binding | `default` on input port | `Channel.value(val)` | inline literal |
 | Record merge | Flatten at compiler time — not supported in DAG | Flatten at compiler time — not supported in DAG | Flatten at compiler time — not supported in DAG |
 | Record binding | `ExpressionTool` construction | `tuple` / `record` construction | `struct` literal |
