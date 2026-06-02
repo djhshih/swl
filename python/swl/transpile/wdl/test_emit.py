@@ -288,8 +288,11 @@ map call_variant
         wdl = transpile_dag_dict(dag.to_dict())
         self._assert_wdl_contains(wdl, 'scatter')
 
-    def test_rejects_output_expr_interpolation(self):
-        pass
+    def test_expr_interpolation_in_output(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'bad_expr.swl'), files)
+        wdl = transpile_dag_dict(dag.to_dict())
+        self.assertIn('~{outbase / 2}', wdl)
 
     def test_wdl_type_mapping(self):
         from swl.transpile.wdl.emit import _wdl_type

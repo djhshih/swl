@@ -62,6 +62,7 @@ def _tool_to_cwl(step, tool_id):
                 copied['id'] = copied['id'].replace('#main/', f'{tool_id}/', 1)
             graph.append(copied)
         return graph
+    run = definition.get('run', {})
     requirements = [
         {
             'class': 'InitialWorkDirRequirement',
@@ -73,20 +74,26 @@ def _tool_to_cwl(step, tool_id):
             ],
         }
     ]
-    resource = _resource_requirement(definition.get('run', {}))
+    resource = _resource_requirement(run)
     if resource is not None:
         requirements.append(resource)
-    docker = _docker_requirement(definition.get('run', {}))
+    docker = _docker_requirement(run)
     if docker is not None:
         requirements.append(docker)
-    return [{
+    hints = _hints_from_run(run)
+    if any(_has_expr_interpolation(spec) for spec in definition.get('outputs', {}).values()):
+        requirements.append({'class': 'InlineJavascriptRequirement'})
+    tool = {
         'id': tool_id,
         'class': 'CommandLineTool',
         'baseCommand': ['bash', 'script.sh'],
         'inputs': [_tool_input_to_cwl(tool_id, name, spec) for name, spec in definition.get('inputs', {}).items()],
         'outputs': [_tool_output_to_cwl(tool_id, name, spec) for name, spec in definition.get('outputs', {}).items()],
         'requirements': requirements,
-    }]
+    }
+    if hints:
+        tool['hints'] = hints
+    return [tool]
 
 
 def _workflow_input_to_cwl(workflow_id, name, spec):
@@ -147,10 +154,14 @@ def _step_input_to_cwl(task_id, name, value):
             'id': f'#main/{task_id}/{name}',
             'default': value.value,
         }
-    return {
+    kind, *rest = _canonical_binding(value)
+    result = {
         'id': f'#main/{task_id}/{name}',
         'source': _binding_source('main', value),
     }
+    if kind in ('input_field_nested', 'step_output_nested', 'tab_column_step_output_nested'):
+        result['valueFrom'] = f"$({rest[-1]})"
+    return result
 
 
 def _tool_input_to_cwl(tool_id, name, spec):
@@ -181,6 +192,13 @@ def _resource_requirement(run):
     if len(req) == 1:
         return None
     return req
+
+
+def _hints_from_run(run):
+    hints = []
+    if 'time' in run:
+        hints.append({'class': 'TimeLimit', 'timeLimit': run['time'].get('value')})
+    return hints
 
 
 def _docker_requirement(run):
@@ -221,9 +239,28 @@ def _canonical_binding(value):
         return ('input_field', value.source.name, value.name)
     if kind == 'Field' and getattr(value.source, 'map', None) is not None:
         return ('tab_column_step_output', value.source, value.name)
+    if kind == 'Field' and value.source.__class__.__name__ == 'Field':
+        chain = _field_chain(value)
+        root_source = chain[0].source
+        root_name = chain[0].name
+        field_path = '.'.join(f.name for f in chain[1:])
+        if root_source.__class__.__name__ == 'Input':
+            return ('input_field_nested', root_source.name, root_name, field_path)
+        if getattr(root_source, 'map', None) is not None:
+            return ('tab_column_step_output_nested', root_source, root_name, field_path)
+        return ('step_output_nested', root_source, root_name, field_path)
     if kind == 'Field':
         return ('step_output', value.source, value.name)
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
+
+
+def _field_chain(value):
+    chain = []
+    while value.__class__.__name__ == 'Field':
+        chain.append(value)
+        value = value.source
+    chain.reverse()
+    return chain
 
 
 def _step_input_error(value):
@@ -276,6 +313,15 @@ def _binding_source(workflow_id, value):
     if kind == 'input_field':
         input_name, field_name = rest
         return f'#main/{input_name}/{field_name}'
+    if kind == 'input_field_nested':
+        input_name, root_name, field_path = rest
+        return f'#main/{input_name}'
+    if kind == 'step_output_nested':
+        step, root_name, field_path = rest
+        return f'#main/{step.id}/{root_name}'
+    if kind == 'tab_column_step_output_nested':
+        step, root_name, field_path = rest
+        return f'#main/{step.id}/{root_name}'
     if kind == 'literal':
         return rest[0]
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
@@ -289,7 +335,10 @@ def _infer_output_type(name, value, dag):
     if kind == 'tab_column_step_output':
         step, output = rest
         return _cwl_type('[' + step.task['outputs'][output]['type'] + ']')
-    if kind == 'input_field':
+    if kind in ('step_output_nested', 'tab_column_step_output_nested'):
+        step, root_name, field_path = rest
+        return _cwl_type(step.task['outputs'][root_name]['type'])
+    if kind in ('input_field', 'input_field_nested'):
         return 'string'
     if kind == 'literal':
         return _cwl_type(type(rest[0]).__name__)
@@ -328,12 +377,26 @@ def _interp_to_cwl_glob(value):
         return '*'
     if value.get('kind') == 'word':
         parts = []
+        has_expr = False
         for part in value.get('parts', []):
             if part.get('kind') == 'literal':
                 parts.append(repr(part.get('text', '')))
             elif part.get('kind') == 'var':
                 parts.append(f"inputs.{part.get('name')}")
+            elif part.get('kind') == 'expr':
+                parts.append(f"({part.get('text')})")
+                has_expr = True
             else:
                 raise ValueError(f'Unsupported interpolation for CWL glob: {part!r}')
-        return '$(' + ' + '.join(parts) + ')'
+        expr = '$(' + ' + '.join(parts) + ')'
+        return expr
     raise ValueError(f'Unsupported interpolation for CWL glob: {value!r}')
+
+
+def _has_expr_interpolation(spec):
+    default = spec.get('default') if isinstance(spec, dict) else getattr(spec, 'default', None)
+    if default is None:
+        return False
+    if isinstance(default, dict) and default.get('kind') == 'word':
+        return any(part.get('kind') == 'expr' for part in default.get('parts', []))
+    return False

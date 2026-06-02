@@ -310,7 +310,23 @@ def _binding_to_binding_dict(value):
         return {'source': value.source.id, 'output': value.name}
     if isinstance(value, Field) and isinstance(value.source, Input):
         return {'kind': 'field', 'source': {'source': 'input', 'name': value.source.name}, 'field': value.name}
+    if isinstance(value, Field) and isinstance(value.source, Field):
+        return _nested_field_to_dict(value)
     raise ValueError(f'Unsupported step binding for serialization: {type(value).__name__}')
+
+
+def _nested_field_to_dict(field):
+    chain = []
+    while isinstance(field, Field) and isinstance(field.source, Field):
+        chain.append(field)
+        field = field.source
+    inner = _binding_to_binding_dict(field)
+    if isinstance(inner, dict) and 'source' in inner and 'output' in inner:
+        inner = {'step': inner['source'], 'output': inner['output']}
+    result = inner
+    for f in reversed(chain):
+        result = {'kind': 'field', 'source': result, 'field': f.name}
+    return result
 
 
 def _binding_from_binding_dict(name, data, inputs, steps):

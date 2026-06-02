@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from swl.ir.dag import DAG, Input, Literal, Merge, Record, StepCall
+from swl.ir.dag import DAG, Input, Literal, Merge, Record, StepCall, Field
 from swl.ir.force import force_file
 from swl.transpile.cwl.emit import transpile_dag_dict
 
@@ -326,11 +326,64 @@ map call_variant
         subwf = next(item for item in cwl['$graph'] if item.get('id') == '#call_variant')
         self.assertEqual(subwf['class'], 'Workflow')
 
-    def test_rejects_output_expr_interpolation(self):
+    def test_expr_interpolation_passthrough(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'bad_expr.swl'), files)
-        with self.assertRaisesRegex(ValueError, 'Unsupported step output path for CWL transpilation: bad.bam: Unsupported interpolation'):
-            transpile_dag_dict(dag.to_dict())
+        cwl = transpile_dag_dict(dag.to_dict())
+        bad_tool = next(item for item in cwl['$graph'] if item.get('id') == '#bad')
+        bam_output = next(o for o in bad_tool['outputs'] if o['id'] == '#bad/bam')
+        glob_expr = bam_output['outputBinding']['glob']
+        self.assertIn('outbase', glob_expr)
+        self.assertIn('/', glob_expr)
+        req_classes = [r['class'] for r in bad_tool['requirements']]
+        self.assertIn('InlineJavascriptRequirement', req_classes)
+
+    def test_time_hint_emitted_for_task_with_time(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'function.swl'), files)
+        cwl = transpile_dag_dict(dag.to_dict())
+        align = next(item for item in cwl['$graph'] if item.get('id') == '#align')
+        self.assertIn('hints', align)
+        time_hints = [h for h in align['hints'] if h.get('class') == 'TimeLimit']
+        self.assertEqual(len(time_hints), 1)
+        self.assertEqual(time_hints[0]['timeLimit'], 3150)
+
+    def test_nested_field_binding_uses_valueFrom(self):
+        nest = StepCall(
+            id='inner',
+            path='/tmp/inner.sh',
+            bindings={},
+            outputs=['result'],
+            task={
+                'body': 'echo inner\n',
+                'inputs': {},
+                'outputs': {'result': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
+                'run': {},
+            },
+        )
+        leaf = StepCall(
+            id='outer',
+            path='/tmp/outer.sh',
+            bindings={'x': Field(source=Field(source=nest, name='result'), name='value')},
+            outputs=['out'],
+            task={
+                'body': 'echo outer\n',
+                'inputs': {'x': {'type': 'str', 'desc': None}},
+                'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
+                'run': {},
+            },
+            deps=['inner'],
+        )
+        dag = DAG(
+            inputs={},
+            steps=[nest, leaf],
+            outputs={'out': Field(source=leaf, name='out')},
+        )
+        cwl = transpile_dag_dict(dag.to_dict())
+        outer_step = next(s for s in cwl['$graph'][-1]['steps'] if s['id'] == '#main/outer')
+        x_input = next(i for i in outer_step['in'] if i['id'] == '#main/outer/x')
+        self.assertEqual(x_input['source'], '#main/inner/result')
+        self.assertEqual(x_input['valueFrom'], '$(value)')
 
 
 if __name__ == '__main__':
