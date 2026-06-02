@@ -266,7 +266,9 @@ def _binding_to_channel(binding, channels, current_step):
 
     if isinstance(binding, Record):
         raise ValueError(
-            'Record bindings must be flattened before Nextflow transpilation'
+            f'Record binding with fields {list(binding.fields.keys())} must be flattened '
+            'before Nextflow transpilation. This typically means a non-saturating record '
+            'survived to DAG output. Use explicit field bindings instead.'
         )
 
     if isinstance(binding, dict):
@@ -298,7 +300,9 @@ def _dict_binding_to_channel(binding, channels, current_step, mapped_steps=None)
         return ch
     if source == 'record':
         raise ValueError(
-            'Record bindings must be flattened before Nextflow transpilation'
+            f'Record binding {binding.get("name", "?")} must be flattened '
+            'before Nextflow transpilation. '
+            'Use explicit field bindings instead of record bindings.'
         )
     if source == 'merge':
         raise ValueError(

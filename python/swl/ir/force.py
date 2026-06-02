@@ -679,9 +679,14 @@ class Forcer:
         specs = {}
         for name, value in outputs.items():
             output_type = self._infer_output_type(value)
+            desc = None
+            normalized = _normalize_output_value(value)
+            if isinstance(normalized, Field) and isinstance(normalized.source, StepCall):
+                spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
+                desc = spec.get('desc')
             specs[name] = OutputSpec(
                 type=output_type,
-                desc=None,
+                desc=desc,
                 optional=self._is_optional_type(output_type) if output_type else False,
                 value=value,
             )
@@ -795,7 +800,7 @@ class Forcer:
                 source = mapped.get('source', {})
                 ports = mapped.get('ports') or []
                 if source.get('source') == 'input' and source.get('name') not in self.inputs and not ports:
-                    self.inputs[source['name']] = Input(source['name'])
+                    self._input(source['name'])
                 if source.get('source') == 'input' and not ports:
                     used.add(source['name'])
         self.inputs = {name: value for name, value in self.inputs.items() if name in used}
@@ -939,6 +944,15 @@ class Forcer:
                     return self._as_array_type(typ)
                 return typ
             if isinstance(normalized.source, Field):
+                current = normalized
+                while isinstance(current, Field) and isinstance(current.source, Field):
+                    current = current.source
+                if isinstance(current, Field) and isinstance(current.source, StepCall):
+                    spec = (current.source.task or {}).get('outputs', {}).get(current.name, {})
+                    typ = spec.get('type')
+                    if getattr(current.source, 'map', None) is not None and typ is not None:
+                        return self._as_array_type(typ)
+                    return typ
                 return None
         if isinstance(normalized, Record):
             return None
