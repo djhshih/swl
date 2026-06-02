@@ -543,7 +543,7 @@ class TestForce(ut.TestCase):
                 ForceEnv(),
             )
 
-    def test_table_update_right_side_step_call_raises_error(self):
+    def test_table_update_right_side_step_call_raises_error_via_name(self):
         env = ForceEnv()
         step = StepCall(id='align', path='/a.sh', bindings={}, outputs=['bam'])
         env.bind('ys', step)
@@ -845,6 +845,107 @@ class TestForce(ut.TestCase):
                 value, (Merge, Record),
                 f'Output {name!r} should not be Merge/Record after flattening, got {type(value).__name__}',
             )
+
+
+    # Q5a: output type inference for complex bindings -----------------------
+
+    def test_infer_output_type_nested_field_chain_resolves_terminal_step(self):
+        step = StepCall(
+            id='producer', path='/p.sh', bindings={}, outputs=['inner'],
+            task={
+                'body': '', 'inputs': {}, 'run': {},
+                'outputs': {'inner': {'type': 'file', 'desc': 'inner file'}},
+            },
+        )
+        forcer = Forcer()
+        forcer.steps = [step]
+        outer = Field(Field(step, 'inner'), 'leaf')
+        typ = forcer._infer_output_type(outer)
+        self.assertEqual(typ, 'file')
+
+    def test_infer_output_type_nested_field_chain_mapped_resolves_to_array(self):
+        step = StepCall(
+            id='producer', path='/p.sh', bindings={}, outputs=['inner'],
+            task={
+                'body': '', 'inputs': {}, 'run': {},
+                'outputs': {'inner': {'type': 'file', 'desc': ''}},
+            },
+            map={'source': {'source': 'input', 'name': 'xs'}},
+        )
+        forcer = Forcer()
+        forcer.steps = [step]
+        outer = Field(Field(step, 'inner'), 'leaf')
+        typ = forcer._infer_output_type(outer)
+        self.assertEqual(typ, '[file]')
+
+    def test_infer_output_type_record_returns_none(self):
+        forcer = Forcer()
+        typ = forcer._infer_output_type(Record({'a': Literal(1)}))
+        self.assertIsNone(typ)
+
+    # Q5b: output descriptions ---------------------------------------------
+
+    def test_output_desc_propagated_from_step_output(self):
+        step = StepCall(
+            id='producer', path='/p.sh', bindings={}, outputs=['bam'],
+            task={
+                'body': '', 'inputs': {}, 'run': {},
+                'outputs': {'bam': {'type': 'file', 'desc': 'aligned BAM'}},
+            },
+        )
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x', 'file')
+        forcer.steps = [step]
+        specs = forcer._build_output_specs({
+            'result': Field(step, 'bam'),
+        })
+        self.assertEqual(specs['result'].desc, 'aligned BAM')
+
+    def test_output_desc_none_for_input_source(self):
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x', 'file')
+        specs = forcer._build_output_specs({
+            'result': Input('x'),
+        })
+        self.assertIsNone(specs['result'].desc)
+
+    def test_output_desc_none_for_literal_source(self):
+        forcer = Forcer()
+        specs = forcer._build_output_specs({
+            'result': Literal(42),
+        })
+        self.assertIsNone(specs['result'].desc)
+
+    # Q5c: optionality in prune_unused_inputs -----------------------------
+
+    def test_map_by_source_input_created_through_input_method(self):
+        step = StepCall(
+            id='grouped', path='/g.sh', bindings={}, outputs=['out'],
+            task={'body': '', 'inputs': {}, 'outputs': {'out': {'type': 'file'}}, 'run': {}},
+            map={'source': {'source': 'input', 'name': 'xs'}, 'group_by': 'key'},
+        )
+        forcer = Forcer()
+        forcer.steps = [step]
+        forcer.inputs['xs'] = Input('xs', '[str]', optional=True)
+        unused = set()
+        forcer._prune_unused_inputs(None, {})
+        self.assertIn('xs', forcer.inputs)
+
+    # Q5e: compile-time guard for Record in outputs -----------------------
+
+    def test_flatten_outputs_handles_nested_record_via_final_outputs(self):
+        step = StepCall(
+            id='producer', path='/p.sh', bindings={}, outputs=['out'],
+            task={'body': '', 'inputs': {}, 'outputs': {'out': {'type': 'file'}}, 'run': {}},
+        )
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x', 'file')
+        forcer.steps = [step]
+        dag = forcer._finalize_dag(
+            Record({'nested': Record({'a': Literal(1)})})
+        )
+        self.assertIn('a', dag.outputs)
+        self.assertNotIn('nested', dag.outputs)
 
 
 if __name__ == '__main__':

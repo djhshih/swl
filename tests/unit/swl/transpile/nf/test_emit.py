@@ -313,5 +313,26 @@ map call_variant
         self._assert_nf_contains(nf, 'x_out = x_ch', 'emit: x_out')
 
 
+    # Q5e: record-binding error messages -----------------------------------
+
+    def test_record_binding_error_includes_fields(self):
+        bad = {
+            'inputs': {},
+            'steps': [{
+                'id': 'test',
+                'type': 'task',
+                'path': '/test.sh',
+                'deps': [],
+                'inputs': {'x': {'type': 'str'}},
+                'bindings': {'x': {'source': 'record', 'fields': {'a': {'source': 'literal', 'value': 1}, 'b': {'source': 'literal', 'value': 2}}}},
+                'outputs': {'out': {'type': 'file'}},
+                'run': {},
+                'script': 'echo hi',
+            }],
+            'outputs': {'out': {'type': 'file', 'desc': None, 'value': {'step': 'test', 'output': 'out'}}},
+        }
+        with self.assertRaisesRegex(ValueError, 'Record binding.*fields'):
+            transpile_dag_dict(bad)
+
 if __name__ == '__main__':
     unittest.main()

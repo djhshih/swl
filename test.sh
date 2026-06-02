@@ -26,20 +26,20 @@ expects_compile_fail() {
 
 run_unit_tests() {
 	echo "running unit tests"
-	PYTHONPATH=python python -m unittest \
-		swl.syntax.lexer \
-		swl.syntax.parser \
-		swl.syntax.task.test_parser \
-		swl.syntax.task.test_interpolation \
-		swl.syntax.task.test_bash \
-		swl.semantic.task.test_type \
-		swl.semantic.wf.test_check \
-		swl.ir.test_lower \
-		swl.ir.test_force \
-		swl.ir.test_force_codec \
-		swl.transpile.cwl.test_emit \
-		swl.transpile.wdl.test_emit \
-		swl.transpile.nf.test_emit
+	PYTHONPATH=python:tests/unit python -m unittest \
+		tests.unit.swl.syntax.wf.test_lexer \
+		tests.unit.swl.syntax.wf.test_parser \
+		tests.unit.swl.syntax.task.test_parser \
+		tests.unit.swl.syntax.task.test_interpolation \
+		tests.unit.swl.syntax.task.test_bash \
+		tests.unit.swl.semantic.task.test_type \
+		tests.unit.swl.semantic.wf.test_check \
+		tests.unit.swl.ir.test_lower \
+		tests.unit.swl.ir.test_force \
+		tests.unit.swl.ir.test_force_codec \
+		tests.unit.swl.transpile.cwl.test_emit \
+		tests.unit.swl.transpile.wdl.test_emit \
+		tests.unit.swl.transpile.nf.test_emit
 	printf "unit tests passed\n\n"
 }
 
