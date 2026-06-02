@@ -16,6 +16,7 @@ align | sort | call
 
 Here, `|` is the function chain operator that passes records between functions,
 and `//` is the record update operator that merges records (right overrides left).
+
 See `doc/README.md` for more details.
 
 This is a work in progress (see `TODO`).

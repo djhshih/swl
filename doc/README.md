@@ -138,3 +138,10 @@ align_hg38 = align {
 
 align_hg38 { fastq1: "sample1.r1.fq", fastq2: "sample.r2.fq" }
 ```
+
+## Specifications
+
+- `spec.md` — the SWL source-language specification: syntax, typing, semantics, and workflow validity rules.
+- `dag.md` — the normalized compiled DAG specification: the JSON contract consumed by transpilers and executors.
+- `architecture.md` — the compiler architecture specification: compilation stages, stage outputs, and which stage guarantees each normalization invariant.
+
