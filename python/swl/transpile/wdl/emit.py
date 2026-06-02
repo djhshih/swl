@@ -211,25 +211,32 @@ def _interp_to_wdl(value):
 def _dag_to_wdl(dag, workflow_id, tasks):
     lines = [f'workflow {_wf_name(workflow_id)} {{', '']
 
-    source_inputs = {}
+    decomposed_inputs = {}
+    input_blacklist = set()
     for step in dag.steps:
         m = getattr(step, 'map', None) or {}
         src = m.get('source', {})
         if isinstance(src, dict) and src.get('source') == 'input' and m.get('group_by'):
             src_name = src['name']
+            input_blacklist.add(src_name)
             schema = step.input_schema or {}
             group_key = m.get('group_by')
             col_names = [group_key] + [n for n in schema if n != group_key]
-            non_key_names = [n for n in col_names if n != group_key]
-            key_t = _wdl_type(schema.get(group_key, 'str'))
-            val_t = _val_type(non_key_names, schema) if non_key_names else 'String'
-            source_inputs[src_name] = f'Array[Pair[{key_t}, {val_t}]]'
+            decomposed_inputs[step.id] = [
+                (col, f'Array[{_wdl_type(schema.get(col, "str"))}]')
+                for col in col_names
+            ]
 
     if dag.inputs:
         lines.append('    input {')
         for name, spec in dag.inputs.items():
-            t = source_inputs.get(name) or _wdl_type(spec.type)
+            if name in input_blacklist:
+                continue
+            t = _wdl_type(spec.type)
             lines.append(f'        {t} {name}')
+        for step_id, cols in decomposed_inputs.items():
+            for col_name, col_type in cols:
+                lines.append(f'        {col_type} {col_name}')
         lines.append('    }')
         lines.append('')
 
@@ -445,11 +452,11 @@ def _mapped_by_step_to_wdl(step, tasks):
     grouped_var = f'{step.id}_grouped'
 
     if isinstance(source, dict) and source.get('source') == 'input':
-        src_name = source['name']
         non_key_names = [n for n in col_names if n != group_key]
         key_t = _wdl_type(input_schema.get(group_key, 'str'))
         val_t = _val_type(non_key_names, input_schema) if non_key_names else 'String'
-        lines.append(f'    Array[Pair[{key_t}, Array[{val_t}]]] {grouped_var} = collect_by_key({src_name})')
+        zip_expr = _build_zip_chain_from_names(col_names)
+        lines.append(f'    Array[Pair[{key_t}, Array[{val_t}]]] {grouped_var} = collect_by_key({zip_expr})')
     else:
         zip_expr = _build_zip_chain(col_names, source)
         key_t = _wdl_type(input_schema.get(group_key, 'str'))
@@ -500,6 +507,15 @@ def _build_zip_chain(col_names, source):
     for col in reversed(col_names[:-1]):
         col_expr = _column_expr(col, source)
         inner = f'zip({col_expr}, {inner})'
+    return inner
+
+
+def _build_zip_chain_from_names(col_names):
+    if not col_names:
+        return '[]'
+    inner = col_names[-1]
+    for col in reversed(col_names[:-1]):
+        inner = f'zip({col}, {inner})'
     return inner
 
 
