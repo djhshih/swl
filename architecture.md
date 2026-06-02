@@ -8,7 +8,7 @@ SWL is a workflow language that compiles to a logical DAG of task invocations. T
 4. **Semantic Checking** → validated imports, scope, types, inferred signature (`semantic/wf/check.py`)
 5. **IR Lowering** → semantic IR tree (`ir/node.py`)
 6. **IR Forcing** → concrete DAG (`ir/dag.py`)
-7. **Output** → JSON-serialized DAG or CWL emission
+7. **Output** → JSON-serialized DAG emission
 
 ---
 
@@ -255,12 +255,12 @@ Lambda(
 **Key DAG types** (`ir/dag.py`):
 | Type | Meaning |
 |------|---------|
-| `Input` | A named workflow input with optional type/desc |
+| `Input` | A named workflow input with optional type/desc/optionality |
 | `Literal` | A literal value |
 | `Record` | A record of named DAG values |
 | `TableSource` | A table source (input columns) |
 | `Field` | Projection of a field from a step or input |
-| `Merge` | A merge of two DAG values (left // right) |
+| `Merge` | A transient merge of two DAG values (left // right) during forcing |
 | `StepCall` | A concrete task or workflow invocation |
 | `MappedStep` | A task invocation wrapped in map/map_by |
 | `Output` | A named workflow output |
@@ -304,19 +304,38 @@ The `Forcer` "forces" the IR by resolving all function applications into concret
    - For batch workflows, creates a table input placeholder and applies `map`.
 
 6. **DAG finalization** (`_finalize_dag`):
-   - `_refine_input_metadata()`: Merges type/desc information from task input specs onto DAG input definitions.
-   - `_final_outputs()`: Collects top-level record fields as named outputs, or wraps the single value as `result`.
+   - `_refine_input_metadata()`: Materializes workflow input metadata by merging inferred interface information with task input specs, including type, description, and optionality where available.
+   - `_final_outputs()`: Converts the forced root value into the explicit top-level workflow outputs required by `dag.md`, collecting top-level record fields as named outputs or wrapping a single value as `result`.
    - `_prune_unused_inputs()`: Removes input ports that aren't actually referenced by any step or output.
-   - Returns a `DAG(inputs, steps, outputs)`.
+   - Returns a `DAG(inputs, steps, outputs)` that satisfies the normalized DAG contract.
+
+### Normalization obligations before final DAG emission
+
+Before emitting the final DAG, the compiler must ensure all final-DAG invariants required by `dag.md` hold.
+
+- **Semantic checking** is responsible for validating source-language meaning, inferring workflow inputs and outputs, and preserving source type information such as optionality in the inferred interface.
+- **IR lowering** is responsible for desugaring source constructs into explicit IR forms, including pipeline expansion and explicit record/update structure.
+- **IR forcing** is responsible for resolving applications into concrete step calls, saturating direct call interfaces, and carrying inferred interface information forward into concrete DAG values.
+- **DAG finalization** is responsible for producing a fully materialized workflow interface and enforcing final normalized DAG invariants.
+
+In particular, before DAG emission the compiler must:
+- materialize workflow input and output metadata into explicit DAG interface specifications;
+- preserve optionality from parsed task annotations and inferred workflow interfaces into DAG metadata;
+- eliminate merge bindings from the final DAG by flattening them into explicit named bindings or outputs;
+- saturate record literals that directly feed known task or workflow interfaces into named port bindings;
+- ensure top-level workflow outputs are serialized in the normalized output form defined by `dag.md`; and
+- reject any remaining binding form that falls outside the portable final DAG contract.
 
 **Representation at this stage:** A `DAG` dataclass with concrete, serializable values. Each `StepCall` has:
 - `id`: unique step name (e.g., `align`, `align_2`)
 - `path`: path to the tool script
-- `bindings`: dict of input name → `Input`/`Field`/`Literal`/`Record`/`Merge`
+- `bindings`: dict of input name → normalized binding value
 - `outputs`: list of output names
 - `deps`: list of step IDs this step depends on
 - `task`: the full tool definition (inputs, outputs, run, body, doc)
 - `type`: `"task"` or `"workflow"`
+
+The emitted DAG is the compiler artifact consumed by transpilers. Source-level constructs such as unresolved merges may exist in IR during lowering and forcing, but they must not survive into the final emitted DAG unless explicitly permitted by `dag.md`.
 
 ---
 
@@ -324,15 +343,13 @@ The `Forcer` "forces" the IR by resolving all function applications into concret
 
 **File:** `compile.py` (entry point), `ir/dag.py` (serialization)
 
-**Input:** A `DAG` object.
+**Input:** A normalized `DAG` object.
 
 **Output:** A JSON file written to `dag/<name>.json`.
 
 **What happens:**
-- `DAG.to_dict()` converts the DAG to a plain dict:
-  - Inputs: `{ name: { type, desc } }`
-  - Steps: list of step dicts with id, type, path, deps, inputs, bindings, outputs, run, script, map info, schemas.
-  - Outputs: `{ name: { source, ... } }`
+- `DAG.to_dict()` converts the DAG to a plain dict in the serialized form defined by `dag.md`.
+- Interface metadata, step bindings, and outputs are emitted in fully explicit form so transpilers do not need to reconstruct compiler intent.
 - Written as pretty-printed JSON via `dag.write(path)`.
 - The JSON can be read back via `DAG.read(path)` → `DAG.from_dict()`.
 
@@ -349,11 +366,11 @@ Validates concrete workflow inputs against the inferred input type:
 
 ---
 
-## CWL Transpilation
+## Transpilation
 
-**Directory:** `transpile/cwl/`
+**Directories:** `transpile/cwl/`, `transpile/wdl/`, `transpile/nf/`
 
-Converts the compiled DAG JSON into CWL (`Common Workflow Language`) documents. This is a separate output path from the JSON DAG.
+Transpilers consume the compiled DAG JSON and convert it into target-specific workflow documents. They operate on the normalized DAG contract rather than on source `.swl` or `.sh` files.
 
 ---
 
@@ -384,10 +401,10 @@ Converts the compiled DAG JSON into CWL (`Common Workflow Language`) documents. 
 
 - syntax/wf/lexer.py — Workflow lexer
 - syntax/wf/parser.py — Workflow parser
-- syntax/wf/node.py — Workflow AST node types (has the fragile Expr.__repr__ issue)
+- syntax/wf/node.py — Workflow AST node types
 - syntax/wf/builtins.py — Shared pattern-matching for `import`, `map`, `map_by` (used by checker and lowerer)
 - syntax/task/parser.py — Task annotation parser
-- syntax/task/bash.py — Bash script parser (not integrated into pipeline)
+- syntax/task/bash.py — Bash script parser
 - syntax/task/interpolation.py — String interpolation parser
 - semantic/wf/check.py — Workflow semantic checker (imports, scope, type inference, partial application)
 - semantic/wf/type.py — Workflow type system (ScalarType, ArrayType, RecordType, TableType, FunctionType)

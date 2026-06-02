@@ -55,18 +55,6 @@ The only sensible fix is to flatten merges in one place — the compiler — whe
 
 ---
 
-## Implementation priorities
-
-| Priority | What to do | Affected files |
-|---|---|---|
-| P0 | Add merge flattening pass to `force.py` | `ir/force.py`, `ir/dag.py` |
-| P1 | Serialize `map.scatter` / `map.broadcast` in `MappedStep` | `ir/dag.py`, `ir/force.py` |
-| P1 | Serialize `optional` flag in `InputSpec` / `ParamSpec` | `ir/dag.py` |
-| P2 | Serialize output `type` in top-level `outputs` | `ir/dag.py`, update transpilers to read typed format |
-| P2 | Flatten non-saturating records or add shape metadata | `ir/force.py` |
-| P3 | Add `tool_id` / `definition_id` for deduplication | `ir/dag.py`, transpilers |
-
----
 
 ## 1. Top-Level Structure
 
@@ -199,45 +187,23 @@ Used when a step input requires `record.field` rather than the whole record.
 ```json
 { "source": "merge", "left": <Binding>, "right": <Binding> }
 ```
-Used by pipeline desugaring (`A | B | C`) to accumulate outputs.
+`merge` is an intermediate normalization form used during lowering and forcing, especially for pipeline desugaring.
 
-**Contract: Merge bindings must not appear in the final DAG.** The compiler's IR forcing phase must flatten merge trees into flat per-field bindings before emitting the DAG. This is because no transpiler target (CWL, WDL, Nextflow) has a native record-merge primitive — each would need to implement decomposition differently. The flattening is done once in the compiler, not N times in N transpilers.
-
-If a merge binding cannot be flattened (e.g., merging two non-overlapping record-valued step outputs into a single port), the compiler must raise a compile-time error rather than emitting an unsupported binding form. See §4.2 for current status.
+**Contract: Merge bindings must not appear in the final DAG.** The compiler must flatten merge trees into explicit named bindings before emitting the final DAG JSON. If a merge cannot be flattened into the normalized DAG forms defined here, compilation must fail rather than emitting a non-portable binding.
 
 **`record`**: A constructed record literal.
 ```json
 { "source": "record", "fields": { "<name>": <Binding>, ... } }
 ```
-Used when partial application creates a concrete input record or when a lambda produces a result record.
+Used when a workflow value is explicitly represented as a record.
 
-**Contract: Record bindings should saturate a task call during forcing.** A record that directly feeds a task's input ports should be flattened into individual bindings (each field becomes a separate step input). Non-saturating records (those that flow through intermediate bindings without being consumed by a concrete tool) reach the DAG and require transpiler-side struct construction. Transpiler guidance:
-- CWL: emit an `ExpressionTool` that constructs the record from individual inputs
-- WDL: emit a `struct` definition + struct literal
-- Nextflow: emit a `tuple` or channel-of-records
+**Contract: Direct-call record saturation is required.** If a record literal directly saturates a known task or workflow interface, the compiler must flatten it into individual named input bindings before DAG emission. A `record` binding may appear in the final DAG only when it represents a workflow value that is not itself a direct step-call argument. When a `record` binding appears in the final DAG, its full field structure must be explicit in `fields`.
 
 **`table`**: A batch table source — a collection of named column bindings.
 ```json
 { "source": "table", "name": "table_name", "columns": { "<name>": <Binding>, ... } }
 ```
 Used in mapped steps to describe the table being scattered over.
-
-### 2.6 Feature: Data Model Implementation Status
-
-| Sub-feature | Implemented | Tested |
-|-------------|-------------|--------|
-| Scalar types (file/str/int/float) in InputSpec and ParamSpec | Yes | `test_transpile_function_workflow` |
-| Array types ([file]/[str]/[int]/[float]) | Yes | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` |
-| Input type/desc metadata from step specs | Partial: types inferred from step inputs, but inputs without matching step input names lack type/desc | implicit |
-| RunParamSpec with resolved values (cpu/memory/time/image) | Yes (cpu, memory, image, time) | `test_transpile_function_workflow` |
-| Input binding | Yes | all CWL tests |
-| Step output binding | Yes | all CWL tests |
-| Literal binding | Yes | `test_rejects_non_task_workflow_output` |
-| Field binding | Yes (input → field, step → field) | partial: nested fields not transpilable |
-| Merge binding | Yes (serialized) but no target supports it | CWL transpiler rejects merge bindings |
-| Record binding | Yes (serialized) but no target supports it | CWL transpiler rejects record bindings |
-| Table binding (batch source) | Yes | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` |
-| Optional type (`file?`, `str?`) serialization | No | not tested |
 
 ---
 
@@ -303,7 +269,7 @@ A mapped step adds a `map` field to the step object:
 | `map.scatter` | array of strings | The subset of input parameter names that are scatter ports — their values come from table columns and vary per row. Must be a subset of `bindings` keys. |
 | `map.broadcast` | array of strings | The subset of input parameter names that are broadcast ports — their values are constant across all rows. Must be a subset of `bindings` keys. |
 
-The `scatter` and `broadcast` fields disambiguate how each binding is applied during batch execution. Every input parameter must appear in exactly one of `scatter` or `broadcast`. If absent, transpilers must infer the split by analyzing `map.source` column bindings — this inference is fragile and duplicates compiler logic. The compiler should always populate both fields.
+The `scatter` and `broadcast` fields disambiguate how each binding is applied during batch execution. Every input parameter must appear in exactly one of `scatter` or `broadcast`. The compiler must populate both fields in the final DAG so transpilers can consume batch semantics without re-inferring compiler intent.
 
 The `input_schema` and `output_schema` contain the **per-row** types (not array-wrapped). Transpilers use these to:
 - Declare scatter port types (CWL: `type: File` not `type: {type: array, items: File}`)
@@ -337,23 +303,6 @@ The `definition` recursively contains:
 
 The top-level `inputs`, `outputs`, `script`, and `run` fields are still present and duplicate the interface-level info from `definition` for convenience. Transpilers that inline sub-workflows (CWL) use the `definition.dag`; transpilers that call sub-workflows as separate entities (some WDL patterns) use the top-level interface fields.
 
-### 3.4 Feature: Step Model Implementation Status
-
-| Sub-feature | Implemented | Tested |
-|-------------|-------------|--------|
-| Task step (type: "task") | Yes | `test_transpile_function_workflow` |
-| Workflow step with recursive embedded DAG | Yes | `test_imported_workflow_output_transpiles_as_workflow_step` |
-| Mapped task (type: "mapped_task", simple `map`) | Yes | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` |
-| Mapped workflow (type: "mapped_workflow", simple `map`) | Yes | `test_batch_mapped_workflow_emits_scattered_subworkflow` |
-| Generated sub-workflow for map + lambda | Yes | `test_batch_mapped_simple_lambda_emits_generated_scattered_subworkflow` |
-| Root-level partial map (partial application of `map`) | Yes | `test_root_partial_map_transpiles_as_scattered_subworkflow` |
-| Mapped step with `map_by` (group_by) | Yes (compiler produces group_by) | implicit |
-| `map.scatter` / `map.broadcast` port disambiguation | No (must be inferred by transpilers) | — |
-| DAG circularity validation | No | not tested |
-| Dependency derivation from bindings | Yes (implicit from step references in bindings) | all CWL tests |
-| Partial application with concrete record bindings | Yes | `test_partial_workflow_transpiles` |
-| Lambda materialization to synthetic function | Yes | `test_batch_mapped_simple_lambda_emits_generated_scattered_subworkflow` |
-
 ---
 
 ## 4. Data Flow: Pipeline Semantics
@@ -370,15 +319,7 @@ A pipeline desugars at compile time into the equivalent `Apply` + `Update` form 
 #   outputs: { a1: {step: "A", output: "a1"}, a2: {step: "B", output: "b1"}, c1: {step: "C", output: "c1"} }
 ```
 
-Record merge bindings (`{source: "merge", ...}`) may appear during pipeline desugaring but should be resolved to flat bindings by forcing. If a merge binding does appear in the DAG, it represents a situation where the desugared merge could not be flattened (e.g., merging two non-step sources).
-
-### 4.2 Feature: Pipeline Semantics Implementation Status
-
-| Sub-feature | Implemented | Tested |
-|-------------|-------------|--------|
-| Chain desugaring (A \| B → lambda block) | Yes | `force.py:_chain_to_lambda_block` |
-| Merge flattening in outputs (`a // b // c` → flat record) | Partial: chain desugaring produces flat outputs; hand-written equivalent may not flatten fully | `pipe.swl` vs `function.swl` divergence known |
-| Merge flattening in step bindings | No (merge bindings serialized but rejected by CWL transpiler) | `test_rejects_merged_task_input_binding` |
+Record merge bindings (`{source: "merge", ...}`) may appear during desugaring and forcing, but they must be resolved before final DAG emission. The final DAG expresses pipeline flow through explicit step bindings and explicit top-level outputs rather than serialized merge nodes.
 
 ---
 
@@ -401,21 +342,6 @@ Same structure as `map` but with `map.group_by` set to the grouping key column n
 | Nextflow | Channel `.groupTuple()` operator | `nf.md §5` |
 
 The DAG's `map.group_by` field is the sole signal. Each transpiler maps it to the target's native grouping primitive. No transpiler should implement grouping logic itself — they generate code that delegates to the target runtime.
-
-### 5.3 Feature: Batch Semantics Implementation Status
-
-| Sub-feature | Implemented | Tested |
-|-------------|-------------|--------|
-| `map` on task | Yes | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` |
-| `map` on workflow | Yes | `test_batch_mapped_workflow_emits_scattered_subworkflow` |
-| `map` on lambda (generated sub-workflow) | Yes | `test_batch_mapped_simple_lambda_emits_generated_scattered_subworkflow` |
-| `map` on partial application (root `map f`) | Yes | `test_root_partial_map_transpiles_as_scattered_subworkflow` |
-| `map_by` compile-time lowering | Yes (ir.Map with key, MappedStep with group_by) | implicit |
-| `map.scatter` / `map.broadcast` port lists | No (transpilers infer split; `map_by` plan may require this) | — |
-| `map_by` CWL transpilation | No (explicitly rejected — planned via ExpressionTool + scatter) | `test_map_by_transpile_reports_explicit_grouping_not_supported` |
-| `map_by` WDL transpilation | No (planned via `collect_by_key()`) | Not built |
-| `map_by` Nextflow transpilation | No (planned via `groupTuple()`) | Not built |
-| Table update semantics (`t // r`, `r // t`) | No (raises at forcing time) | not tested |
 
 ---
 
@@ -458,15 +384,6 @@ Three part kinds:
 | Nextflow | Emit as `${ <text> }` — Groovy expression passthrough. |
 
 **Transpiler flag for `expr`:** The DAG may contain `expr` parts that reference variables outside the interpolation context (e.g., `${cpu * 2}` references `cpu`, which is a run parameter, not a binding). Transpilers should validate variable availability within their target's scope before emitting `expr` passthrough. If a variable referenced in `expr` is not available in the target's expression scope, the transpiler must reject with a clear error.
-
-### 6.3 Feature: Interpolation Implementation Status
-
-| Sub-feature | Implemented | Tested |
-|-------------|-------------|--------|
-| Literal part | Yes | `test_output_glob_uses_cwl_expression` |
-| Var part resolved in CWL globs | Yes (via `$(inputs.var + '.ext')`) | `test_output_glob_uses_cwl_expression` |
-| Var part in run parameter defaults | Yes (serialized, resolved at compile time for built-in run params) | implicit |
-| Expr part | Yes (serialized) but rejected by CWL transpiler | `test_rejects_output_expr_interpolation` |
 
 ---
 
@@ -512,51 +429,39 @@ The following information is embedded directly in the DAG JSON. No `path` field 
 
 ## 9. Implementation Status Summary
 
-### 9.1 Completed (no gaps)
+This section is informative rather than normative. It records implementation status without changing the DAG contract defined above.
+
+### 9.1 Completed
 
 - Task step emission with embedded script
 - Workflow step emission with recursive embedded DAG
 - Mapped task (`map f xs`) with input_schema / output_schema
-- Mapped workflow (`map f xs` where f imports a `.swl`)
+- Mapped workflow (`map f xs` where `f` imports a `.swl`)
 - Generated sub-workflow for `map` + lambda
 - Root-level partial application of `map`
-- Input, step_output, literal binding serialization
-- Partial application with concrete record bindings
-- CWL CommandLineTool emission (baseCommand, InitialWorkDirRequirement, inputs, outputs)
-- CWL ResourceRequirement (cpu, memory)
-- CWL DockerRequirement (image)
-- CWL scatter with dotproduct scatterMethod
-- CWL output glob from interpolation vars
-- Interpolation AST serialization (literal, var)
-- DAG round-trip (to_dict / from_dict)
+- Input, step_output, and literal binding serialization
+- Interpolation AST serialization (`literal`, `var`, `expr`)
+- DAG round-trip (`to_dict` / `from_dict`)
 
-### 9.2 Partially complete
+### 9.2 Partial or in progress
 
-| Feature | What works | What's missing |
-|---------|------------|----------------|
-| Input type/desc in DAG | Types merged from step specs if name matches | Inputs without matching step input names (lambda params, record fields) lack type/desc |
-| Merge flattening in outputs and bindings | Chain desugaring produces flat outputs | Hand-written `//` trees not fully flattened during forcing; merge bindings still reach DAG |
-| Record binding handling | Serialized as `{source: "record"}` in DAG | Non-saturating records reach DAG; CWL rejects, WDL/Nextflow need struct/record construction |
-| Run parameter validation | Parameters with bound values are resolved | Parameters with no default and no bound value are silently dropped |
-| `map.scatter` / `map.broadcast` port lists | Not serialized | Transpilers must infer scatter vs broadcast split from `map.source` bindings — fragile |
-| Nested field projections | `Field(StepCall, ...)` and `Field(Input, ...)` in bindings | `Field(Field(...), ...)` nested chains not transpilable |
-| Workflow definition embedding | Embedded as `definition.dag` | Top-level inputs/outputs/run fields duplicate info inside definition |
-| Output type serialization | Version `"1.0"`: no output types | Version `"1.1"`: outputs include explicit `type` (proposed, not implemented) |
-| Optional type serialization | Not serialized | Proposed: `"optional": true` on InputSpec/ParamSpec |
+| Feature | Current status |
+|---------|----------------|
+| Input type/desc materialization | Workflow input metadata is refined from inferred interface information and step specs, but coverage may depend on available inferred schema information. |
+| Merge elimination | The specification requires elimination before final DAG emission; implementation work may still be required where transient merges survive too long. |
+| Record saturation | Direct-call record saturation is required by the specification; remaining non-saturating cases require explicit record serialization with full field structure. |
+| `map.scatter` / `map.broadcast` population | The specification requires these fields in final mapped steps; implementation work may still be needed to guarantee they are always present. |
+| Output interface materialization | Final outputs are normalized to explicit top-level outputs; richer output metadata may still depend on available inferred type information. |
+| Nested field projection support | Basic field projection is represented in bindings; more complex nested forms may require additional normalization or target-specific handling. |
 
-### 9.3 Not implemented
+### 9.3 Not yet guaranteed everywhere
 
-| Feature | Rationale |
-|---------|-----------|
-| DAG circularity validation | Missing validation step; should be added to `DAG.validate()` |
-| Merge flattening guarantee | Force phase does not yet flatten all merge bindings; transpilers still encounter them |
-| `map_by` transpilation (CWL) | Planned: ExpressionTool grouping + scattered wrapper (`map_by_cwl.md`) |
-| `map_by` transpilation (WDL) | Implemented: `collect_by_key()` + scatter (`wdl.md §5`) |
-| `map_by` transpilation (Nextflow) | Implemented: `groupTuple()` (`nf.md §5`) |
-| `map.scatter` / `map.broadcast` serialization | Required by all three transpiler plans; not yet emitted by compiler |
-| Record binding transpilation | CWL: ExpressionTool; WDL: struct literal; Nextflow: tuple/channel construction |
-| Expr interpolation (`expr` kind) in CWL | Planned: optional `InlineJavascriptRequirement` passthrough |
-| Time resource in CWL | Planned: emit as hints entry |
-| Table update semantics (`t // r`) | Rarely used; implementation deferred |
-| Nextflow transpiler | Implemented (`nf.md`, `python/swl/transpile/nf/`) — Phases 1–8 complete |
-| WDL transpiler | Implemented (`wdl.md`, `python/swl/transpile/wdl/`) — Phases 1–7 complete |
+| Feature | Required contract |
+|---------|-------------------|
+| Final-DAG merge freedom | Final emitted DAGs must not contain `merge` bindings. |
+| Full optionality propagation | Final emitted interface and parameter specs must preserve optionality explicitly. |
+| Universal mapped-port classification | Every mapped-step input must appear in exactly one of `map.scatter` or `map.broadcast`. |
+| Portable handling of remaining record values | Any `record` that remains in the final DAG must have explicit structure and must not stand in for an unflattened direct step-call argument. |
+
+---
+
