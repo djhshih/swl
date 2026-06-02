@@ -94,15 +94,14 @@ The type system uses SWL type names. These are normalized — `"File"` and `"str
 | `"[float]"` | array | Array of floats |
 | `null` | null | Unknown/inferred type |
 
-Optionality is serialized via the `"optional"` field on `InputSpec`, `ParamSpec`, and `OutputSpec` (§2.2, §2.3, §2.6). When absent, the field is treated as required.
+Optionality is serialized via the `"optional"` field on `InputSpec`, `ParamSpec`, and `OutputSpec` (§2.2, §2.3, §2.6). Defaults to `false`; when `false` the field is omitted from the JSON.
 
 ### 2.2 InputSpec
 
 ```json
 {
   "type": "file" | "str" | "int" | "float" | "[file]" | "[str]" | "[int]" | "[float]" | null,
-  "desc": "description string or null",
-  "optional": true
+  "desc": "description string or null"
 }
 ```
 
@@ -110,7 +109,7 @@ Optionality is serialized via the `"optional"` field on `InputSpec`, `ParamSpec`
 |-------|------|----------|-------------|
 | `type` | string or null | yes | Scalar or array type |
 | `desc` | string or null | no | Human-readable description |
-| `optional` | boolean | no | If true, the input may be omitted at runtime. Default: false. |
+| `optional` | boolean | no | If true, the input may be omitted at runtime. Default: `false`. Omitted from JSON when `false`. |
 
 Declares a named workflow input.
 
@@ -122,8 +121,7 @@ Describes an input or output parameter of a task or workflow step.
 {
   "type": "file" | "str" | "int" | "float" | "[file]" | "[str]" | "[int]" | "[float]" | null,
   "desc": "human-readable description or null",
-  "default": <Interpolation> or null,
-  "optional": true
+  "default": <Interpolation> or null
 }
 ```
 
@@ -132,7 +130,7 @@ Describes an input or output parameter of a task or workflow step.
 | `type` | string or null | yes | Scalar or array type |
 | `desc` | string or null | no | Human-readable description |
 | `default` | Interpolation or null | no | Default value expression. For output parameters, this is the expected file path or glob pattern. |
-| `optional` | boolean | no | If true, the parameter may be omitted. Default: false. |
+| `optional` | boolean | no | If true, the parameter may be omitted. Default: `false`. Omitted from JSON when `false`. |
 
 **Transpiler requirements:**
 - CWL: optional types emit as `["null", <type>]` (union with null)
@@ -213,7 +211,6 @@ Describes one normalized top-level workflow output. This exists so transpilers c
 {
   "type": "file" | "str" | "int" | "float" | "[file]" | "[str]" | "[int]" | "[float]" | null,
   "desc": "human-readable description or null",
-  "optional": true,
   "value": <Binding>
 }
 ```
@@ -222,7 +219,7 @@ Describes one normalized top-level workflow output. This exists so transpilers c
 |-------|------|----------|-------------|
 | `type` | string or null | yes | Fully materialized workflow output type in normalized SWL form. Must already reflect final workflow cardinality. For mapped outputs this means the gathered type, e.g. `"[file]"` rather than per-row `"file"`. |
 | `desc` | string or null | no | Human-readable description of the workflow output. |
-| `optional` | boolean | no | If true, the workflow output may be absent. Default: false. |
+| `optional` | boolean | no | If true, the workflow output may be absent. Default: `false`. Omitted from JSON when `false`. |
 | `value` | Binding | yes | The normalized binding that supplies the workflow output value. |
 
 **OutputSpec contract:**

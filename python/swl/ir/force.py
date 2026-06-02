@@ -657,15 +657,16 @@ class Forcer:
         return flat
 
     def _build_output_specs(self, outputs):
-        return {
-            name: OutputSpec(
-                type=self._infer_output_type(value),
+        specs = {}
+        for name, value in outputs.items():
+            output_type = self._infer_output_type(value)
+            specs[name] = OutputSpec(
+                type=output_type,
                 desc=None,
-                optional=self._is_optional_output(value),
+                optional=self._is_optional_type(output_type) if output_type else False,
                 value=value,
             )
-            for name, value in outputs.items()
-        }
+        return specs
 
     def _flatten_merge_value(self, value):
         if isinstance(value, Merge):
@@ -907,25 +908,35 @@ class Forcer:
                 return 'str'
             return None
         if isinstance(normalized, Field):
-            if isinstance(normalized.source, Input):
-                source_type = normalized.source.type
-                if source_type and source_type.startswith('[') and source_type.endswith(']'):
-                    return source_type[1:-1]
-                return None
+            source_type = self._infer_output_type(normalized.source)
+            if source_type and source_type.startswith('[') and source_type.endswith(']'):
+                return source_type[1:-1]
             if isinstance(normalized.source, StepCall):
                 spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
                 typ = spec.get('type')
                 if getattr(normalized.source, 'map', None) is not None and typ is not None:
                     return self._as_array_type(typ)
                 return typ
-            if isinstance(normalized.source, Field):
-                return None
-        if isinstance(normalized, Record):
+            if isinstance(normalized.source, Record):
+                return self._infer_record_field_type(normalized.source, normalized.name)
             return None
+        if isinstance(normalized, Record):
+            return 'record'
         return None
 
-    def _is_optional_output(self, value):
-        output_type = self._infer_output_type(value)
+    def _infer_record_field_type(self, record, name):
+        fields = record.fields
+        if name in fields:
+            return self._infer_output_type(fields[name])
+        for field_value in fields.values():
+            normalized = _normalize_output_value(field_value)
+            if isinstance(normalized, Record):
+                nested = self._infer_record_field_type(normalized, name)
+                if nested is not None:
+                    return nested
+        return None
+
+    def _is_optional_type(self, output_type):
         return bool(output_type and output_type.endswith('?'))
 
     def _assert_wireable_output(self, name, value):

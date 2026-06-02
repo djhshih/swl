@@ -124,7 +124,7 @@ class DAG:
                 name: {
                     'type': value.type,
                     'desc': value.desc,
-                    'optional': value.optional,
+                    **({'optional': True} if value.optional else {}),
                 }
                 for name, value in self.inputs.items()
             },
@@ -161,7 +161,7 @@ class DAG:
                     {
                         'type': value.type,
                         'desc': value.desc,
-                        'optional': value.optional,
+                        **({'optional': True} if value.optional else {}),
                         'value': _binding_to_dict(value.value),
                     }
                     if isinstance(value, OutputSpec) or (hasattr(value, 'value') and hasattr(value, 'type'))
