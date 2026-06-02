@@ -15,9 +15,9 @@ NodeType = Enum('NodeType', [
 ])
 
 REPR_FORMATS = {
-    NodeType.id: lambda self: getattr(self, 'name', '<missing>'),
-    NodeType.str: lambda self: getattr(self, 'value', '<missing>'),
-    NodeType.num: lambda self: getattr(self, 'value', '<missing>'),
+    NodeType.id: lambda self: str(getattr(self, 'name', '<missing>')),
+    NodeType.str: lambda self: str(getattr(self, 'value', '<missing>')),
+    NodeType.num: lambda self: str(getattr(self, 'value', '<missing>')),
     NodeType.block: lambda self: '[' + '; '.join([f'{x}' for x in getattr(self, 'body', [])]) + ']',
     NodeType.bind: lambda self: f'(= {getattr(self, "id", "<missing>")} {getattr(self, "value", "<missing>")})',
     NodeType.rec: lambda self: '{' + ', '.join([f'{k}: {v}' for k, v in getattr(self, 'value', {}).items()]) + '}',

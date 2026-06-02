@@ -1,6 +1,6 @@
 import json
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, Record, StepCall
+from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 
 
 def transpile_dag_file(path):
@@ -42,6 +42,9 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
 
 
 def _wdl_type(swl_type, optional=False):
+    if isinstance(swl_type, str) and swl_type.endswith('?'):
+        optional = True
+        swl_type = swl_type[:-1]
     base = {
         'file': 'File',
         'str': 'String',
@@ -242,9 +245,10 @@ def _dag_to_wdl(dag, workflow_id, tasks):
 
     if dag.outputs:
         lines.append('    output {')
-        for name, binding in dag.outputs.items():
+        for name, output in dag.outputs.items():
+            binding = output.value if isinstance(output, OutputSpec) else output
             expr = _binding_to_wdl_expr(binding, None, dag)
-            typ = _infer_output_type(name, binding, dag)
+            typ = _infer_output_type(name, output, dag)
             lines.append(f'        {typ} {name} = {expr}')
         lines.append('    }')
 
@@ -585,6 +589,8 @@ def _emit_dict_struct(binding):
 
 
 def _infer_output_type(name, binding, dag):
+    if isinstance(binding, OutputSpec):
+        return _wdl_type(binding.type, binding.optional)
     if isinstance(binding, Field) and isinstance(binding.source, StepCall):
         step = binding.source
         out_type = (step.task or {}).get('outputs', {}).get(binding.name, {}).get('type', 'str')
@@ -636,7 +642,8 @@ def _validate_supported(dag):
         for name, value in step.bindings.items():
             _validate_binding(value, step.id)
 
-    for name, value in dag.outputs.items():
+    for name, output in dag.outputs.items():
+        value = output.value if isinstance(output, OutputSpec) else output
         _validate_output_binding(value, name)
 
 

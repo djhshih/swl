@@ -303,12 +303,13 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['inputs']['ref_fai']['type'], 'file')
         self.assertEqual(data['steps'][2]['deps'], ['sort'])
         self.assertEqual(sorted(data['outputs'].keys()), ['bai', 'bam', 'bcf'])
-        self.assertEqual(data['outputs']['bam']['step'], 'sort')
-        self.assertEqual(data['outputs']['bam']['output'], 'bam')
-        self.assertEqual(data['outputs']['bai']['step'], 'sort')
-        self.assertEqual(data['outputs']['bai']['output'], 'bai')
-        self.assertEqual(data['outputs']['bcf']['step'], 'call')
-        self.assertEqual(data['outputs']['bcf']['output'], 'bcf')
+        self.assertEqual(data['outputs']['bam']['type'], 'file')
+        self.assertEqual(data['outputs']['bam']['value']['step'], 'sort')
+        self.assertEqual(data['outputs']['bam']['value']['output'], 'bam')
+        self.assertEqual(data['outputs']['bai']['value']['step'], 'sort')
+        self.assertEqual(data['outputs']['bai']['value']['output'], 'bai')
+        self.assertEqual(data['outputs']['bcf']['value']['step'], 'call')
+        self.assertEqual(data['outputs']['bcf']['value']['output'], 'bcf')
 
     def test_serialized_dag_is_self_contained(self):
         files, root = self._files()
@@ -336,43 +337,43 @@ class TestForce(ut.TestCase):
         files, root = self._files()
         data = force_file(os.path.join(root, 'reuse.swl'), files).to_dict()
         self.assertEqual([task['id'] for task in data['steps']], ['align'])
-        self.assertEqual(data['outputs']['bam']['step'], 'align')
-        self.assertEqual(data['outputs']['bam2']['step'], 'align')
+        self.assertEqual(data['outputs']['bam']['value']['step'], 'align')
+        self.assertEqual(data['outputs']['bam2']['value']['step'], 'align')
 
     def test_reused_computation_across_imported_workflow_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'shadow.swl'), files).to_dict()
         self.assertEqual([task['id'] for task in data['steps']], ['align', 'sub'])
-        self.assertEqual(data['outputs']['bam']['step'], 'align')
-        self.assertEqual(data['outputs']['bam2']['step'], 'sub')
+        self.assertEqual(data['outputs']['bam']['value']['step'], 'align')
+        self.assertEqual(data['outputs']['bam2']['value']['step'], 'sub')
 
     def test_partial_application_reuse_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'partial_reuse.swl'), files).to_dict()
         self.assertEqual([task['id'] for task in data['steps']], ['align'])
-        self.assertEqual(data['outputs']['bam']['step'], 'align')
-        self.assertEqual(data['outputs']['bam2']['step'], 'align')
+        self.assertEqual(data['outputs']['bam']['value']['step'], 'align')
+        self.assertEqual(data['outputs']['bam2']['value']['step'], 'align')
 
     def test_workflow_partial_application_reuse_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'workflow_partial_reuse.swl'), files).to_dict()
         self.assertEqual([task['id'] for task in data['steps']], ['mk'])
-        self.assertEqual(data['outputs']['bam']['step'], 'mk')
-        self.assertEqual(data['outputs']['bam2']['step'], 'mk')
+        self.assertEqual(data['outputs']['bam']['value']['step'], 'mk')
+        self.assertEqual(data['outputs']['bam2']['value']['step'], 'mk')
 
     def test_nested_workflow_value_reuse_is_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'nested_lambda_reuse.swl'), files).to_dict()
         self.assertEqual([task['id'] for task in data['steps']], ['sub'])
-        self.assertEqual(data['outputs']['bam']['step'], 'sub')
-        self.assertEqual(data['outputs']['bam2']['step'], 'sub')
+        self.assertEqual(data['outputs']['bam']['value']['step'], 'sub')
+        self.assertEqual(data['outputs']['bam2']['value']['step'], 'sub')
 
     def test_partial_application_with_different_args_is_not_deduped(self):
         files, root = self._files()
         data = force_file(os.path.join(root, 'partial_different.swl'), files).to_dict()
         self.assertEqual([task['id'] for task in data['steps']], ['align', 'align_2'])
-        self.assertEqual(data['outputs']['bam']['step'], 'align')
-        self.assertEqual(data['outputs']['bam2']['step'], 'align_2')
+        self.assertEqual(data['outputs']['bam']['value']['step'], 'align')
+        self.assertEqual(data['outputs']['bam2']['value']['step'], 'align_2')
 
     def test_map_force_produces_mapped_step_and_tab_column_binding(self):
         files, root = self._files()

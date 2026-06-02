@@ -1,6 +1,6 @@
 import json
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, Record, StepCall
+from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 
 
 def transpile_dag_file(path):
@@ -231,7 +231,8 @@ def _dag_to_nf(dag, workflow_id, processes):
 
     if dag.outputs:
         lines.append('')
-        for name, binding in dag.outputs.items():
+        for name, output in dag.outputs.items():
+            binding = output.value if isinstance(output, OutputSpec) else output
             ch_expr = _binding_to_channel(binding, channels, None)
             lines.append(f'    {name}_out = {ch_expr}')
             lines.append(f'    emit: {name}_out')
@@ -415,7 +416,8 @@ def _validate_supported(dag):
         for name, binding in step.bindings.items():
             _validate_binding(binding, step)
 
-    for name, binding in dag.outputs.items():
+    for name, output in dag.outputs.items():
+        binding = output.value if isinstance(output, OutputSpec) else output
         _validate_output_binding(binding, name)
 
 

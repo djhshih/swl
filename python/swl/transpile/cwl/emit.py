@@ -1,7 +1,7 @@
 import json
 import os
 
-from swl.ir.dag import DAG, Record
+from swl.ir.dag import DAG, OutputSpec, Record
 
 
 def transpile_dag_file(path):
@@ -28,7 +28,8 @@ def transpile_dag_dict(data, workflow_id='main'):
                 record_tools.append(tool)
                 record_map[(step.id, name)] = (step_entry, source)
 
-    for name, value in list(dag.outputs.items()):
+    for name, output in list(dag.outputs.items()):
+        value = output.value if isinstance(output, OutputSpec) else output
         if isinstance(value, Record):
             tool, step_entry, source = _emit_record_tool('outputs', name, value, dag)
             record_tools.append(tool)
@@ -82,16 +83,17 @@ def transpile_dag_dict(data, workflow_id='main'):
         wf_steps.insert(0, step_entry)
 
     outputs = []
-    for name, value in dag.outputs.items():
+    for name, output in dag.outputs.items():
+        value = output.value if isinstance(output, OutputSpec) else output
         if name in record_output_map:
             _, source = record_output_map[name]
             outputs.append({
                 'id': f'#{workflow_id}/{name}',
-                'type': 'File',
+                'type': _cwl_type(output.type) if isinstance(output, OutputSpec) and output.type is not None else 'File',
                 'outputSource': source,
             })
         else:
-            outputs.append(_workflow_output_to_cwl(workflow_id, name, value, dag))
+            outputs.append(_workflow_output_to_cwl(workflow_id, name, output, dag))
 
     workflow = {
         'id': '#main',
@@ -164,11 +166,13 @@ def _workflow_input_to_cwl(workflow_id, name, spec):
     }
 
 
-def _workflow_output_to_cwl(workflow_id, name, value, dag):
+def _workflow_output_to_cwl(workflow_id, name, output, dag):
+    value = output.value if isinstance(output, OutputSpec) else output
     source = _binding_source(workflow_id, value)
+    output_type = output.type if isinstance(output, OutputSpec) else _infer_output_type(name, value, dag)
     return {
         'id': f'#{workflow_id}/{name}',
-        'type': _infer_output_type(name, value, dag),
+        'type': _cwl_type(output_type),
         'outputSource': source,
     }
 
@@ -282,7 +286,8 @@ def _validate_supported(dag):
     for step in dag.steps:
         if getattr(step, 'map', None) is not None and step.map.get('group_by') is not None:
             _validate_map_by_preconditions(step)
-    for name, value in dag.outputs.items():
+    for name, output in dag.outputs.items():
+        value = output.value if isinstance(output, OutputSpec) else output
         error = _workflow_output_error(value)
         if error is not None:
             raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: {error}')
@@ -429,15 +434,23 @@ def _as_array_type(value):
 
 
 def _cwl_type(value):
+    optional = isinstance(value, str) and value.endswith('?')
+    if optional:
+        value = value[:-1]
     if value == '[file]':
+        base = {'type': 'array', 'items': 'File'}
+        return ['null', base] if optional else base
         return {'type': 'array', 'items': 'File'}
     if value == '[str]':
-        return {'type': 'array', 'items': 'string'}
+        base = {'type': 'array', 'items': 'string'}
+        return ['null', base] if optional else base
     if value == '[int]':
-        return {'type': 'array', 'items': 'int'}
+        base = {'type': 'array', 'items': 'int'}
+        return ['null', base] if optional else base
     if value == '[float]':
-        return {'type': 'array', 'items': 'float'}
-    return {
+        base = {'type': 'array', 'items': 'float'}
+        return ['null', base] if optional else base
+    base = {
         'file': 'File',
         'str': 'string',
         'string': 'string',
@@ -446,6 +459,7 @@ def _cwl_type(value):
         'bool': 'boolean',
         'boolean': 'boolean',
     }.get(value, 'string')
+    return ['null', base] if optional else base
 
 
 def _interp_to_cwl_glob(value):

@@ -177,7 +177,9 @@ map call_variant
         self._assert_wdl_contains(wdl, 'command <<<')
         self._assert_wdl_contains(wdl, 'bwa mem -t ~{cpu} ~{ref} ~{fastq1} ~{fastq2}')
         self._assert_wdl_contains(wdl, 'output {')
-        self._assert_wdl_contains(wdl, 'File bam = "~{outbase}.bam"')
+        self._assert_wdl_contains(wdl, 'File bam = sort.bam')
+        self._assert_wdl_contains(wdl, 'File bai = sort.bai')
+        self._assert_wdl_contains(wdl, 'File bcf = call.bcf')
         self._assert_wdl_contains(wdl, 'requirements {')
         self._assert_wdl_contains(wdl, 'cpu: 2')
         self._assert_wdl_contains(wdl, 'memory: "8192 MB"')
@@ -293,6 +295,15 @@ map call_variant
         dag = force_file(os.path.join(root, 'bad_expr.swl'), files)
         wdl = transpile_dag_dict(dag.to_dict())
         self.assertIn('~{outbase / 2}', wdl)
+
+    def test_outputspec_type_is_used_for_workflow_outputs(self):
+        dag = DAG(
+            inputs={'x': Input('x', type='file?', desc=None, optional=True)},
+            steps=[],
+            outputs={'x': type('OutputSpec', (), {'type': 'file?', 'desc': None, 'optional': True, 'value': Input('x', type='file?', desc=None, optional=True)})()},
+        )
+        wdl = transpile_dag_dict(dag.to_dict())
+        self.assertIn('File? x = x', wdl)
 
     def test_wdl_type_mapping(self):
         from swl.transpile.wdl.emit import _wdl_type

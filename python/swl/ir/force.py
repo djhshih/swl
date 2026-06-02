@@ -2,7 +2,7 @@ import re
 from typing import Dict, List, Tuple
 
 from swl.ir import node as ir
-from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, Record, StepCall, TableSource
+from swl.ir.dag import DAG, Field, ForcedFunction, Input, Literal, Merge, OutputSpec, Record, StepCall, TableSource
 from swl.ir.lower import Lowerer
 from swl.semantic.task.type import signature_from_task
 from swl.semantic.wf.check import _validate_bash_variables
@@ -54,10 +54,11 @@ class Forcer:
         self._flatten_step_bindings()
         outputs = self._final_outputs(value)
         outputs = self._flatten_outputs(outputs)
-        for name, output in outputs.items():
-            self._assert_wireable_output(name, output)
-        self._prune_unused_inputs(value, outputs)
-        dag = DAG(dict(self.inputs), list(self.steps), outputs)
+        output_specs = self._build_output_specs(outputs)
+        for name, output in output_specs.items():
+            self._assert_wireable_output(name, output.value)
+        self._prune_unused_inputs(value, output_specs)
+        dag = DAG(dict(self.inputs), list(self.steps), output_specs)
         dag.validate()
         return dag
 
@@ -655,6 +656,17 @@ class Forcer:
                 flat[name] = flattened
         return flat
 
+    def _build_output_specs(self, outputs):
+        return {
+            name: OutputSpec(
+                type=self._infer_output_type(value),
+                desc=None,
+                optional=self._is_optional_output(value),
+                value=value,
+            )
+            for name, value in outputs.items()
+        }
+
     def _flatten_merge_value(self, value):
         if isinstance(value, Merge):
             terms = _flatten_value_terms(value)
@@ -753,8 +765,8 @@ class Forcer:
                 for item in self._walk_values(mapped_source):
                     if isinstance(item, Input) and not mapped_ports:
                         used.add(item.name)
-        for value in outputs.values():
-            for item in self._walk_values(value):
+        for output in outputs.values():
+            for item in self._walk_values(output.value if isinstance(output, OutputSpec) else output):
                 if isinstance(item, Input):
                     used.add(item.name)
         for step in self.steps:
@@ -879,6 +891,42 @@ class Forcer:
         if fields is not None:
             return fields
         return {'result': value}
+
+    def _infer_output_type(self, value):
+        normalized = _normalize_output_value(value)
+        if isinstance(normalized, Input):
+            return normalized.type
+        if isinstance(normalized, Literal):
+            if isinstance(normalized.value, bool):
+                return 'bool'
+            if isinstance(normalized.value, int):
+                return 'int'
+            if isinstance(normalized.value, float):
+                return 'float'
+            if isinstance(normalized.value, str):
+                return 'str'
+            return None
+        if isinstance(normalized, Field):
+            if isinstance(normalized.source, Input):
+                source_type = normalized.source.type
+                if source_type and source_type.startswith('[') and source_type.endswith(']'):
+                    return source_type[1:-1]
+                return None
+            if isinstance(normalized.source, StepCall):
+                spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
+                typ = spec.get('type')
+                if getattr(normalized.source, 'map', None) is not None and typ is not None:
+                    return self._as_array_type(typ)
+                return typ
+            if isinstance(normalized.source, Field):
+                return None
+        if isinstance(normalized, Record):
+            return None
+        return None
+
+    def _is_optional_output(self, value):
+        output_type = self._infer_output_type(value)
+        return bool(output_type and output_type.endswith('?'))
 
     def _assert_wireable_output(self, name, value):
         normalized = _normalize_output_value(value)

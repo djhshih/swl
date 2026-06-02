@@ -164,6 +164,7 @@ map call_variant
         self.assertEqual([item['id'] for item in tools], ['#align', '#sort', '#call'])
         workflow = cwl['$graph'][-1]
         outputs = {item['id']: item for item in workflow['outputs']}
+        self.assertEqual(outputs['#main/bam']['type'], 'File')
         self.assertEqual(outputs['#main/bam']['outputSource'], '#main/sort/bam')
         self.assertEqual(outputs['#main/bai']['outputSource'], '#main/sort/bai')
         self.assertEqual(outputs['#main/bcf']['outputSource'], '#main/call/bcf')
@@ -458,6 +459,17 @@ map call_variant
         out = next(o for o in workflow['outputs'] if o['id'] == '#main/rec_out')
         self.assertEqual(out['type'], 'File')
         self.assertIn('rec_outputs_rec_out', out['outputSource'])
+
+    def test_optional_workflow_output_uses_null_union_type(self):
+        dag = DAG(
+            inputs={'x': Input('x', type='file?', desc=None, optional=True)},
+            steps=[],
+            outputs={'x': type('OutputSpec', (), {'type': 'file?', 'desc': None, 'optional': True, 'value': Input('x', type='file?', desc=None, optional=True)})()},
+        )
+        cwl = transpile_dag_dict(dag.to_dict())
+        workflow = cwl['$graph'][-1]
+        out = next(o for o in workflow['outputs'] if o['id'] == '#main/x')
+        self.assertEqual(out['type'], ['null', 'File'])
 
     def test_record_binding_no_longer_rejected(self):
         dag = DAG(

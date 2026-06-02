@@ -92,6 +92,14 @@ class Output:
 
 
 @dataclass(frozen=True)
+class OutputSpec:
+    type: Optional[str]
+    value: object
+    desc: Optional[str] = None
+    optional: bool = False
+
+
+@dataclass(frozen=True)
 class ForcedFunction:
     function: object
     bound: Optional[object] = None
@@ -103,7 +111,7 @@ class ForcedFunction:
 class DAG:
     inputs: Dict[str, Input]
     steps: List[StepCall]
-    outputs: Dict[str, object]
+    outputs: Dict[str, OutputSpec]
 
     def __init__(self, inputs, steps=None, outputs=None):
         self.inputs = inputs
@@ -148,7 +156,19 @@ class DAG:
                 }
                 for step in self.steps
             ],
-            'outputs': {name: _binding_to_dict(value) for name, value in self.outputs.items()},
+            'outputs': {
+                name: (
+                    {
+                        'type': value.type,
+                        'desc': value.desc,
+                        'optional': value.optional,
+                        'value': _binding_to_dict(value.value),
+                    }
+                    if isinstance(value, OutputSpec) or (hasattr(value, 'value') and hasattr(value, 'type'))
+                    else _binding_to_dict(value)
+                )
+                for name, value in self.outputs.items()
+            },
         }
 
     def validate(self):
@@ -222,7 +242,7 @@ class DAG:
                 for name, value in item.get('bindings', {}).items()
             })
         outputs = {
-            name: _binding_from_dict(value, inputs, step_by_id)
+            name: _output_spec_from_dict(value, inputs, step_by_id)
             for name, value in data.get('outputs', {}).items()
         }
         return cls(inputs, steps, outputs)
@@ -260,6 +280,8 @@ def _binding_to_dict(value):
 
 
 def _binding_from_dict(data, inputs, steps):
+    if not isinstance(data, dict):
+        return Literal(data)
     if 'step' in data and 'output' in data:
         step = steps[data['step']]
         return Field(step, data['output'])
@@ -350,6 +372,17 @@ def _binding_from_binding_dict(name, data, inputs, steps):
         raise ValueError(f'Unsupported step binding during deserialization: {name}: {data!r}')
     step = steps[source]
     return Field(step, data['output'])
+
+
+def _output_spec_from_dict(data, inputs, steps):
+    if isinstance(data, dict) and 'value' in data:
+        return OutputSpec(
+            type=data.get('type'),
+            desc=data.get('desc'),
+            optional=data.get('optional', False),
+            value=_binding_from_dict(data['value'], inputs, steps),
+        )
+    return OutputSpec(type=None, value=_binding_from_dict(data, inputs, steps))
 
 
 def _run_param_to_dict(spec, value):

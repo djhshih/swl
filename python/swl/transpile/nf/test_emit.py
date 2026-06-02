@@ -299,6 +299,15 @@ map call_variant
         nf = transpile_dag_dict(dag.to_dict())
         self._assert_nf_contains(nf, 'workflow {')
 
+    def test_outputspec_passthrough_still_emits_workflow_output_channel(self):
+        dag = DAG(
+            inputs={'x': Input('x', type='file?', desc=None, optional=True)},
+            steps=[],
+            outputs={'x': type('OutputSpec', (), {'type': 'file?', 'desc': None, 'optional': True, 'value': Input('x', type='file?', desc=None, optional=True)})()},
+        )
+        nf = transpile_dag_dict(dag.to_dict())
+        self._assert_nf_contains(nf, 'x_out = x_ch', 'emit: x_out')
+
     def test_rejects_record_binding(self):
         dag = DAG(
             inputs={'a': Input('a', type='file', desc=None)},

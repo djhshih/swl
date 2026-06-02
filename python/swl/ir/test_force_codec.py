@@ -192,6 +192,17 @@ call  = import "call.sh"
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
 
+    def test_outputs_round_trip_as_outputspec(self):
+        files, root = self._files()
+        dag = force_file(os.path.join(root, 'pipe.swl'), files)
+        data = dag.to_dict()
+        self.assertIn('type', data['outputs']['bam'])
+        self.assertIn('value', data['outputs']['bam'])
+        self.assertEqual(data['outputs']['bam']['type'], 'file')
+        self.assertEqual(data['outputs']['bam']['value'], {'step': 'sort', 'output': 'bam'})
+        restored = DAG.from_dict(data)
+        self.assertEqual(restored.to_dict(), data)
+
     def test_dag_validate_detects_circular_dependency(self):
         dag = DAG(
             inputs={},
