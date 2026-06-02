@@ -191,10 +191,14 @@ map call_variant
         wdl = transpile_dag_dict(dag.to_dict())
         self.assertIn('~{outbase}.bam', wdl)
 
-    def test_rejects_non_task_workflow_output(self):
-        dag = DAG(inputs={}, steps=[], outputs={'x': Literal(1)})
+    def test_rejects_old_style_non_outputspec_workflow_output(self):
+        bad = {
+            'inputs': {},
+            'steps': [],
+            'outputs': {'x': {'source': 'literal', 'value': 1}},
+        }
         with self.assertRaisesRegex(ValueError, 'WDL does not support literal workflow outputs'):
-            transpile_dag_dict(dag.to_dict())
+            transpile_dag_dict(bad)
 
     def test_partial_workflow_transpiles(self):
         files, root = self._files()
@@ -229,7 +233,7 @@ map call_variant
                 'run': {},
                 'script': 'echo hi\n',
             }],
-            'outputs': {'bam': {'step': 'align', 'output': 'bam'}},
+            'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
         with self.assertRaisesRegex(ValueError, 'merge'):
             transpile_dag_dict(bad)
@@ -277,9 +281,9 @@ map call_variant
                 'outputs': {'sample': {'type': 'str'}},
                 'run': {},
                 'script': '',
-                'definition': {'class': 'Workflow', 'dag': {'inputs': {'sample': {'type': 'str', 'desc': None}}, 'steps': [], 'outputs': {'sample': {'source': 'input', 'name': 'sample'}}}, 'inputs': {'sample': {'type': 'str', 'desc': None}}, 'outputs': {'sample': {'type': 'str'}}, 'body': '', 'run': {}},
+                'definition': {'class': 'Workflow', 'dag': {'inputs': {'sample': {'type': 'str', 'desc': None}}, 'steps': [], 'outputs': {'sample': {'type': 'str', 'desc': None, 'value': {'source': 'input', 'name': 'sample'}}}}, 'inputs': {'sample': {'type': 'str', 'desc': None}}, 'outputs': {'sample': {'type': 'str'}}, 'body': '', 'run': {}},
             }],
-            'outputs': {'sample': {'step': 'grouped', 'output': 'sample'}},
+            'outputs': {'sample': {'type': '[str]', 'desc': None, 'value': {'step': 'grouped', 'output': 'sample'}}},
         }
         wdl = transpile_dag_dict(bad)
         self._assert_wdl_contains(wdl, 'collect_by_key')
@@ -384,7 +388,7 @@ map call_variant
                 'inp_str': DagInput('inp_str', type='str', desc=None),
             },
             steps=[producer, consumer],
-            outputs={'out': Field(consumer, 'out')},
+            outputs={'out': OutputSpec(type='file', desc=None, value=Field(consumer, 'out'))},
         )
         wdl = transpile_dag_dict(dag.to_dict())
         self.assertIn('struct _Rec_F_file_F_int_F_step_F_str {', wdl)

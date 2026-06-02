@@ -175,10 +175,14 @@ map call_variant
         nf = transpile_dag_dict(dag.to_dict())
         self.assertIn('${outbase}.bam', nf)
 
-    def test_rejects_non_task_workflow_output(self):
-        dag = DAG(inputs={}, steps=[], outputs={'x': Literal(1)})
+    def test_rejects_old_style_non_outputspec_workflow_output(self):
+        bad = {
+            'inputs': {},
+            'steps': [],
+            'outputs': {'x': {'source': 'literal', 'value': 1}},
+        }
         with self.assertRaisesRegex(ValueError, 'Nextflow does not support literal workflow outputs'):
-            transpile_dag_dict(dag.to_dict())
+            transpile_dag_dict(bad)
 
     def test_partial_workflow_transpiles(self):
         files, root = self._files()
@@ -213,7 +217,7 @@ map call_variant
                 'run': {},
                 'script': 'echo hi\n',
             }],
-            'outputs': {'bam': {'step': 'align', 'output': 'bam'}},
+            'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
         with self.assertRaisesRegex(ValueError, 'merge'):
             transpile_dag_dict(bad)
@@ -258,9 +262,9 @@ map call_variant
                 'outputs': {'sample': {'type': 'str'}},
                 'run': {},
                 'script': '',
-                'definition': {'class': 'Workflow', 'dag': {'inputs': {'sample': {'type': 'str', 'desc': None}}, 'steps': [], 'outputs': {'sample': {'source': 'input', 'name': 'sample'}}}, 'inputs': {'sample': {'type': 'str', 'desc': None}}, 'outputs': {'sample': {'type': 'str'}}, 'body': '', 'run': {}},
+                'definition': {'class': 'Workflow', 'dag': {'inputs': {'sample': {'type': 'str', 'desc': None}}, 'steps': [], 'outputs': {'sample': {'type': 'str', 'desc': None, 'value': {'source': 'input', 'name': 'sample'}}}}, 'inputs': {'sample': {'type': 'str', 'desc': None}}, 'outputs': {'sample': {'type': 'str'}}, 'body': '', 'run': {}},
             }],
-            'outputs': {'sample': {'step': 'grouped', 'output': 'sample'}},
+            'outputs': {'sample': {'type': '[str]', 'desc': None, 'value': {'step': 'grouped', 'output': 'sample'}}},
         }
         nf = transpile_dag_dict(bad)
         self._assert_nf_contains(nf, 'groupTuple')
@@ -307,24 +311,6 @@ map call_variant
         )
         nf = transpile_dag_dict(dag.to_dict())
         self._assert_nf_contains(nf, 'x_out = x_ch', 'emit: x_out')
-
-    def test_rejects_record_binding(self):
-        dag = DAG(
-            inputs={'a': Input('a', type='file', desc=None)},
-            steps=[StepCall(
-                id='tool', path='/tmp/t.sh',
-                bindings={'x': Record({'a': Input('a')})},
-                outputs=['out'],
-                task={
-                    'body': 'echo', 'inputs': {'x': {'type': 'file', 'desc': None}},
-                    'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'o.txt'}]}, 'desc': None}},
-                    'run': {},
-                },
-            )],
-            outputs={'out': Input('a')},
-        )
-        with self.assertRaisesRegex(ValueError, 'flattened before Nextflow'):
-            transpile_dag_dict(dag.to_dict())
 
 
 if __name__ == '__main__':

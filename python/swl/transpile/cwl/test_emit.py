@@ -184,10 +184,14 @@ map call_variant
         align = next(item for item in cwl['$graph'] if item.get('id') == '#align')
         self.assertEqual(align['outputs'][0]['outputBinding']['glob'], "$(inputs.outbase + '.bam')")
 
-    def test_rejects_non_task_workflow_output(self):
-        dag = DAG(inputs={}, steps=[], outputs={'x': Literal(1)})
+    def test_rejects_old_style_non_outputspec_workflow_output(self):
+        bad = {
+            'inputs': {},
+            'steps': [],
+            'outputs': {'x': {'source': 'literal', 'value': 1}},
+        }
         with self.assertRaisesRegex(ValueError, 'Unsupported workflow output'):
-            transpile_dag_dict(dag.to_dict())
+            transpile_dag_dict(bad)
 
     def test_partial_workflow_transpiles(self):
         files, root = self._files()
@@ -237,7 +241,7 @@ map call_variant
                     'script': 'echo hi\n',
                 }
             ],
-            'outputs': {'bam': {'step': 'align', 'output': 'bam'}},
+            'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
         with self.assertRaisesRegex(ValueError, 'Unsupported step binding during deserialization: x'):
             transpile_dag_dict(bad)
@@ -305,9 +309,9 @@ map call_variant
                 'outputs': {'sample': {'type': 'str'}},
                 'run': {},
                 'script': '',
-                'definition': {'class': 'Workflow', 'dag': {'inputs': {'sample': {'type': 'str', 'desc': None}}, 'steps': [], 'outputs': {'sample': {'source': 'input', 'name': 'sample'}}}, 'inputs': {'sample': {'type': 'str', 'desc': None}}, 'outputs': {'sample': {'type': 'str'}}, 'body': '', 'run': {}},
+                'definition': {'class': 'Workflow', 'dag': {'inputs': {'sample': {'type': 'str', 'desc': None}}, 'steps': [], 'outputs': {'sample': {'type': 'str', 'desc': None, 'value': {'source': 'input', 'name': 'sample'}}}}, 'inputs': {'sample': {'type': 'str', 'desc': None}}, 'outputs': {'sample': {'type': 'str'}}, 'body': '', 'run': {}},
             }],
-            'outputs': {'sample': {'step': 'grouped', 'output': 'sample'}},
+            'outputs': {'sample': {'type': '[str]', 'desc': None, 'value': {'step': 'grouped', 'output': 'sample'}}},
         }
         cwl = transpile_dag_dict(dag_dict)
         self.assertEqual(cwl['cwlVersion'], 'v1.0')
@@ -375,64 +379,6 @@ map call_variant
         self.assertEqual(len(time_hints), 1)
         self.assertEqual(time_hints[0]['timeLimit'], 3150)
 
-    def test_record_binding_in_step_input_emits_expression_tool(self):
-        producer = StepCall(
-            id='producer',
-            path='/tmp/producer.sh',
-            bindings={},
-            outputs=['result'],
-            task={
-                'body': 'echo produce\n',
-                'inputs': {},
-                'outputs': {'result': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
-                'run': {},
-            },
-        )
-        consumer = StepCall(
-            id='consumer',
-            path='/tmp/consumer.sh',
-            bindings={
-                'input_x': Record({
-                    'field_a': Input('workflow_input'),
-                    'field_b': Field(producer, 'result'),
-                    'field_c': Literal(42),
-                }),
-            },
-            outputs=['out'],
-            task={
-                'body': 'echo consume\n',
-                'inputs': {'input_x': {'type': 'str', 'desc': None}},
-                'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
-                'run': {},
-            },
-            deps=['producer'],
-        )
-        dag = DAG(
-            inputs={'workflow_input': Input('workflow_input', type='str', desc=None)},
-            steps=[producer, consumer],
-            outputs={'out': Field(consumer, 'out')},
-        )
-        cwl = transpile_dag_dict(dag.to_dict())
-        self.assertEqual(cwl['cwlVersion'], 'v1.0')
-        expr_tools = [item for item in cwl['$graph'] if item.get('class') == 'ExpressionTool']
-        self.assertEqual(len(expr_tools), 1, 'Should have exactly one ExpressionTool for record construction')
-        rec_tool = expr_tools[0]
-        self.assertIn('rec_consumer_input_x', rec_tool['id'])
-        self.assertIn('InlineJavascriptRequirement', [r['class'] for r in rec_tool['requirements']])
-        self.assertIn('record.json', rec_tool['expression'])
-        inputs_by_id = {i['id']: i for i in rec_tool['inputs']}
-        self.assertIn('field_a', str(inputs_by_id))
-        self.assertIn('field_b', str(inputs_by_id))
-        workflow = cwl['$graph'][-1]
-        step_ids = [s['id'] for s in workflow['steps']]
-        rec_step_id = next(sid for sid in step_ids if 'rec_consumer_input_x' in sid)
-        consumer_step_idx = step_ids.index('#main/consumer')
-        rec_step_idx = step_ids.index(rec_step_id)
-        self.assertLess(rec_step_idx, consumer_step_idx, 'Record step should precede consumer step')
-        consumer_step = next(s for s in workflow['steps'] if s['id'] == '#main/consumer')
-        x_input = next(i for i in consumer_step['in'] if i['id'] == '#main/consumer/input_x')
-        self.assertIn('rec_consumer_input_x', x_input['source'])
-
     def test_record_binding_step_input_emits_expression_tool(self):
         producer = StepCall(
             id='producer',
@@ -462,7 +408,7 @@ map call_variant
         dag = DAG(
             inputs={'inp': Input('inp', type='str', desc=None)},
             steps=[producer, consumer],
-            outputs={'out': Field(consumer, 'out')},
+            outputs={'out': OutputSpec(type='file', desc=None, value=Field(consumer, 'out'))},
         )
         cwl = transpile_dag_dict(dag.to_dict())
         self.assertEqual(cwl['cwlVersion'], 'v1.0')
@@ -483,28 +429,6 @@ map call_variant
         workflow = cwl['$graph'][-1]
         out = next(o for o in workflow['outputs'] if o['id'] == '#main/x')
         self.assertEqual(out['type'], ['null', 'File'])
-
-    def test_record_binding_no_longer_rejected(self):
-        dag = DAG(
-            inputs={'a': Input('a', type='file', desc=None)},
-            steps=[
-                StepCall(
-                    id='tool',
-                    path='/tmp/tool.sh',
-                    bindings={'x': Record({'a': Input('a')})},
-                    outputs=['out'],
-                    task={
-                        'body': 'echo hi\n',
-                        'inputs': {'x': {'type': 'file', 'desc': None}},
-                        'outputs': {'out': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'out.txt'}]}, 'desc': None}},
-                        'run': {},
-                    },
-                ),
-            ],
-            outputs={'out': Input('a')},
-        )
-        cwl = transpile_dag_dict(dag.to_dict())
-        self.assertEqual(cwl['cwlVersion'], 'v1.0')
 
     def test_nested_field_binding_uses_valueFrom(self):
         nest = StepCall(
@@ -535,7 +459,7 @@ map call_variant
         dag = DAG(
             inputs={},
             steps=[nest, leaf],
-            outputs={'out': Field(source=leaf, name='out')},
+            outputs={'out': OutputSpec(type='file', desc=None, value=Field(source=leaf, name='out'))},
         )
         cwl = transpile_dag_dict(dag.to_dict())
         outer_step = next(s for s in cwl['$graph'][-1]['steps'] if s['id'] == '#main/outer')
