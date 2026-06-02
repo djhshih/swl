@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from swl.ir.dag import DAG, Input, Literal, Merge, Record, StepCall, Field
+from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.ir.force import force_file
 from swl.transpile.cwl.emit import transpile_dag_dict
 
@@ -449,7 +449,7 @@ map call_variant
         dag = DAG(
             inputs={'inp': Input('inp', type='str', desc=None)},
             steps=[producer],
-            outputs={'rec_out': Record({'a': Input('inp'), 'b': Field(producer, 'result')})},
+            outputs={'rec_out': OutputSpec(type='record', value=Record({'a': Input('inp'), 'b': Field(producer, 'result')}), desc=None, optional=False)},
         )
         cwl = transpile_dag_dict(dag.to_dict())
         self.assertEqual(cwl['cwlVersion'], 'v1.0')
@@ -457,14 +457,14 @@ map call_variant
         self.assertEqual(len(expr_tools), 1, 'Should have exactly one ExpressionTool for record output')
         workflow = cwl['$graph'][-1]
         out = next(o for o in workflow['outputs'] if o['id'] == '#main/rec_out')
-        self.assertEqual(out['type'], 'File')
+        self.assertEqual(out['type'], 'string')
         self.assertIn('rec_outputs_rec_out', out['outputSource'])
 
     def test_optional_workflow_output_uses_null_union_type(self):
         dag = DAG(
             inputs={'x': Input('x', type='file?', desc=None, optional=True)},
             steps=[],
-            outputs={'x': type('OutputSpec', (), {'type': 'file?', 'desc': None, 'optional': True, 'value': Input('x', type='file?', desc=None, optional=True)})()},
+            outputs={'x': OutputSpec(type='file?', desc=None, optional=True, value=Input('x', type='file?', desc=None, optional=True))},
         )
         cwl = transpile_dag_dict(dag.to_dict())
         workflow = cwl['$graph'][-1]

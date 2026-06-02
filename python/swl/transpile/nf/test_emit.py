@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, Record, StepCall
+from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.ir.force import force_file
 from swl.transpile.nf.emit import transpile_dag_dict
 
@@ -303,7 +303,7 @@ map call_variant
         dag = DAG(
             inputs={'x': Input('x', type='file?', desc=None, optional=True)},
             steps=[],
-            outputs={'x': type('OutputSpec', (), {'type': 'file?', 'desc': None, 'optional': True, 'value': Input('x', type='file?', desc=None, optional=True)})()},
+            outputs={'x': OutputSpec(type='file?', desc=None, optional=True, value=Input('x', type='file?', desc=None, optional=True))},
         )
         nf = transpile_dag_dict(dag.to_dict())
         self._assert_nf_contains(nf, 'x_out = x_ch', 'emit: x_out')

@@ -89,7 +89,7 @@ def transpile_dag_dict(data, workflow_id='main'):
             _, source = record_output_map[name]
             outputs.append({
                 'id': f'#{workflow_id}/{name}',
-                'type': _cwl_type(output.type) if isinstance(output, OutputSpec) and output.type is not None else 'File',
+                'type': _cwl_type(output.type),
                 'outputSource': source,
             })
         else:

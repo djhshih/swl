@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, Record, StepCall
+from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.ir.force import force_file
 from swl.transpile.wdl.emit import transpile_dag_dict
 
@@ -300,7 +300,7 @@ map call_variant
         dag = DAG(
             inputs={'x': Input('x', type='file?', desc=None, optional=True)},
             steps=[],
-            outputs={'x': type('OutputSpec', (), {'type': 'file?', 'desc': None, 'optional': True, 'value': Input('x', type='file?', desc=None, optional=True)})()},
+            outputs={'x': OutputSpec(type='file?', desc=None, optional=True, value=Input('x', type='file?', desc=None, optional=True))},
         )
         wdl = transpile_dag_dict(dag.to_dict())
         self.assertIn('File? x = x', wdl)
