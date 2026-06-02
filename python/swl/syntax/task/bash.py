@@ -35,7 +35,12 @@ class Script:
 class Parser:
     def parse(self, body: str) -> Script:
         statements = []
-        for raw_line in body.splitlines():
+        lines = body.splitlines()
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        for raw_line in lines:
             line = raw_line.strip()
             if not line or line.startswith('#'):
                 continue

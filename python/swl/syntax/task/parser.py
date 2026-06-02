@@ -39,8 +39,6 @@ class Parser:
             break
 
         body = '\n'.join(lines[body_start:])
-        if script.endswith('\n') and body_start < len(lines):
-            body += '\n'
         return annotation, body
 
     def _strip_comment(self, line: str) -> str:
