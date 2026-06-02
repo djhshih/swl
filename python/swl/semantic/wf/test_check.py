@@ -209,6 +209,23 @@ _LAMBDA_BODY_SHADOW = '''x = 1
 _NON_FUNCTION_RECORD = '''{ foo: 1 }
 '''
 
+_FORWARD_REF = '''inner = import "align.sh"
+x = inner y
+y = { fastq1: "a", fastq2: "b", ref: "r", ref_fai: "r.fai", outbase: "o" }
+\\z -> z
+'''
+
+_SELF_REF = '''inner = import "align.sh"
+x = inner x
+\\z -> z
+'''
+
+_VALID_CROSS_REF = '''inner = import "align.sh"
+x = { fastq1: "a", fastq2: "b", ref: "r", ref_fai: "r.fai", outbase: "o" }
+y = inner x
+\\z -> z
+'''
+
 _NON_FUNCTION_SCALAR = '''1
 '''
 
@@ -535,6 +552,32 @@ class TestWorkflowCheck(ut.TestCase):
         path = self._write(root, 'lambda_body_shadow.swl', _LAMBDA_BODY_SHADOW)
         result = Checker().load(path)
         self.assertNotIn('Duplicate binding in scope: x', result.errors)
+
+    # P3: forward-reference detection ----------------------------------------
+
+    def test_forward_reference_reports_error(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'fwd_ref.swl', _FORWARD_REF)
+        result = Checker().load(path)
+        self.assertTrue(
+            any('Forward reference' in err for err in result.errors),
+            f'Expected forward reference error, got: {result.errors}',
+        )
+
+    def test_self_reference_reports_error(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'self_ref.swl', _SELF_REF)
+        result = Checker().load(path)
+        self.assertTrue(
+            any('references itself' in err for err in result.errors),
+            f'Expected self-reference error, got: {result.errors}',
+        )
+
+    def test_prior_binding_reference_is_valid(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'valid_cross.swl', _VALID_CROSS_REF)
+        result = Checker().load(path)
+        self.assertEqual([], result.errors)
 
     def test_batch_map_workflow_infers_concrete_table_inputs(self):
         root = self._make_fixture_dir()

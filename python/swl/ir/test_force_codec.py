@@ -3,8 +3,8 @@ import os
 import tempfile
 import unittest as ut
 
-from swl.ir.dag import StepCall
-from swl.ir.force import DAG, force_file
+from swl.ir.dag import Field, Input, Literal, OutputSpec, StepCall
+from swl.ir.force import DAG, Forcer, force_file
 from swl.ir.lower import Lowerer
 
 
@@ -249,6 +249,66 @@ call  = import "call.sh"
         files, root = self._files()
         with self.assertRaisesRegex(ValueError, 'Type mismatch for "outbase": file -> str'):
             Lowerer(files=files).lower_file(os.path.join(root, 'bad_pipe.swl'))
+
+    # P4b: mapped-port validation --------------------------------------------
+
+    def _mapped_step(self, id='m', scatter=None, broadcast=None, schema=None, extra_inputs=None):
+        schema = schema or {'x': 'str'}
+        input_names = list(schema.keys())
+        m = StepCall(
+            id=id, path=f'/{id}.sh', bindings={}, outputs=['r'],
+            map={'source': {'source': 'input', 'name': 'xs'},
+                 **({'scatter': scatter} if scatter is not None else {}),
+                 **({'broadcast': broadcast} if broadcast is not None else {})},
+            input_schema=schema, output_schema={'r': 'str'},
+            task={'body': '', 'inputs': {n: {'type': schema[n]} for n in input_names},
+                  'outputs': {'r': {'type': 'str'}}, 'run': {}},
+        )
+        return m
+
+    def test_validate_mapped_step_missing_scatter(self):
+        dag = DAG(
+            inputs={'xs': Input('xs', '[str]')},
+            steps=[self._mapped_step(scatter=None, broadcast=[])],
+            outputs={},
+        )
+        with self.assertRaisesRegex(ValueError, 'missing map.scatter'):
+            dag.validate()
+
+    def test_validate_mapped_step_missing_broadcast(self):
+        dag = DAG(
+            inputs={'xs': Input('xs', '[str]')},
+            steps=[self._mapped_step(scatter=['x'], broadcast=None)],
+            outputs={},
+        )
+        with self.assertRaisesRegex(ValueError, 'missing map.broadcast'):
+            dag.validate()
+
+    def test_validate_mapped_step_input_in_both_ports_raises(self):
+        dag = DAG(
+            inputs={'xs': Input('xs', '[str]')},
+            steps=[self._mapped_step(scatter=['x'], broadcast=['x'])],
+            outputs={},
+        )
+        with self.assertRaisesRegex(ValueError, 'appears in both'):
+            dag.validate()
+
+    def test_validate_mapped_step_input_in_neither_port_raises(self):
+        dag = DAG(
+            inputs={'xs': Input('xs', '[str]')},
+            steps=[self._mapped_step(scatter=[], broadcast=[], schema={'x': 'str', 'y': 'str'})],
+            outputs={},
+        )
+        with self.assertRaisesRegex(ValueError, 'neither scatter nor broadcast'):
+            dag.validate()
+
+    def test_validate_mapped_step_valid_inputs_pass(self):
+        dag = DAG(
+            inputs={'xs': Input('xs', '[str]'), 'y': Input('y', 'str')},
+            steps=[self._mapped_step(scatter=['x'], broadcast=['y'], schema={'x': 'str', 'y': 'str'})],
+            outputs={},
+        )
+        dag.validate()  # should not raise
 
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@ import os
 import unittest as ut
 
 from swl.ir import node as ir
-from swl.ir.dag import Input, Literal, Merge, Record, StepCall
+from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.ir.force import Forcer, ForceEnv, force_file
 from swl.ir.lower import lower_file
 
@@ -512,16 +512,35 @@ class TestForce(ut.TestCase):
         self.assertEqual(value.value, 2)
 
     def test_table_update_on_step_call_raises_error(self):
-        env = ForceEnv()
-        step = StepCall(id='align', path='/a.sh', bindings={}, outputs=['bam'])
-        env.bind('ys', step)
-        with self.assertRaisesRegex(ValueError, 'Record update.*on a task/workflow call result'):
+        with self.assertRaisesRegex(ValueError, 'Record update.*task/workflow call result'):
             Forcer().force_value(
-                ir.Update(
-                    ir.Name('ys'),
-                    ir.Record({'extra': ir.Literal('x')}),
-                ),
-                env,
+                ir.Update(ir.Name('align'), ir.Record({'ref': ir.Literal('hg38.fa')})),
+                ForceEnv(values={'align': StepCall('align', '/align.sh', {}, ['out'])}),
+            )
+
+    def test_table_update_right_side_step_call_raises_error(self):
+        with self.assertRaisesRegex(ValueError, 'Record update.*task/workflow call result'):
+            Forcer().force_value(
+                ir.Update(ir.Record({'ref': ir.Literal('hg38.fa')}), ir.Name('align')),
+                ForceEnv(values={'align': StepCall('align', '/align.sh', {}, ['out'])}),
+            )
+
+    def test_table_update_input_record_raises_error(self):
+        forcer = Forcer()
+        forcer.inputs['xs'] = Input('xs', '[str]')
+        with self.assertRaisesRegex(ValueError, 'Table-record update.*not supported'):
+            forcer.force_value(
+                ir.Update(ir.Input('xs'), ir.Record({'ref': ir.Literal('hg38.fa')})),
+                ForceEnv(),
+            )
+
+    def test_table_update_record_input_raises_error(self):
+        forcer = Forcer()
+        forcer.inputs['xs'] = Input('xs', '[str]')
+        with self.assertRaisesRegex(ValueError, 'Record-table update.*not supported'):
+            forcer.force_value(
+                ir.Update(ir.Record({'ref': ir.Literal('hg38.fa')}), ir.Input('xs')),
+                ForceEnv(),
             )
 
     def test_table_update_right_side_step_call_raises_error(self):
@@ -608,6 +627,224 @@ class TestForce(ut.TestCase):
         self.assertIsInstance(result, Record)
         self.assertIn('a', result.fields)
         self.assertEqual(result.fields['a'].value, 1)
+
+    # P4d: deeply nested merge trees -----------------------------------------
+
+    def test_deeply_nested_merge_tree_flattens_to_fields(self):
+        forcer = Forcer()
+        result = forcer._flatten_merge_value(
+            Merge(
+                Merge(
+                    Record({'a': Literal(1)}),
+                    Record({'b': Literal(2)}),
+                ),
+                Merge(
+                    Record({'c': Literal(3)}),
+                    Record({'d': Literal(4)}),
+                ),
+            )
+        )
+        self.assertIsInstance(result, Record)
+        self.assertEqual(set(result.fields.keys()), {'a', 'b', 'c', 'd'})
+
+    def test_deeply_nested_merge_in_step_bindings_vanishes_from_final_dag(self):
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x')
+        step = StepCall(id='test', path='/test.sh', bindings={
+            'in': Merge(
+                Merge(
+                    Record({'a': Literal(1)}),
+                    Record({'b': Literal(2)}),
+                ),
+                Input('x'),
+            ),
+        }, outputs=['out'])
+        forcer.steps = [step]
+        forcer._flatten_step_bindings()
+        self.assertEqual(set(step.bindings.keys()), {'a', 'b'})
+
+    def test_deeply_nested_merge_in_outputs_flattens_completely(self):
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x')
+        forcer.steps = []
+        flat = forcer._flatten_outputs({
+            'result': Merge(
+                Merge(
+                    Record({'a': Literal(1)}),
+                    Record({'b': Literal(2)}),
+                ),
+                Merge(
+                    Record({'c': Literal(3)}),
+                    Input('x'),
+                ),
+            ),
+        })
+        self.assertEqual(sorted(flat.keys()), ['a', 'b', 'c'])
+        for name in ('a', 'b', 'c'):
+            self.assertNotIsInstance(flat[name], (Merge, Record),
+                                     f'{name} should be a leaf binding, not Merge/Record')
+
+    def test_merge_flattening_three_way_records_merges_all_fields(self):
+        forcer = Forcer()
+        result = forcer._flatten_merge_value(
+            Merge(
+                Merge(
+                    Record({'a': Literal(1), 'b': Literal(2)}),
+                    Record({'c': Literal(3)}),
+                ),
+                Record({'d': Literal(4), 'e': Literal(5)}),
+            )
+        )
+        self.assertIsInstance(result, Record)
+        self.assertEqual(set(result.fields.keys()), {'a', 'b', 'c', 'd', 'e'})
+
+    def test_merge_flattening_overlapping_fields_right_wins(self):
+        forcer = Forcer()
+        result = forcer._flatten_merge_value(
+            Merge(
+                Merge(
+                    Record({'x': Literal(1)}),
+                    Record({'x': Literal(2)}),
+                ),
+                Record({'x': Literal(3)}),
+            )
+        )
+        self.assertEqual(result.fields['x'].value, 3)
+
+    # P4c: optionality propagation -------------------------------------------
+
+    def test_force_ir_input_optionality_propagates(self):
+        forcer = Forcer()
+        val = forcer.force_value(ir.Input('x', type='file?', desc=None), None)
+        self.assertTrue(forcer.inputs['x'].optional)
+        self.assertEqual(forcer.inputs['x'].type, 'file?')
+
+    def test_force_ir_input_required_when_no_question_mark(self):
+        forcer = Forcer()
+        val = forcer.force_value(ir.Input('x', type='file', desc=None), None)
+        self.assertFalse(forcer.inputs['x'].optional)
+
+    def test_force_ir_input_required_when_type_none(self):
+        forcer = Forcer()
+        val = forcer.force_value(ir.Input('x', type=None, desc=None), None)
+        self.assertFalse(forcer.inputs['x'].optional)
+
+    def test_optionality_serializes_in_dag_when_true(self):
+        dag = DAG(
+            inputs={'x': Input('x', 'file?', desc=None, optional=True)},
+            steps=[],
+            outputs={'y': OutputSpec(type='file', value=Input('x', 'file?', desc=None, optional=True))},
+        )
+        d = dag.to_dict()
+        self.assertEqual(d['inputs']['x']['optional'], True)
+
+    def test_optionality_omitted_from_dag_when_false(self):
+        dag = DAG(
+            inputs={'x': Input('x', 'file', desc=None, optional=False)},
+            steps=[],
+            outputs={'y': OutputSpec(type='file', value=Literal(42))},
+        )
+        d = dag.to_dict()
+        self.assertNotIn('optional', d['inputs']['x'])
+
+    # P4a: non-saturating records in DAG ------------------------------------
+
+    def test_non_saturating_record_in_step_binding_gets_flattened(self):
+        forcer = Forcer()
+        step = StepCall(id='test', path='/test.sh', bindings={
+            'params': Record({'x': Literal(1), 'y': Literal(2)}),
+        }, outputs=['out'],
+            task={'body': '', 'inputs': {'x': {'type': 'int'}, 'y': {'type': 'int'}},
+                  'outputs': {'out': {'type': 'int'}}, 'run': {}},
+        )
+        forcer.steps = [step]
+        forcer._flatten_step_bindings()
+        self.assertNotIn('params', step.bindings)
+        self.assertIn('x', step.bindings)
+        self.assertIn('y', step.bindings)
+        self.assertEqual(step.bindings['x'].value, 1)
+        self.assertEqual(step.bindings['y'].value, 2)
+
+    def test_non_saturating_record_in_outputs_gets_flattened(self):
+        forcer = Forcer()
+        forcer.steps = []
+        flat = forcer._flatten_outputs({
+            'nested': Record({
+                'a': Literal(1),
+                'b': Record({'c': Literal(3)}),
+            }),
+        })
+        self.assertIn('a', flat)
+        self.assertIn('b', flat)
+        self.assertEqual(flat['a'].value, 1)
+
+    # P1c: merge output patterns -------------------------------------------
+
+    def test_merge_record_field_stepcall_preserves_field(self):
+        step = StepCall(id='producer', path='/p.sh', bindings={}, outputs=['result'])
+        forcer = Forcer()
+        forcer.steps = []
+        result = forcer._flatten_merge_value(
+            Merge(
+                Record({'a': Literal(1)}),
+                Field(step, 'result'),
+            )
+        )
+        self.assertIsInstance(result, Record)
+        self.assertIn('a', result.fields)
+        self.assertIn('result', result.fields)
+        self.assertIs(result.fields['result'].source, step)
+
+    def test_merge_record_field_input_preserves_field(self):
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x', 'file')
+        result = forcer._flatten_merge_value(
+            Merge(
+                Record({'a': Literal(1)}),
+                Field(Input('x'), 'field_x'),
+            )
+        )
+        self.assertIsInstance(result, Record)
+        self.assertIn('a', result.fields)
+        self.assertIn('field_x', result.fields)
+
+    def test_merge_record_with_bare_input_drops_input(self):
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x', 'file')
+        result = forcer._flatten_merge_value(
+            Merge(
+                Record({'a': Literal(1)}),
+                Input('x'),
+            )
+        )
+        self.assertIsInstance(result, Record)
+        self.assertIn('a', result.fields)
+        self.assertNotIn('x', result.fields)
+
+    def test_end_to_end_merge_at_output_level_leaves_no_merge_in_dag(self):
+        step = StepCall(
+            id='producer', path='/p.sh', bindings={}, outputs=['out'],
+            task={'body': '', 'inputs': {}, 'outputs': {'out': {'type': 'file'}}, 'run': {}},
+        )
+        forcer = Forcer()
+        forcer.inputs['x'] = Input('x', 'file')
+        forcer.steps = [step]
+        dag = DAG(
+            inputs=dict(forcer.inputs),
+            steps=[step],
+            outputs={},
+        )
+        outputs = forcer._flatten_outputs({
+            'result': Merge(
+                Record({'a': Literal(1)}),
+                Record({'b': Field(step, 'out')}),
+            ),
+        })
+        for name, value in outputs.items():
+            self.assertNotIsInstance(
+                value, (Merge, Record),
+                f'Output {name!r} should not be Merge/Record after flattening, got {type(value).__name__}',
+            )
 
 
 if __name__ == '__main__':

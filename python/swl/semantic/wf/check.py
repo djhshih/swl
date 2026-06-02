@@ -239,15 +239,39 @@ class Checker:
     def _walk_scope(self, expr, scope, errors):
         if expr.type == wf_node.NodeType.block:
             local = set(scope)
+            bind_order = []
             for item in expr.body:
                 if item.type == wf_node.NodeType.bind:
+                    bind_order.append(item)
                     if item.id.name in local:
                         errors.append(f'Duplicate binding in scope: {item.id.name}')
                     else:
                         local.add(item.id.name)
-                    self._walk_scope(item.value, local, errors)
                 else:
                     self._walk_scope(item, local, errors)
+            for i, item in enumerate(bind_order):
+                defined_so_far = set(scope)
+                for j in range(i):
+                    defined_so_far.add(bind_order[j].id.name)
+                refs = self._collect_name_refs(item.value)
+                own_name = item.id.name
+                for ref in refs:
+                    if ref == own_name:
+                        errors.append(
+                            f'Forward reference in binding scope: {own_name} '
+                            f'references itself'
+                        )
+                    elif ref not in defined_so_far:
+                        is_future = any(
+                            ref == later.id.name
+                            for later in bind_order[i+1:]
+                        )
+                        if is_future:
+                            errors.append(
+                                f'Forward reference in binding scope: {own_name} '
+                                f'references {ref} before its definition'
+                            )
+                self._walk_scope(item.value, local, errors)
             return
 
         if expr.type == wf_node.NodeType.fun:
@@ -257,6 +281,18 @@ class Checker:
 
         for child in self._children(expr):
             self._walk_scope(child, scope, errors)
+
+    def _collect_name_refs(self, expr):
+        refs = []
+        self._walk_refs(expr, refs)
+        return refs
+
+    def _walk_refs(self, expr, refs):
+        if expr.type == wf_node.NodeType.id:
+            refs.append(expr.name)
+            return
+        for child in self._children(expr):
+            self._walk_refs(child, refs)
 
     def _check_chains(self, tree, checker: TypeChecker):
         errors = []

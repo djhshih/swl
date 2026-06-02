@@ -193,6 +193,33 @@ class DAG:
         for step in self.steps:
             if step.id not in visited:
                 visit(step.id)
+        for step in self.steps:
+            if step.map is not None:
+                self._validate_mapped_ports(step)
+
+    @staticmethod
+    def _validate_mapped_ports(step):
+        scatter = step.map.get('scatter')
+        broadcast = step.map.get('broadcast')
+        if scatter is None:
+            raise ValueError(f'Mapped step {step.id!r} is missing map.scatter')
+        if broadcast is None:
+            raise ValueError(f'Mapped step {step.id!r} is missing map.broadcast')
+        schema = step.input_schema or {}
+        input_names = set(scatter) | set(broadcast)
+        for name in schema:
+            in_scatter = name in scatter
+            in_broadcast = name in broadcast
+            if in_scatter and in_broadcast:
+                raise ValueError(
+                    f'Mapped step {step.id!r}: input {name!r} appears in both '
+                    f'scatter and broadcast'
+                )
+            if not in_scatter and not in_broadcast:
+                raise ValueError(
+                    f'Mapped step {step.id!r}: input {name!r} is neither '
+                    f'scatter nor broadcast'
+                )
 
     @classmethod
     def from_dict(cls, data):

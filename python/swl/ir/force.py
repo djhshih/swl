@@ -140,6 +140,18 @@ class Forcer:
                     f'Record update (//) on a task/workflow call result is not supported: '
                     f'right operand is a step call ({right.id})'
                 )
+            if isinstance(left, Input) and isinstance(right, Record):
+                raise ValueError(
+                    'Table-record update (tab // rec) is not supported during forcing: '
+                    f'a table input ({left.name}) cannot be merged with a record literal. '
+                    'Use explicit bindings instead of // on table inputs.'
+                )
+            if isinstance(left, Record) and isinstance(right, Input):
+                raise ValueError(
+                    'Record-table update (rec // tab) is not supported during forcing: '
+                    f'a table input ({right.name}) cannot be merged with a record literal. '
+                    'Use explicit bindings instead of // on table inputs.'
+                )
             return self._merge_values(left, right)
 
         if isinstance(node, ir.Function):
@@ -426,11 +438,18 @@ class Forcer:
         signature = self._forced_signature(fn)
         if signature is not None and signature.inputs:
             input_names = sorted(signature.inputs.keys())
-            info['scatter'] = list(input_names)
             if isinstance(logical_source, TableSource):
                 table_cols = set(logical_source.columns.keys())
-                info['broadcast'] = [n for n in input_names if n not in table_cols]
+                scatter_from_cols = [n for n in input_names if n in table_cols]
+                broadcast = [n for n in input_names if n not in table_cols]
+                if scatter_from_cols:
+                    info['scatter'] = scatter_from_cols
+                    info['broadcast'] = broadcast
+                else:
+                    info['scatter'] = list(input_names)
+                    info['broadcast'] = []
             else:
+                info['scatter'] = list(input_names)
                 info['broadcast'] = []
         return {}, info
 
@@ -701,7 +720,7 @@ class Forcer:
     def _unwrap_non_record(self, value):
         if isinstance(value, Input):
             return {}
-        if isinstance(value, Field) and isinstance(value.source, Input):
+        if isinstance(value, Field):
             return {value.name: value}
         return {}
 
@@ -908,32 +927,21 @@ class Forcer:
                 return 'str'
             return None
         if isinstance(normalized, Field):
-            source_type = self._infer_output_type(normalized.source)
-            if source_type and source_type.startswith('[') and source_type.endswith(']'):
-                return source_type[1:-1]
+            if isinstance(normalized.source, Input):
+                source_type = normalized.source.type
+                if source_type and source_type.startswith('[') and source_type.endswith(']'):
+                    return source_type[1:-1]
+                return None
             if isinstance(normalized.source, StepCall):
                 spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
                 typ = spec.get('type')
                 if getattr(normalized.source, 'map', None) is not None and typ is not None:
                     return self._as_array_type(typ)
                 return typ
-            if isinstance(normalized.source, Record):
-                return self._infer_record_field_type(normalized.source, normalized.name)
-            return None
+            if isinstance(normalized.source, Field):
+                return None
         if isinstance(normalized, Record):
-            return 'record'
-        return None
-
-    def _infer_record_field_type(self, record, name):
-        fields = record.fields
-        if name in fields:
-            return self._infer_output_type(fields[name])
-        for field_value in fields.values():
-            normalized = _normalize_output_value(field_value)
-            if isinstance(normalized, Record):
-                nested = self._infer_record_field_type(normalized, name)
-                if nested is not None:
-                    return nested
+            return None
         return None
 
     def _is_optional_type(self, output_type):

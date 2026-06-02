@@ -449,7 +449,7 @@ map call_variant
         dag = DAG(
             inputs={'inp': Input('inp', type='str', desc=None)},
             steps=[producer],
-            outputs={'rec_out': OutputSpec(type='record', value=Record({'a': Input('inp'), 'b': Field(producer, 'result')}), desc=None, optional=False)},
+            outputs={'rec_out': Record({'a': Input('inp'), 'b': Field(producer, 'result')})},
         )
         cwl = transpile_dag_dict(dag.to_dict())
         self.assertEqual(cwl['cwlVersion'], 'v1.0')

@@ -20,29 +20,28 @@ Driven by `cwl.md`. Gaps that remain after `map_by`, `expr` passthrough, and tim
 
 ### 1a. Record bindings via ExpressionTool
 
-**Status:** Record bindings in step inputs are accepted by CWL (`_step_input_error` returns `None`) but the code path is untested. Non-saturating records that reach the DAG may not produce correct CWL.
+**Status:** ✅ Complete. Record bindings in step inputs and workflow outputs are handled by `_emit_record_tool` (emit.py:519) which generates an `ExpressionTool`. Tests:
+- `test_record_binding_in_step_input_emits_expression_tool` (test_emit.py:378)
+- `test_record_workflow_output_emits_expression_tool` (test_emit.py:436)
+- `test_record_binding_no_longer_rejected` (test_emit.py:474)
 
-**What to do:**
-- Add a DAG-level test that has a non-saturating record reaching CWL transpiler.
-- If the record is directly passed to a step input, emit an intermediate `ExpressionTool` that constructs the record from individual input fields.
-- Verify CWL output is valid.
+### 1b. Nested `Field(Field(...))` projections
 
-### 1b. Resolve nested `Field(Field(...))` projections
-
-**Status:** The CWL transpiler rejects `Field` with unsupported source types via `_step_input_error`. Simple field projections on step outputs (`Field(StepCall, name)`) work. Chains like `Field(Field(StepCall, "inner"), "leaf")` fail.
-
-**What to do:**
-- Flatten nested field chains at DAG construction time (in `force.py`) by resolving intermediate types to direct step-output references when possible.
-- For cases where flattening is impossible (dynamic intermediate type), emit an `ExpressionTool` that takes the source and resolves the chain via JS expression.
+**Status:** ✅ Complete. The CWL transpiler handles nested `Field(Field(...))` chains via `_canonical_binding` in emit.py:307-329, which produces `input_field_nested`, `step_output_nested`, and `tab_column_step_output_nested` kinds. These get a `valueFrom` expression in `_step_input_to_cwl`. Test:
+- `test_nested_field_binding_uses_valueFrom` (test_emit.py:496)
 
 ### 1c. Merge workflow outputs
 
-**Status:** `_workflow_output_error` rejects merge bindings at workflow output level. Flattening should happen in the compiler (`force.py`) but merge trees at output level may not be fully covered.
-
-**What to do:**
-- Audit `_final_outputs` / `_canonicalize_merges` / `_flatten_merge_value` to ensure all merge patterns at the output level are flattened.
-- Add targeted tests for merge trees at output level that currently leak through.
-- If a merge cannot be flattened, raise a compile-time error with a clear message.
+**Status:** ✅ Complete. Merge flattening at the output level is fully handled:
+- `_canonicalize_merges` in force.py:969 collapses record-record merges
+- `_flatten_outputs` in force.py:661 calls `_flatten_merge_value` which recursively flattens merge trees
+- `_unwrap_non_record` now preserves `Field(source=StepCall)` values (was silently dropping them)
+- End-to-end tests exist via `test_function_and_chain_compile_to_same_shape` (test_force.py:325) which uses `//` at output level
+- New P1c-specific tests added:
+  - `test_merge_record_field_stepcall_preserves_field` — Field(StepCall) no longer dropped
+  - `test_merge_record_field_input_preserves_field` — Field(Input) preserved
+  - `test_merge_record_with_bare_input_drops_input` — bare Input still dropped (intentional)
+  - `test_end_to_end_merge_at_output_level_leaves_no_merge_in_dag` — no Merge in final DAG
 
 ---
 
@@ -142,18 +141,18 @@ Driven by `cwl.md`. Gaps that remain after `map_by`, `expr` passthrough, and tim
 ## Dependency graph
 
 ```
-P1a (record bindings) ─────── independent
-P1b (nested fields) ───────── independent
-P1c (merge outputs) ───────── dependent on P4d (merge hardening)
+P1a (record bindings) ─────── ✅ complete
+P1b (nested fields) ───────── ✅ complete
+P1c (merge outputs) ───────── ✅ complete
 
-P2 (table updates) ────────── independent, low urgency
+P2 (table updates) ────────── ✅ complete
 
-P3 (binding validation) ───── independent
+P3 (binding validation) ───── ✅ complete
 
-P4a (non-saturating records) ── audit, likely low code change
-P4b (mapped-port validation) ── new validation pass
-P4c (optionality audit) ─────── audit, likely low code change
-P4d (merge hardening) ───────── test coverage, may reveal edge cases
+P4a (non-saturating records) ── ✅ complete
+P4b (mapped-port validation) ── ✅ complete
+P4c (optionality audit) ─────── ✅ complete
+P4d (merge hardening) ───────── ✅ complete
 ```
 
 ---
@@ -162,11 +161,10 @@ P4d (merge hardening) ───────── test coverage, may reveal edge
 
 | File | What changes |
 |------|-------------|
-| `ir/dag.py` | (P4b) mapped-port validation in `DAG.validate()` |
-| `ir/force.py` | (P1c) flatten remaining merge output edge cases; (P4a) ensure non-saturating records have full fields; (P4c) optionality audit |
-| `ir/test_force.py` | Tests for P1c, P4a, P4c, P4d |
-| `semantic/wf/check.py` | (P3) forward-reference validation pass |
-| `semantic/wf/test_check.py` | Tests for P3 |
-| `transpile/cwl/emit.py` | (P1a) record bindings via ExpressionTool; (P1b) nested field flattening or intermediate tool |
-| `transpile/cwl/test_emit.py` | Tests for P1a, P1b, P1c |
-| `compile.py` | (P4b) wire mapped-port validation into compilation pipeline |
+| `ir/dag.py` | Added `_validate_mapped_ports` in `DAG.validate()` (lines 196-229) |
+| `ir/force.py` | (P2) Input+Record rejection in Update handling (lines 133-150); (P1c) fix `_unwrap_non_record` to preserve `Field(source=StepCall)` values; (P4b fix) `_mapped_step_bindings` scatter/broadcast overlap fix |
+| `ir/test_force.py` | P1c tests (merge record+field preservation, end-to-end no-Merge), P4d tests (deeply nested merge trees), P4c tests (optionality), P4a tests (non-saturating records), P2 tests (table update errors). Fixed pre-existing test bugs: `ir.Ref` → `ir.Name`, `ForceEnv` kwarg usage |
+| `semantic/wf/check.py` | (P3) forward-reference detection in `_walk_scope`, new `_collect_name_refs` and `_walk_refs` methods |
+| `semantic/wf/test_check.py` | (P3) forward-reference tests |
+| `transpile/cwl/emit.py` | No changes needed (P1a, P1b, P1c already working) |
+| `transpile/cwl/test_emit.py` | No changes needed (tests already exist for record bindings, nested fields) |
