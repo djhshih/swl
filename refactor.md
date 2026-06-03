@@ -329,25 +329,25 @@ Current `ir/force.py` should be decomposed into smaller units. The exact split s
 
 ### Proposed split
 
-#### `python/swl/ir/forcing/context.py`
+#### `python/swl/dag/context.py`
 - `ForceEnv`
 - shared force-time context/caches
 
-#### `python/swl/ir/forcing/evaluator.py`
+#### `python/swl/dag/evaluator.py`
 - `force_value`
 - `_force_ref`
 - `_force_apply`
 - `_apply`
 - lambda forcing
 
-#### `python/swl/ir/forcing/emit.py`
+#### `python/swl/dag/emit.py`
 - `_emit_task_call`
 - `_emit_workflow_call`
 - `_emit_mapped_step`
 - `_mapped_step_bindings`
 - step dependency helpers
 
-#### `python/swl/ir/forcing/finalize.py`
+#### `python/swl/dag/finalize.py`
 - `_refine_input_metadata`
 - `_flatten_step_bindings`
 - `_flatten_outputs`
@@ -355,13 +355,13 @@ Current `ir/force.py` should be decomposed into smaller units. The exact split s
 - `_prune_unused_inputs`
 - `_assert_wireable_output`
 
-#### `python/swl/ir/forcing/tooldefs.py`
+#### `python/swl/dag/tooldefs.py`
 - `_tool_definition`
 - `_workflow_definition`
 - `_materialize_workflow_dag`
 - task/workflow definition caching
 
-#### `python/swl/ir/forcing/merge.py`
+#### `python/swl/dag/merge.py`
 - merge canonicalization helpers
 - flatten helpers
 - output normalization helpers
@@ -680,7 +680,7 @@ Update test.sh with new paths.
 ### Introduce
 
 - `python/swl/ir/binding.py` — replaces all above
-- `python/swl/ir/forcing/` package
+- `python/swl/dag/` package (from python/swl/force.py)
 - `python/swl/semantic/wf/imports.py`
 - `python/swl/semantic/wf/infer.py`
 - `python/swl/semantic/wf/signature.py`
@@ -689,6 +689,8 @@ Update test.sh with new paths.
 - `python/swl/types.py` or equivalent
 - `python/swl/loader.py`
 - `python/swl/api.py`
+
+- Move `python/swl/ir/dag.py` to `python/swl/dag/node.py`
 
 ---
 
