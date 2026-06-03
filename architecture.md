@@ -7,8 +7,31 @@ SWL is a workflow language that compiles to a logical DAG of task invocations. T
 3. **Task Parsing** → parsed task annotation + bash body (`syntax/task/node.py`)
 4. **Semantic Checking** → validated imports, scope, types, inferred signature (`semantic/wf/check.py`)
 5. **IR Lowering** → semantic IR tree (`ir/node.py`)
-6. **IR Forcing** → concrete DAG (`ir/dag.py`)
+6. **IR Forcing** → concrete DAG (`dag/`)
 7. **Output** → JSON-serialized DAG emission
+
+---
+
+## Package Structure
+
+The compiler lives under `python/swl/` as a single package:
+
+```
+swl/
+├── api.py              # Public API (compile, force, load, transpile)
+├── compile.py          # CLI entry point
+├── loader.py           # File cache, parsed-task & workflow memoization
+├── repl.py             # Interactive REPL
+├── types.py            # Type normalization & CWL/WDL/NF type mapping
+├── syntax/wf/          # Workflow language lexing/parsing
+├── syntax/task/        # Task script annotation/body parsing
+├── semantic/wf/        # Workflow semantic analysis
+├── semantic/task/      # Task type system
+├── ir/                 # Intermediate representation (nodes + lowering)
+├── dag/                # DAG construction, forcing, finalization
+├── eval/               # Debug CLI tools (6 scripts)
+└── transpile/          # Backend code generators (CWL, WDL, Nextflow)
+```
 
 ---
 
@@ -56,7 +79,7 @@ SWL is a workflow language that compiles to a logical DAG of task invocations. T
 | `update` | `Update`     | `left // right` (record merge) |
 | `fun`    | `Function`   | `\param -> body` (lambda) |
 | `apply`  | `Apply`      | `fun arg` (function application) |
-| `chain`  | `Chain`      | `left \| right` (pipeline) |
+| `chain`  | `Chain`      | `left | right` (pipeline) |
 
 **What happens:**
 - The parser is a recursive descent parser that follows the GBNF grammar from `spec.md`.
@@ -146,7 +169,7 @@ Task(
 
 ## Stage 5: Semantic Checking — Workflow
 
-**File:** `semantic/wf/check.py`
+**Files:** `semantic/wf/check.py`, `semantic/wf/imports.py`, `semantic/wf/scope.py`, `semantic/wf/infer.py`, `semantic/wf/signature.py`, `semantic/wf/bashvars.py`
 
 **Input:** Parsed workflow AST (from stage 2) plus imported tasks/workflows.
 
@@ -154,13 +177,13 @@ Task(
 
 **What happens:**
 
-1. **Import resolution** (`_load_imports`): Scans top-level bindings for `name = import("path")` calls. `.sh` paths → task imports; `.swl` paths → workflow imports (recursively loaded). Circular imports are detected via a `_loading` stack.
+1. **Import resolution** (`semantic/wf/imports.py`): Scans top-level bindings for `name = import("path")` calls. `.sh` paths → task imports; `.swl` paths → workflow imports (recursively loaded). Circular imports are detected via a `_loading` stack on the `Loader` (`loader.py`).
 
-2. **Scope checking** (`_check_scope`): Walks the AST ensuring no duplicate variable names within the same scope. Also checks for forward references (a binding referencing a later binding in the same block) and self-references (a binding referencing itself). Nested scopes (lambda params, inner blocks) may shadow outer names.
+2. **Scope checking** (`semantic/wf/scope.py`): Walks the AST ensuring no duplicate variable names within the same scope. Also checks for forward references (a binding referencing a later binding in the same block) and self-references (a binding referencing itself). Nested scopes (lambda params, inner blocks) may shadow outer names. Chain type checking (`check_chains`) calls the task-level `TypeChecker.check_chain()` for known tasks in `A | B` pipelines.
 
-3. **Chain type checking** (`_check_chains`): Detects `A | B` chains in the AST and calls the task-level `TypeChecker.check_chain()` for any pair of known tasks.
+3. **Bash variable validation** (`semantic/wf/bashvars.py`): Validates that all variable references in imported task bash bodies are resolvable from declared inputs or run parameters.
 
-4. **Input inference** (`_infer_inputs`): Evaluates the workflow body in a symbolic/semantic fashion to determine what inputs the workflow demands. Uses a set of semantic value types:
+4. **Input inference** (`semantic/wf/infer.py`): Evaluates the workflow body in a symbolic/semantic fashion to determine what inputs the workflow demands. Uses a set of semantic value types:
    - `OpenRecord` / `ClosedRecord` — record values with known/unknown fields.
    - `FunctionValue` — a known function with a signature.
    - `ClosureValue` — a partially applied function.
@@ -171,7 +194,7 @@ Task(
 
    The semantic evaluator (`_eval_expr`) recursively walks the AST. When it encounters a field access like `x.field` on an `OpenRecord`, it adds `field` to the `demanded` set (this is how input fields are inferred). When it encounters a function application, it checks saturation — if all required inputs are available, it produces a `ComputationValue`; otherwise a `ClosureValue`.
 
-5. **Signature construction** (`_build_workflow_signature`): Determines whether the workflow is batch (`tab -> tab`) or simple (`rec -> rec`) based on whether `map`/`map_by` is used. Builds the final `TaskSignature` from inferred inputs and outputs. Also produces `workflow_type` as a `FunctionType(input_type, output_type)` from `semantic/wf/type.py`.
+5. **Signature construction** (`semantic/wf/signature.py`): Determines whether the workflow is batch (`tab -> tab`) or simple (`rec -> rec`) based on whether `map`/`map_by` is used. Builds the final `TaskSignature` from inferred inputs and outputs. Also produces `workflow_type` as a `FunctionType(input_type, output_type)` from `semantic/wf/type.py`.
 
 **Type AST** (`semantic/wf/type.py`):
 - `ScalarType("file" | "str" | "int" | "float" | "?")`
@@ -179,6 +202,8 @@ Task(
 - `RecordType(fields, open)`
 - `TableType(columns)`
 - `FunctionType(input, output)`
+
+**Loader** (`loader.py`): The `Loader` class provides in-memory file caching, parsed-task memoization (`_parsed_tasks`), and checked-workflow memoization (`_checked_workflows`). All file reading goes through `read_file()` which supports an in-memory `files` dict (used by tests) as well as real filesystem access. The `Checker` and `Lowerer` both hold a `Loader` instance.
 
 ---
 
@@ -188,12 +213,13 @@ Task(
 
 **Input:** Workflow AST + imports + signature from the semantic checker.
 
-**Output:** A semantic IR tree of `ir.Node` dataclass instances.
+**Output:** A semantic IR tree of `ir.Node` dataclass instances (all frozen/immutable).
 
 **IR node types:**
 | Node       | Meaning |
 |------------|---------|
 | `Literal`  | A literal value (string, number) |
+| `Input`    | A workflow input placeholder |
 | `Name`     | An unresolved name reference (will become a workflow input or local variable) |
 | `Ref`      | A resolved reference to a `Variable` by id |
 | `Record`   | A record literal `{ field: value, ... }` |
@@ -211,7 +237,7 @@ Task(
 **What happens:**
 - The `Lowerer` uses `Checker.load()` to semantically check the workflow, then walks the AST to produce IR.
 - **Imports** become `ir.Function` nodes carrying their kind (`task`/`workflow`), path, and signature. Workflow imports recursively lower their body via `_cached_workflow_body()`.
-- **Lambda s** become `ir.Lambda` with a `Block` body.
+- **Lambdas** become `ir.Lambda` with a `Block` body.
 - **Bindings** become `ir.Variable` nodes with unique integer `id`s. Subsequent references are `ir.Ref` nodes pointing to the `Variable` by id.
 - **`map`/`map_by` detection**: The lowerer uses `builtins.match_map` / `builtins.match_map_by` (from `syntax/wf/builtins.py`) to detect `map f xs` and `map_by f key xs` (which are `Apply(Apply(id("map"), f), xs)` in AST) and collapses them into `ir.Map` nodes with an optional `key` field.
 - **Pipeline chains** (`A | B | C`) are desugared into a lambda block following the spec:
@@ -244,31 +270,23 @@ Lambda(
 
 ---
 
-## Stage 7: IR Forcing
+## Stage 7: IR Forcing (DAG Construction)
 
-**Files:** `ir/force.py`, `ir/dag.py`
+**Package:** `dag/` — 8 files that collectively convert the semantic IR into a concrete, serializable DAG.
 
-**Input:** Semantic IR tree (from stage 6).
-
-**Output:** A concrete `DAG` object with resolved inputs, steps, and outputs, ready for JSON serialization.
-
-**Key DAG types** (`ir/dag.py`):
-| Type | Meaning |
+| File | Purpose |
 |------|---------|
-| `Input` | A named workflow input with optional type/desc/optionality |
-| `Literal` | A literal value |
-| `Record` | A record of named DAG values |
-| `TableSource` | A table source (input columns) |
-| `Field` | Projection of a field from a step or input |
-| `Merge` | A transient merge of two DAG values (left // right) during forcing |
-| `StepCall` | A concrete task or workflow invocation |
-| `OutputSpec` | A named workflow output with type/desc/optionality/value |
-| `ForcedFunction` | A partially-saturated function reference |
-| `DAG` | The top-level container: `inputs`, `steps`, `outputs` |
+| `node.py` | DAG data types: `Input`, `Literal`, `Record`, `TableSource`, `Field`, `Merge`, `StepCall`, `Output`, `OutputSpec`, `ForcedFunction`, `DAG`. JSON serialization via `DAG.to_dict()` / `DAG.from_dict()`. |
+| `context.py` | `ForceEnv` — simple scoped variable environment (parent pointer + values dict). |
+| `binding.py` | Binding serialization: `binding_to_dict()` / `binding_from_dict()` for DAG values. |
+| `evaluator.py` | Core forcing engine: `force_value()` recursively evaluates IR nodes into DAG values. |
+| `forcer.py` | Top-level orchestration: `ForceState` dataclass, `force()` and `force_file()` entry points. |
+| `emit.py` | Step call emission: `_emit_task_call()`, `_emit_workflow_call()`, `_emit_mapped_step()`. |
+| `merge.py` | Merge canonicalization: collapsing, flattening, value-key computation for deduplication. |
+| `finalize.py` | DAG finalization: input metadata refinement, step binding flattening, output spec building, unused input pruning, validation. |
+| `tooldefs.py` | Tool definition construction: `_tool_definition()` returns full task definition dict, `_workflow_definition()` materializes sub-workflow DAGs, `_force_root()` applies final function to synthetic inputs. |
 
-**What happens:**
-
-The `Forcer` "forces" the IR by resolving all function applications into concrete step calls:
+### What the Forcer does
 
 1. **`force_value(node, env)`** — Recursively evaluates IR nodes in a `ForceEnv`:
    - `Literal` → `dag.Literal`
@@ -282,31 +300,31 @@ The `Forcer` "forces" the IR by resolving all function applications into concret
    - `Block` → evaluates in a local `ForceEnv`
    - `Variable` → forces the value and caches it
 
-2. **Function application** (`_apply`):
+2. **Function application** (`_apply` in `evaluator.py`):
    - If the function is a built-in (`map`, `map_by`), handles partial application (binding `f`, then `key`/`xs`).
    - If the argument is a mapped/table source, delegates to `_apply_mapped`.
    - For tasks: checks saturation — if all required inputs are available in the bound record, emits a `StepCall` via `_emit_task_call`. Otherwise returns a `ForcedFunction` (partial application).
    - For workflows: similar saturation check, emits `StepCall` with `type='workflow'`.
    - For lambdas: if the bound argument is a `Record`, evaluates the lambda body directly.
 
-3. **Step call emission** (`_emit_task_call` / `_emit_workflow_call`):
+3. **Step call emission** (`emit.py`):
    - Normalizes task inputs by projecting named fields from the bound argument.
    - Creates a `StepCall` with unique ID, dependencies, and tool definition.
    - Caches step calls by function path + input keys to deduplicate.
 
-4. **Map emission** (`_emit_mapped_step`):
+4. **Map emission** (`_emit_mapped_step` in `emit.py`):
    - Creates a `StepCall` with `map` metadata: source type (table/input), columns, grouping key for `map_by`.
    - Classifies step inputs into `scatter` (vary per table row) and `broadcast` (same for all rows). Inputs matching table columns are scattered; non-matching inputs are broadcasted. For generated workflows with a single record input, all inputs are scattered.
    - Validation: `DAG._validate_mapped_ports` ensures every input in `input_schema` belongs to exactly one of `scatter` / `broadcast`.
 
-5. **Root forcing** (`_force_root`):
+5. **Root forcing** (`_force_root` in `tooldefs.py`):
    - If the final value is a `ForcedFunction`, applies it to synthetic input placeholders to saturate it.
    - For batch workflows, creates a table input placeholder and applies `map`.
 
-6. **DAG finalization** (`_finalize_dag`):
+6. **DAG finalization** (`finalize.py`):
    - `_refine_input_metadata()`: Materializes workflow input metadata by merging inferred interface information with task input specs, including type, description, and optionality (detected via `?` suffix on type strings).
    - `_flatten_step_bindings()`: Expands `Record` and `Merge` bindings in step inputs into individual named bindings, flattening deeply nested merge trees via `_flatten_merge_value`.
-   - `_final_outputs()`: Converts the forced root value into explicit top-level workflow outputs. `Merge` trees are canonicalized (record-record merges collapse); remaining merge trees are flattened by `_flatten_outputs`.
+   - `_final_outputs()`: Converts the forced root value into explicit top-level workflow outputs. `Merge` trees are canonicalized (record-record merges collapse); remaining merge trees are flattened.
    - `_build_output_specs()`: Wraps each output in an `OutputSpec` with inferred type, optionality, and the binding value.
    - `_assert_wireable_output()`: Rejects outputs that can't be expressed as `Input`, `Literal`, or `Field(Input|StepCall)`.
    - `_prune_unused_inputs()`: Removes input ports that aren't referenced by any step or output.
@@ -345,7 +363,7 @@ The emitted DAG is the compiler artifact consumed by transpilers. Source-level c
 
 ## Stage 8: Output
 
-**File:** `compile.py` (entry point), `ir/dag.py` (serialization)
+**File:** `compile.py` (CLI entry point), `api.py` (programmatic API), `dag/node.py` (serialization)
 
 **Input:** A normalized `DAG` object.
 
@@ -356,6 +374,21 @@ The emitted DAG is the compiler artifact consumed by transpilers. Source-level c
 - Interface metadata, step bindings, and outputs are emitted in fully explicit form so transpilers do not need to reconstruct compiler intent.
 - Written as pretty-printed JSON via `dag.write(path)`.
 - The JSON can be read back via `DAG.read(path)` → `DAG.from_dict()`.
+
+---
+
+## Public API
+
+**File:** `api.py`
+
+Four high-level functions:
+
+| Function | Description |
+|----------|-------------|
+| `compile_workflow(path, output_path)` | Lower + force + write DAG JSON (full compilation). |
+| `force_workflow(path, files)` | Lower + force, return `DAG` object. |
+| `load_workflow(path, files)` | Semantic check only, return `WorkflowCheck`. |
+| `transpile_dag(dag_path, target)` | Compile DAG JSON then transpile to `"cwl"`, `"wdl"`, or `"nf"`. |
 
 ---
 
@@ -370,11 +403,44 @@ Validates concrete workflow inputs against the inferred input type:
 
 ---
 
+## Type Utilities
+
+**File:** `types.py`
+
+Provides `normalize_swl_type()`, `is_optional_type()`, `is_array_type()`, `to_cwl_type()`, `to_wdl_type()`, `to_nf_qualifier()` for converting between SWL type strings and target-platform type representations.
+
+---
+
 ## Transpilation
 
 **Directories:** `transpile/cwl/`, `transpile/wdl/`, `transpile/nf/`
 
 Transpilers consume the compiled DAG JSON and convert it into target-specific workflow documents. They operate on the normalized DAG contract rather than on source `.swl` or `.sh` files.
+
+| Target | File | Format |
+|--------|------|--------|
+| CWL | `transpile/cwl/emit.py` | CWL v1.0 packed (`$graph`). Handles sub-workflows, record bindings (via `ExpressionTool`), `map_by` (via JS-based grouping tools), scatter, resource requirements. |
+| WDL | `transpile/wdl/emit.py` | WDL v1.1. Handles struct collection, sub-workflows, scatter for mapped steps, `collect_by_key` for `map_by`, resource requirements. |
+| Nextflow | `transpile/nf/emit.py` | Nextflow DSL2. Handles processes with directives, mapped steps via channels, `map_by` via `groupTuple`. |
+
+Shared utilities live in `transpile/common.py` (identifier normalization, field chains, interpolation, run values, table column helpers).
+
+---
+
+## Debug / Evaluation Scripts
+
+**Directory:** `eval/`
+
+Six standalone CLI tools, each runnable as `python -m swl.eval.<name>`:
+
+| Script | Purpose |
+|--------|---------|
+| `syntax_wf.py` | Show workflow tokens and AST tree. |
+| `syntax_task.py` | Show task annotation parse result. |
+| `semantic_wf.py` | Show semantic workflow view (imports, errors, inferred inputs, signature). |
+| `semantic_task.py` | Show task semantic signature. |
+| `ir.py` | Lower a `.swl` file to IR and print the tree. |
+| `dag.py` | Force a `.swl` file to DAG and print as JSON. |
 
 ---
 
@@ -389,37 +455,78 @@ Transpilers consume the compiled DAG JSON and convert it into target-specific wo
 | Precedence | `syntax/wf/parser.py` method ordering |
 | Task annotations | `syntax/task/parser.py`, `semantic/task/type.py` |
 | String interpolation | `syntax/task/interpolation.py` |
-| Import verification | `semantic/wf/check.py:_load_imports` |
-| Name binding rules | `semantic/wf/check.py:_check_scope` |
+| Import verification | `semantic/wf/imports.py:_load_imports` |
+| Name binding rules | `semantic/wf/scope.py:check_scope` |
 | Type compatibility (chaining) | `semantic/task/type.py:TypeChecker.check_chain` |
 | Pipeline desugaring | `ir/lower.py:_chain_to_lambda_block` |
-| Record update semantics | `ir/lower.py:_normalize_update`, `ir/force.py:_merge_values` |
-| map / map_by semantics | `syntax/wf/builtins.py`, `ir/force.py:_force_map` |
-| Workflow well-formedness | `semantic/wf/check.py:_infer_inputs` |
+| Record update semantics | `ir/lower.py:_normalize_update`, `dag/merge.py` |
+| map / map_by semantics | `syntax/wf/builtins.py`, `dag/evaluator.py:_force_map` |
+| Workflow well-formedness | `semantic/wf/infer.py:_eval_expr` |
 | Compile-time checks (1-4) | `semantic/wf/check.py:Checker.load` |
 | Pre-run-time checks (5) | `semantic/wf/validate.py` |
-| DAG graph | `ir/dag.py:DAG`, `ir/force.py` |
+| DAG graph | `dag/node.py:DAG`, `dag/evaluator.py` |
 
+---
 
 ## Source files
 
-- syntax/wf/lexer.py — Workflow lexer
-- syntax/wf/parser.py — Workflow parser
-- syntax/wf/node.py — Workflow AST node types
-- syntax/wf/builtins.py — Shared pattern-matching for `import`, `map`, `map_by` (used by checker and lowerer)
-- syntax/task/parser.py — Task annotation parser
-- syntax/task/bash.py — Bash script parser
-- syntax/task/interpolation.py — String interpolation parser
-- semantic/wf/check.py — Workflow semantic checker (imports, scope, type inference, partial application)
-- semantic/wf/type.py — Workflow type system (ScalarType, ArrayType, RecordType, TableType, FunctionType)
-- semantic/wf/validate.py — Pre-run-time input validation
-- semantic/task/type.py — Task type system (TaskSignature, Param, TypeKind, type compatibility matrix)
-- ir/node.py — IR node types (Function, Lambda, Closure, Apply, Map, Block, Variable, etc.)
-- ir/lower.py — AST-to-IR lowering (chain desugaring, map/match_map_by, normalization)
-- ir/force.py — IR forcing (DAG construction, step call emission, mapped step emission, partial application, root forcing)
-- ir/dag.py — DAG dataclasses and JSON serialization (StepCall, MappedStep, Input, Literal, Field, Merge, Record, TableSource, DAG)
-- transpile/cwl/emit.py — CWL transpiler (reference pattern for new transpilers)
-- transpile/cwl/test_emit.py — CWL transpiler tests
-- compile.py — Compiler entry point
-- repl.py, eval\*.py — Debug evaluation scripts
+### Core compiler
+- `api.py` — Public API (compile, force, load, transpile)
+- `compile.py` — CLI entry point
+- `loader.py` — File cache and parsing memoization
+- `repl.py` — Interactive REPL
+- `types.py` — Type normalization and cross-platform type conversion
 
+### Workflow syntax
+- `syntax/wf/lexer.py` — Workflow lexer
+- `syntax/wf/parser.py` — Workflow parser
+- `syntax/wf/node.py` — Workflow AST node types
+- `syntax/wf/builtins.py` — Shared pattern-matching for `import`, `map`, `map_by`
+
+### Task syntax
+- `syntax/task/parser.py` — Task annotation parser
+- `syntax/task/bash.py` — Bash script parser
+- `syntax/task/interpolation.py` — String interpolation parser
+
+### Workflow semantic analysis
+- `semantic/wf/check.py` — Workflow semantic checker (orchestrator)
+- `semantic/wf/type.py` — Workflow type system (ScalarType, RecordType, TableType, FunctionType)
+- `semantic/wf/imports.py` — Import resolution (.sh and .swl)
+- `semantic/wf/scope.py` — Scope checking and chain type checking
+- `semantic/wf/infer.py` — Symbolic evaluation for input inference
+- `semantic/wf/signature.py` — Workflow signature construction
+- `semantic/wf/bashvars.py` — Bash variable resolution checking
+- `semantic/wf/validate.py` — Pre-run-time input validation
+
+### Task type system
+- `semantic/task/type.py` — Task type system (TaskSignature, Param, TypeKind, TypeChecker)
+
+### Intermediate representation
+- `ir/node.py` — IR node types (Literal, Input, Name, Ref, Record, Field, Update, Function, Lambda, Closure, Apply, Map, Variable, Block, Unknown)
+- `ir/lower.py` — AST-to-IR lowering (chain desugaring, map/map_by detection, normalization)
+
+### DAG construction and finalization
+- `dag/node.py` — DAG data types and JSON serialization (DAG, StepCall, Input, Literal, Record, TableSource, Field, Merge, Output, OutputSpec, ForcedFunction)
+- `dag/context.py` — ForceEnv variable scoping
+- `dag/binding.py` — DAG binding serialization/deserialization
+- `dag/evaluator.py` — IR forcing engine (force_value, _force_apply, _force_map)
+- `dag/forcer.py` — Top-level forcing orchestration (ForceState, force, force_file)
+- `dag/emit.py` — Step call emission (task, workflow, mapped step)
+- `dag/merge.py` — Merge canonicalization and flattening
+- `dag/finalize.py` — DAG finalization (metadata, pruning, output specs)
+- `dag/tooldefs.py` — Tool definition construction and workflow materialization
+
+### Transpilers
+- `transpile/common.py` — Shared transpiler utilities
+- `transpile/_cli.py` — Shared CLI argument parsing
+- `transpile/cwl/emit.py` — CWL v1.0 transpiler
+- `transpile/wdl/emit.py` — WDL v1.1 transpiler
+- `transpile/nf/emit.py` — Nextflow DSL2 transpiler
+
+### Debug/evaluation
+- `eval/syntax_wf.py` — Show workflow tokens and AST
+- `eval/syntax_task.py` — Show task annotation parse
+- `eval/semantic_wf.py` — Show semantic workflow view
+- `eval/semantic_task.py` — Show task semantic signature
+- `eval/ir.py` — Show lowered IR tree
+- `eval/dag.py` — Show forced DAG
