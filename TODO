@@ -2,6 +2,7 @@ Tests:
 - run cwltool on transpiled .cwl files
 - run sprocket on transpiled .wdl files
 - run nextflow on transpiled .nf files
+- run snakemake on transpiled .smk files (most likely to be incorrect)
 
 Python:
 - check that panel.cwl is transpiled correctly
