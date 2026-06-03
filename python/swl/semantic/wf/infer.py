@@ -473,31 +473,44 @@ def record_apply_satisfied(checker, expr, fun, arg, result):
         checker._apply_satisfied[id(expr)] = satisfied
 
 
+def _map_by_closure_result(checker, closure, arg, issues):
+    bound_fields = dict(getattr(closure.bound_value, 'fields', {}))
+    if 'f' in bound_fields and 'key' not in bound_fields:
+        return ClosureValue(closure.function, ClosedRecord({'f': bound_fields['f'], 'key': arg}))
+    if 'f' in bound_fields and 'key' in bound_fields:
+        return apply_map_by(checker, bound_fields['f'], bound_fields['key'], arg, issues)
+    return None
+
+
+def _bound_application_value(checker, fun, arg):
+    if isinstance(fun, ClosureValue):
+        return merge_arg_values(checker, fun.bound_value, argument_value(checker, fun, arg))
+    return argument_value(checker, fun, arg)
+
+
 def apply(checker, fun, arg, demanded, issues):
+    if not isinstance(fun, (ClosureValue, FunctionValue)):
+        issues.append(f'Cannot apply non-function value: {fun}')
+        return UnknownValue()
     if isinstance(fun, ClosureValue):
         return apply_closure(checker, fun, arg, demanded, issues)
-    if isinstance(fun, FunctionValue):
-        return apply_function(checker, fun, arg, demanded, issues)
-    issues.append(f'Cannot apply non-function value: {fun}')
-    return UnknownValue()
+    return apply_function(checker, fun, arg, demanded, issues)
 
 
 def apply_closure(checker, closure, arg, demanded, issues=None):
+    issues = issues or []
     if isinstance(closure.function, FunctionValue) and closure.function.kind == 'builtin' and closure.function.name == 'map_by':
-        bound_fields = dict(getattr(closure.bound_value, 'fields', {}))
-        if 'f' in bound_fields and 'key' not in bound_fields:
-            return ClosureValue(closure.function, ClosedRecord({'f': bound_fields['f'], 'key': arg}))
-        if 'f' in bound_fields and 'key' in bound_fields:
-            return apply_map_by(checker, bound_fields['f'], bound_fields['key'], arg, issues or [])
-    bound = merge_arg_values(checker, closure.bound_value, argument_value(checker, closure, arg))
-    return application_result(checker, closure, bound, demanded, issues or [])
+        result = _map_by_closure_result(checker, closure, arg, issues)
+        if result is not None:
+            return result
+    return application_result(checker, closure, _bound_application_value(checker, closure, arg), demanded, issues)
 
 
 def apply_function(checker, fun, arg, demanded, issues=None):
-    if isinstance(fun, FunctionValue) and fun.kind == 'builtin' and fun.name == 'map_by':
-        return apply_map_by_partial(checker, arg, issues or [])
-    bound = argument_value(checker, fun, arg)
-    return application_result(checker, fun, bound, demanded, issues or [])
+    issues = issues or []
+    if fun.kind == 'builtin' and fun.name == 'map_by':
+        return apply_map_by_partial(checker, arg, issues)
+    return application_result(checker, fun, _bound_application_value(checker, fun, arg), demanded, issues)
 
 
 def application_result(checker, fun, bound, demanded, issues):
@@ -741,10 +754,14 @@ def task_type_from_value(checker, value):
     return None
 
 
+def _typed_items(checker, items):
+    return {name: value_type(checker, item) for name, item in sorted(items.items())}
+
+
 def infer_root_record_type(checker, fn, imports, env, inferred_inputs):
     value = infer_root_input_value(checker, fn, imports, env, inferred_inputs, mode='record')
     fields = getattr(value, 'fields', {}) if isinstance(value, (OpenRecord, ClosedRecord)) else {}
-    return wf_type.RecordType({name: value_type(checker, item) for name, item in sorted(fields.items())})
+    return wf_type.RecordType(_typed_items(checker, fields))
 
 
 def infer_root_table_type(checker, fn, imports, env, inferred_inputs):
@@ -752,7 +769,7 @@ def infer_root_table_type(checker, fn, imports, env, inferred_inputs):
     columns = getattr(value, 'columns', {}) if isinstance(value, TableValue) else {}
     if fn.param.name in columns and len(columns) > 1 and value_type(checker, columns[fn.param.name]) == wf_type.UNKNOWN:
         columns = {name: item for name, item in columns.items() if name != fn.param.name}
-    return wf_type.TableType({name: value_type(checker, item) for name, item in sorted(columns.items())})
+    return wf_type.TableType(_typed_items(checker, columns))
 
 
 def infer_root_input_value(checker, fn, imports, env, inferred_inputs, mode):
