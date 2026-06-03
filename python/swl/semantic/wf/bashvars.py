@@ -3,12 +3,8 @@ from swl.syntax.task import bash as task_bash
 
 
 def _bash_interp_vars(word):
-    vars = []
     parts = word.parts if isinstance(word, interp.Word) else [word]
-    for part in parts:
-        if isinstance(part, interp.Var):
-            vars.append(part.name)
-    return vars
+    return [part.name for part in parts if isinstance(part, interp.Var)]
 
 
 def _validate_bash_variables(parsed_body, input_names, context_name):

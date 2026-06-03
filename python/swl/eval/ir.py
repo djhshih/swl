@@ -4,25 +4,20 @@ from swl.ir.lower import Lowerer
 import swl.ir.node as ir
 
 
-def _print(node, indent='', tree_mode=False):
-    if isinstance(node, ir.Function) and tree_mode:
-        print(f'{indent}Function {node.name}')
-        return
-
-    text = repr(node)
-    for line in text.splitlines():
-        print(f'{indent}{line}')
-
-
 def eval(fname):
     lowerer = Lowerer()
     tree = lowerer.lower_file(fname)
     print('semantic IR:')
     print('functions:')
     for name in sorted(lowerer.function_cache.keys()):
-        _print(lowerer.function_cache[name], '  ', False)
+        for line in repr(lowerer.function_cache[name]).splitlines():
+            print(f'  {line}')
     print('tree:')
-    _print(tree, '  ', True)
+    if isinstance(tree, ir.Function):
+        print(f'  Function {tree.name}')
+    else:
+        for line in repr(tree).splitlines():
+            print(f'  {line}')
 
 
 if __name__ == '__main__':
