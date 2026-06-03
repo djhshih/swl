@@ -10,7 +10,7 @@ def binding_to_dict(value):
         return {'source': 'literal', 'value': value.value}
     if cls == 'Field':
         if is_instance(value.source, 'StepCall'):
-            return {'step': value.source.id, 'output': value.name}
+            return {'source': 'step_output', 'step': value.source.id, 'output': value.name}
         return {'source': 'field', 'field': value.name, 'value': binding_to_dict(value.source)}
     if cls == 'Merge':
         return {'source': 'merge', 'left': binding_to_dict(value.left), 'right': binding_to_dict(value.right)}
@@ -29,10 +29,6 @@ def binding_from_dict(data, inputs, steps):
     if not isinstance(data, dict):
         from swl.dag.node import Literal
         return Literal(data)
-    if 'step' in data and 'output' in data:
-        from swl.dag.node import Field
-        step = steps[data['step']]
-        return Field(step, data['output'])
     source = data.get('source')
     if source == 'input':
         from swl.dag.node import Input
@@ -64,10 +60,6 @@ def binding_from_dict(data, inputs, steps):
             data['name'],
             {name: binding_from_dict(value, inputs, steps) for name, value in data.get('columns', {}).items()},
         )
-    if source == 'step':
-        from swl.dag.node import Field
-        step = steps[data['step']]
-        return Field(step, data['output'])
     if source == 'step_output':
         from swl.dag.node import Field
         step = steps[data['step']]
@@ -76,8 +68,8 @@ def binding_from_dict(data, inputs, steps):
         return steps[data['step']]
     if source == 'function':
         return {'kind': 'function'}
-    if 'source' in data and 'output' in data and data['source'] in steps:
+    if 'step' in data and 'output' in data:
         from swl.dag.node import Field
-        step = steps[data['source']]
+        step = steps[data['step']]
         return Field(step, data['output'])
     raise ValueError(f'Unsupported binding source during deserialization: {source!r}')

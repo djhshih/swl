@@ -190,7 +190,7 @@ map call_variant
             'steps': [],
             'outputs': {'x': {'source': 'literal', 'value': 1}},
         }
-        with self.assertRaisesRegex(ValueError, 'Unsupported workflow output'):
+        with self.assertRaisesRegex(ValueError, 'has no explicit type'):
             transpile_dag_dict(bad)
 
     def test_partial_workflow_transpiles(self):
@@ -243,7 +243,7 @@ map call_variant
             ],
             'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
-        with self.assertRaisesRegex(ValueError, 'Unsupported step input binding for CWL transpilation: align.x'):
+        with self.assertRaisesRegex(ValueError, 'contains a Merge value'):
             transpile_dag_dict(bad)
 
     def test_batch_mapped_task_emits_scatter_and_tab_column_input_type(self):

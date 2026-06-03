@@ -198,9 +198,56 @@ class DAG:
         for step in self.steps:
             if step.map is not None:
                 self._validate_mapped_ports(step)
+        self._check_no_disallowed_values()
+        self._check_output_types()
+
+    @staticmethod
+    def _walk_values(value):
+        if isinstance(value, Merge):
+            yield from DAG._walk_values(value.left)
+            yield from DAG._walk_values(value.right)
+        elif isinstance(value, Record):
+            for fv in value.fields.values():
+                yield from DAG._walk_values(fv)
+        elif isinstance(value, Field):
+            yield from DAG._walk_values(value.source)
+        elif isinstance(value, ForcedFunction):
+            if value.bound is not None:
+                yield from DAG._walk_values(value.bound)
+
+    def _check_no_disallowed_values(self):
+        for step in self.steps:
+            for name, value in step.bindings.items():
+                if isinstance(value, Merge):
+                    raise ValueError(f'Step {step.id} binding {name!r} contains a Merge value which must be flattened before emission')
+                if isinstance(value, ForcedFunction):
+                    raise ValueError(f'Step {step.id} binding {name!r} contains a ForcedFunction which must be resolved before emission')
+                for v in DAG._walk_values(value):
+                    if isinstance(v, Merge):
+                        raise ValueError(f'Step {step.id} binding {name!r} contains a Merge value nested inside {type(v).__name__}')
+                    if isinstance(v, ForcedFunction):
+                        raise ValueError(f'Step {step.id} binding {name!r} contains a ForcedFunction nested inside {type(v).__name__}')
+        for name, output in self.outputs.items():
+            value = output.value if isinstance(output, OutputSpec) else output
+            if isinstance(value, Merge):
+                raise ValueError(f'Output {name!r} contains a Merge value')
+            if isinstance(value, ForcedFunction):
+                raise ValueError(f'Output {name!r} contains a ForcedFunction')
+            for v in DAG._walk_values(value):
+                if isinstance(v, Merge):
+                    raise ValueError(f'Output {name!r} contains a Merge value nested inside {type(v).__name__}')
+                if isinstance(v, ForcedFunction):
+                    raise ValueError(f'Output {name!r} contains a ForcedFunction nested inside {type(v).__name__}')
+
+    def _check_output_types(self):
+        for name, output in self.outputs.items():
+            if isinstance(output, OutputSpec) and output.type is None:
+                raise ValueError(f'Output {name!r} has no explicit type')
 
     @staticmethod
     def _validate_mapped_ports(step):
+        if step.map.get('group_by') is not None:
+            return
         scatter = step.map.get('scatter')
         broadcast = step.map.get('broadcast')
         if scatter is None:

@@ -107,7 +107,7 @@ def _build_output_specs(forcer, outputs):
 def _infer_output_type(forcer, value):
     normalized = _normalize_output_value(value)
     if isinstance(normalized, Input):
-        return normalized.type
+        return normalized.type or 'str'
     if isinstance(normalized, Literal):
         if isinstance(normalized.value, bool):
             return 'bool'
@@ -117,19 +117,21 @@ def _infer_output_type(forcer, value):
             return 'float'
         if isinstance(normalized.value, str):
             return 'str'
+        return 'str'
+    if isinstance(normalized, Record):
         return None
     if isinstance(normalized, Field):
         if isinstance(normalized.source, Input):
             source_type = normalized.source.type
             if source_type and source_type.startswith('[') and source_type.endswith(']'):
                 return source_type[1:-1]
-            return None
+            return source_type or 'str'
         if isinstance(normalized.source, StepCall):
             spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
             typ = spec.get('type')
             if getattr(normalized.source, 'map', None) is not None and typ is not None:
                 return _as_array_type(forcer, typ)
-            return typ
+            return typ or 'str'
         if isinstance(normalized.source, Field):
             current = normalized
             while isinstance(current, Field) and isinstance(current.source, Field):
@@ -139,11 +141,9 @@ def _infer_output_type(forcer, value):
                 typ = spec.get('type')
                 if getattr(current.source, 'map', None) is not None and typ is not None:
                     return _as_array_type(forcer, typ)
-                return typ
-            return None
-    if isinstance(normalized, Record):
-        return None
-    return None
+                return typ or 'str'
+            return 'str'
+    return 'str'
 
 
 def _is_optional_type(forcer, output_type):

@@ -197,7 +197,7 @@ map call_variant
             'steps': [],
             'outputs': {'x': {'source': 'literal', 'value': 1}},
         }
-        with self.assertRaisesRegex(ValueError, 'WDL does not support literal workflow outputs'):
+        with self.assertRaisesRegex(ValueError, 'has no explicit type'):
             transpile_dag_dict(bad)
 
     def test_partial_workflow_transpiles(self):
@@ -235,7 +235,7 @@ map call_variant
             }],
             'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
-        with self.assertRaisesRegex(ValueError, 'merge'):
+        with self.assertRaisesRegex(ValueError, 'Merge'):
             transpile_dag_dict(bad)
 
 

@@ -10,6 +10,7 @@ def transpile_dag_file(path):
 
 def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     dag = DAG.from_dict(data)
+    dag.validate()
     _validate_supported(dag)
 
     structs = _collect_structs(dag)
@@ -686,20 +687,9 @@ def _validate_supported(dag):
 
 
 def _validate_binding(value, step_id):
-    if isinstance(value, Merge):
-        raise ValueError(
-            f'WDL transpilation does not support merge bindings '
-            f'(step {step_id}). Flatten merges before transpiling.'
-        )
-    if isinstance(value, dict) and value.get('source') == 'merge':
-        raise ValueError(
-            f'WDL transpilation does not support merge bindings '
-            f'(step {step_id}). Flatten merges before transpiling.'
-        )
+    pass
 
 
 def _validate_output_binding(value, name):
     if isinstance(value, Literal):
         raise ValueError(f'WDL does not support literal workflow outputs: {name}')
-    if isinstance(value, Merge):
-        raise ValueError(f'WDL does not support merge workflow outputs: {name}')

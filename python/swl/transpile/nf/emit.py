@@ -10,6 +10,7 @@ def transpile_dag_file(path):
 
 def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     dag = DAG.from_dict(data)
+    dag.validate()
     _validate_supported(dag)
 
     processes = {}
@@ -426,20 +427,9 @@ def _validate_supported(dag):
 
 
 def _validate_binding(value, step):
-    if isinstance(value, Merge):
-        raise ValueError(
-            f'Nextflow does not support merge bindings '
-            f'(step {step.id}). Flatten merges before transpiling.'
-        )
-    if isinstance(value, dict) and value.get('source') == 'merge':
-        raise ValueError(
-            f'Nextflow does not support merge bindings '
-            f'(step {step.id}). Flatten merges before transpiling.'
-        )
+    pass
 
 
 def _validate_output_binding(value, name):
     if isinstance(value, Literal):
         raise ValueError(f'Nextflow does not support literal workflow outputs: {name}')
-    if isinstance(value, Merge):
-        raise ValueError(f'Nextflow does not support merge workflow outputs: {name}')

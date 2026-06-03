@@ -199,7 +199,7 @@ call  = import "call.sh"
         self.assertIn('type', data['outputs']['bam'])
         self.assertIn('value', data['outputs']['bam'])
         self.assertEqual(data['outputs']['bam']['type'], 'file')
-        self.assertEqual(data['outputs']['bam']['value'], {'step': 'sort', 'output': 'bam'})
+        self.assertEqual(data['outputs']['bam']['value'], {'source': 'step_output', 'step': 'sort', 'output': 'bam'})
         restored = DAG.from_dict(data)
         self.assertEqual(restored.to_dict(), data)
 

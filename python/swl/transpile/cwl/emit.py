@@ -11,6 +11,7 @@ def transpile_dag_file(path):
 
 def transpile_dag_dict(data, workflow_id='main'):
     dag = DAG.from_dict(data)
+    dag.validate()
     _validate_supported(dag)
     tools = []
     tool_ids = {}
@@ -347,10 +348,6 @@ def _step_input_error(value):
     except ValueError as exc:
         text = str(exc)
         kind = value.__class__.__name__
-        if kind == 'Merge':
-            return 'merge values are not supported'
-        if kind == 'ForcedFunction':
-            return 'function values are not supported'
         if kind == 'Field':
             return f'field source {value.source.__class__.__name__} is not supported'
         return text.removeprefix('Unsupported binding for CWL transpilation: ').strip()
@@ -366,10 +363,6 @@ def _workflow_output_error(value):
         return None
     except ValueError:
         kind = value.__class__.__name__
-        if kind == 'Merge':
-            return 'merge outputs are not supported'
-        if kind == 'ForcedFunction':
-            return 'function outputs are not supported'
         if kind == 'Field':
             return f'field source {value.source.__class__.__name__} is not supported'
         return f'{kind} outputs are not supported'
