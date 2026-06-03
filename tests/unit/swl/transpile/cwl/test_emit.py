@@ -243,7 +243,7 @@ map call_variant
             ],
             'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
-        with self.assertRaisesRegex(ValueError, 'Unsupported step binding during deserialization: x'):
+        with self.assertRaisesRegex(ValueError, 'Unsupported step input binding for CWL transpilation: align.x'):
             transpile_dag_dict(bad)
 
     def test_batch_mapped_task_emits_scatter_and_tab_column_input_type(self):

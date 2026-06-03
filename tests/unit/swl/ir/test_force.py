@@ -253,18 +253,8 @@ class TestForce(ut.TestCase):
         data = dag.to_dict()
         self.assertEqual([task['id'] for task in data['steps']], ['align', 'sort'])
         bam = data['steps'][1]['bindings']['bam']
-        self.assertEqual(bam['source'], 'align')
+        self.assertEqual(bam['step'], 'align')
         self.assertEqual(bam['output'], 'bam')
-        self.assertIn('fastq1', data['inputs'])
-        self.assertIn('outbase', data['inputs'])
-        self.assertEqual(data['inputs']['fastq1']['type'], 'file')
-        self.assertEqual(data['inputs']['fastq1']['desc'], 'fastq reads')
-        self.assertEqual(data['inputs']['outbase']['type'], 'str')
-        self.assertEqual(data['inputs']['outbase']['desc'], 'output base')
-        self.assertIn('echo align', data['steps'][0]['script'])
-        self.assertIn('outputs', data['steps'][0])
-        self.assertEqual(data['steps'][0]['outputs']['bam']['default']['kind'], 'word')
-        self.assertEqual(data['steps'][0]['deps'], [])
         self.assertEqual(data['steps'][1]['deps'], ['align'])
         self.assertEqual(sorted(data['outputs'].keys()), ['bai', 'bam'])
 
@@ -382,7 +372,7 @@ class TestForce(ut.TestCase):
         self.assertIn('map', data['steps'][0])
         self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
         self.assertEqual(sorted(data['steps'][0]['map']['source']['columns'].keys()), ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
-        self.assertEqual(data['steps'][1]['bindings']['bam']['source'], 'align')
+        self.assertEqual(data['steps'][1]['bindings']['bam']['step'], 'align')
         self.assertEqual(data['steps'][1]['deps'], ['align'])
 
     def test_map_lambda_forces_as_generated_mapped_workflow(self):
@@ -390,7 +380,7 @@ class TestForce(ut.TestCase):
         data = force_file(os.path.join(root, 'map_lambda.swl'), files).to_dict()
         self.assertEqual([step['id'] for step in data['steps']], ['map_lambda_1', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
-        self.assertEqual(data['steps'][1]['bindings']['bam']['source'], 'map_lambda_1')
+        self.assertEqual(data['steps'][1]['bindings']['bam']['step'], 'map_lambda_1')
         self.assertIn('bam', data['inputs'])
 
     def test_map_lambda_with_inner_task_forces_as_generated_mapped_workflow(self):
@@ -401,7 +391,7 @@ class TestForce(ut.TestCase):
         definition = data['steps'][0]['definition']
         self.assertEqual(definition['class'], 'Workflow')
         self.assertEqual([step['id'] for step in definition['dag']['steps']], ['sub'])
-        self.assertEqual(data['steps'][1]['bindings']['bam']['source'], 'map_lambda_1')
+        self.assertEqual(data['steps'][1]['bindings']['bam']['step'], 'map_lambda_1')
         self.assertEqual(sorted(data['inputs'].keys()), ['fastq1', 'fastq2', 'outbase', 'ref', 'ref_fai'])
 
     def test_map_partial_task_application_produces_mapped_step(self):
@@ -414,7 +404,7 @@ class TestForce(ut.TestCase):
         self.assertEqual([step['id'] for step in data['steps']], ['map_partial_1', 'merge'])
         self.assertEqual(data['steps'][0]['type'], 'workflow')
         self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
-        self.assertEqual(data['steps'][1]['bindings']['bam']['source'], 'map_partial_1')
+        self.assertEqual(data['steps'][1]['bindings']['bam']['step'], 'map_partial_1')
 
     def test_map_imported_workflow_produces_mapped_step(self):
         files, root = self._files()

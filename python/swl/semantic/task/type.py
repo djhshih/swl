@@ -170,23 +170,6 @@ class TypeChecker:
 
         return errors
 
-    def infer_workflow_input(self, tasks: List[str]) -> Set[str]:
-        all_outputs = set()
-        for task in tasks:
-            if task in self.signatures:
-                all_outputs.update(self.signatures[task].output_names())
-
-        unsatisfied = set()
-        for task in tasks:
-            if task in self.signatures:
-                inputs = self.signatures[task].input_names()
-                for inp in inputs:
-                    if inp not in all_outputs:
-                        unsatisfied.add(inp)
-
-        return unsatisfied
-
-
 def signature_from_task(task: task_node.Task) -> TaskSignature:
     '''Build semantic task signature from parsed task syntax.'''
     inputs = {}

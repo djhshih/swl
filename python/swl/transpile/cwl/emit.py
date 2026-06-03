@@ -440,7 +440,6 @@ def _cwl_type(value):
     if value == '[file]':
         base = {'type': 'array', 'items': 'File'}
         return ['null', base] if optional else base
-        return {'type': 'array', 'items': 'File'}
     if value == '[str]':
         base = {'type': 'array', 'items': 'string'}
         return ['null', base] if optional else base

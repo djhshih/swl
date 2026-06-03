@@ -418,11 +418,6 @@ class Lowerer:
             return list(body.function.signature.outputs.keys())
         return None
 
-    def _record_field_names(self, node):
-        if isinstance(node, ir.Record):
-            return list(node.fields.keys())
-        return None
-
     def _alloc_var_id(self):
         current = self.next_var_id
         self.next_var_id += 1

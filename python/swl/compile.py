@@ -6,10 +6,6 @@ import traceback
 from swl.ir.force import force_file
 
 
-class UserError(Exception):
-    pass
-
-
 def compile_workflow(input_path, output_path=None):
     dag = force_file(input_path)
     if output_path is None:
@@ -23,18 +19,11 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser('Compile workflow to canonical logical DAG JSON')
     ap.add_argument('input', help='input workflow file')
     ap.add_argument('-o', '--output', help='output DAG path')
-    ap.add_argument('--verbose', action='store_true', help='show full traceback for user errors')
     args = ap.parse_args()
 
     try:
         output = compile_workflow(args.input, args.output)
         print(f'wrote canonical logical DAG: {output}')
-    except UserError as e:
-        if args.verbose:
-            traceback.print_exc(file=sys.stderr)
-        else:
-            print(f'error: {e}', file=sys.stderr)
-        raise SystemExit(os.EX_DATAERR)
     except Exception:
         traceback.print_exc(file=sys.stderr)
         raise SystemExit(os.EX_DATAERR)

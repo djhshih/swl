@@ -66,10 +66,6 @@ class Parser:
             )
         return token
 
-    def _until(self, token_type: TokenType) -> bool:
-        '''Return True until eof or current token is of type `token_type`.'''
-        return not self.eof() and self.queue[0].type != token_type
-
     def _until_any(self, token_types: List[TokenType]) -> bool:
         '''Return True until eof or current token type matches any type
            in `token_types`.'''
@@ -79,17 +75,6 @@ class Parser:
             if t == token_type:
                 return False
         return True
-
-    def _find(self, token_type: TokenType) -> int:
-        '''Find and return index of token with type `token_type`,
-           but do not advance.'''
-        i = 0
-        while not self.eof():
-            token = self._at(i)
-            if token.type == token_type:
-                return i
-            i += 1
-        return -1
 
     def _parse_block(self, inner=False) -> node.Expr:
         '''Parse a block of code, which can be outer-level or inner-level.'''

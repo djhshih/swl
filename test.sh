@@ -48,10 +48,10 @@ evaluate_task() {
 	set +e
 	echo "file: $1"
 	echo "syntax:"
-	PYTHONPATH=python python -m swl.eval_task $1
+	PYTHONPATH=python python -m swl.eval.syntax_task $1
 	printf "return: $?\n"
 	echo "semantic:"
-	PYTHONPATH=python python -m swl.eval_task_semantic $1
+	PYTHONPATH=python python -m swl.eval.semantic_task $1
 	printf "return: $?\n\n"
 	set -e
 }
@@ -74,15 +74,15 @@ evaluate_wf() {
 	fi
 
 	echo "syntax:"
-	PYTHONPATH=python python -m swl.eval "$wf"
+	PYTHONPATH=python python -m swl.eval.syntax_wf "$wf"
 	printf "return: $?\n"
 
 	echo "semantic:"
-	PYTHONPATH=python python -m swl.eval_wf_semantic "$wf"
+	PYTHONPATH=python python -m swl.eval.semantic_wf "$wf"
 	printf "return: $?\n"
 
 	echo "ir:"
-	PYTHONPATH=python python -m swl.eval_ir "$wf"
+	PYTHONPATH=python python -m swl.eval.ir "$wf"
 	local ir_status=$?
 	printf "return: %d" "$ir_status"
 	if (( expect_fail )) && (( ir_status != 0 )); then
@@ -90,11 +90,11 @@ evaluate_wf() {
 	fi
 	printf "\n"
 
-	echo "force:"
-	PYTHONPATH=python python -m swl.eval_force "$wf"
-	local force_status=$?
-	printf "return: %d" "$force_status"
-	if (( expect_fail )) && (( force_status != 0 )); then
+	echo "dag:"
+	PYTHONPATH=python python -m swl.eval.dag "$wf"
+	local dag_status=$?
+	printf "return: %d" "$dag_status"
+	if (( expect_fail )) && (( dag_status != 0 )); then
 		printf " (expected failure)"
 	fi
 	printf "\n"
