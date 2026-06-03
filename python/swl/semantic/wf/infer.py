@@ -665,33 +665,45 @@ def merge_arg_values(checker, left, right):
         return UnknownValue()
     merged = dict(left_fields)
     for name, value in right_fields.items():
-        if name in merged:
-            if isinstance(merged[name], UnknownValue) and isinstance(value, TypedValue):
-                merged[name] = value
-            elif isinstance(value, UnknownValue) and isinstance(merged[name], TypedValue):
-                pass
-            else:
-                left_type = value_type(checker, merged[name])
-                right_type = value_type(checker, value)
-                if left_type != wf_type.UNKNOWN and right_type != wf_type.UNKNOWN and left_type != right_type:
-                    pass
-                merged[name] = value
-        else:
+        if name not in merged:
             merged[name] = value
+            continue
+        current = merged[name]
+        if isinstance(current, UnknownValue) and isinstance(value, TypedValue):
+            merged[name] = value
+            continue
+        if isinstance(value, UnknownValue) and isinstance(current, TypedValue):
+            continue
+        merged[name] = value
     if isinstance(left, OpenRecord) or isinstance(right, OpenRecord):
         return OpenRecord(merged)
     return ClosedRecord(merged)
 
 
+def _unknown_output_fields(signature):
+    return {name: UnknownValue() for name in signature.outputs.keys()}
+
+
+def _record_fields(value):
+    if isinstance(value, (OpenRecord, ClosedRecord)):
+        return dict(value.fields)
+    return None
+
+
+def _value_items(value):
+    if isinstance(value, (OpenRecord, ClosedRecord)):
+        return value.fields.items()
+    if isinstance(value, TableValue):
+        return value.columns.items()
+    return None
+
+
 def field_map(checker, value):
-    if isinstance(value, OpenRecord):
-        return dict(value.fields)
-    if isinstance(value, ClosedRecord):
-        return dict(value.fields)
-    if isinstance(value, FunctionValue):
-        return {name: UnknownValue() for name in value.signature.outputs.keys()}
-    if isinstance(value, ClosureValue):
-        return {name: UnknownValue() for name in value.signature.outputs.keys()}
+    fields = _record_fields(value)
+    if fields is not None:
+        return fields
+    if isinstance(value, (FunctionValue, ClosureValue)):
+        return _unknown_output_fields(value.signature)
     if isinstance(value, ComputationValue):
         return field_map(checker, value.output_value)
     return None
@@ -701,9 +713,10 @@ def value_type(checker, value):
     if isinstance(value, TypedValue):
         return wf_type.scalar_from_name(getattr(value.type, 'value', None))
     if isinstance(value, TableValue):
-        return wf_type.TableType({name: value_type(checker, item) for name, item in sorted(value.columns.items())})
-    if isinstance(value, (OpenRecord, ClosedRecord)):
-        return wf_type.RecordType({name: value_type(checker, item) for name, item in sorted(value.fields.items())}, open=isinstance(value, OpenRecord))
+        return wf_type.TableType(_typed_items(checker, value.columns))
+    fields = _record_fields(value)
+    if fields is not None:
+        return wf_type.RecordType(_typed_items(checker, fields), open=isinstance(value, OpenRecord))
     if isinstance(value, ComputationValue):
         from swl.semantic.wf.signature import wf_function_type_from_signature
         return wf_function_type_from_signature(checker, value.signature, False).output
@@ -714,28 +727,12 @@ def value_type(checker, value):
 
 
 def signature_outputs(checker, value):
-    if isinstance(value, ComputationValue):
+    if isinstance(value, (ComputationValue, ClosureValue, FunctionValue)):
         return dict(value.signature.outputs)
-    if isinstance(value, ClosureValue):
-        return dict(value.signature.outputs)
-    if isinstance(value, FunctionValue):
-        return dict(value.signature.outputs)
-    if isinstance(value, ClosedRecord):
-        return {
-            name: param_from_value(checker, name, item)
-            for name, item in sorted(value.fields.items())
-        }
-    if isinstance(value, OpenRecord):
-        return {
-            name: param_from_value(checker, name, item)
-            for name, item in sorted(value.fields.items())
-        }
-    if isinstance(value, TableValue):
-        return {
-            name: param_from_value(checker, name, item)
-            for name, item in sorted(value.columns.items())
-        }
-    return {}
+    items = _value_items(value)
+    if items is None:
+        return {}
+    return {name: param_from_value(checker, name, item) for name, item in sorted(items)}
 
 
 def param_from_value(checker, name, value):
@@ -747,10 +744,7 @@ def task_type_from_value(checker, value):
     if isinstance(value, TypedValue):
         return value.type
     if isinstance(value, ComputationValue) and len(value.signature.outputs) == 1:
-        only = next(iter(value.signature.outputs.values()))
-        return only.type
-    if isinstance(value, (FunctionValue, ClosureValue, ComputationValue)):
-        return None
+        return next(iter(value.signature.outputs.values())).type
     return None
 
 
