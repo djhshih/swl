@@ -209,6 +209,8 @@ Import/file loading and definition caching are spread across checker, lowerer, a
 
 ## Phase 0 — Repository hygiene and deletion of obvious dead weight
 
+### Status: ✅ Eval scripts moved to `python/swl/eval/`, dead code removed, `__pycache__` ignored, `.gitignore` updated
+
 ### Actions
 
 1. Remove generated artifacts from source tree:
@@ -325,6 +327,8 @@ This creates a clear compiler/transpiler boundary and removes the root cause of 
 
 ## Phase 2 — Split `ir/force.py` by responsibility
 
+### Status: ✅ `ir/force.py` reduced to 15-line compat shim; `dag/` package created with `context.py`, `emit.py`, `evaluator.py`, `finalize.py`, `forcer.py`, `merge.py`, `tooldefs.py`, `node.py`, `binding.py`
+
 Current `ir/force.py` should be decomposed into smaller units. The exact split should serve the forcing stage's natural sub-tasks: context management, value evaluation, step emission, DAG finalization, tool definition loading, and merge handling.
 
 ### Proposed split
@@ -388,6 +392,8 @@ Forcing becomes understandable and testable in pieces.
 
 ## Phase 3 — Split `semantic/wf/check.py` into front-end services
 
+### Status: ✅ `check.py` slimmed to orchestration API, extracted: `imports.py`, `infer.py`, `scope.py`, `signature.py`, `bashvars.py`
+
 This file is too large and conceptually dense.
 
 ### Proposed split
@@ -444,10 +450,7 @@ The semantic layer becomes a set of smaller, named subsystems rather than one mo
 
 ## Phase 4 — Centralize type and optionality handling
 
-Create a single type utility module, e.g.:
-
-- `python/swl/types.py`
-- or `python/swl/semantic/types.py`
+### Status: ✅ `python/swl/types.py` created, all callers migrated
 
 ### Responsibilities
 
@@ -625,11 +628,11 @@ Export only stable public entry points.
 
 ## Recommended implementation order
 
-1. **Delete generated artifacts and dead code**
-2. **Normalize binding/DAG contract**
-3. **Refactor `ir/force.py`**
-4. **Refactor `semantic/wf/check.py`**
-5. **Centralize type utilities**
+1. ~~**Delete generated artifacts and dead code**~~
+2. ~~**Normalize binding/DAG contract**~~
+3. ~~**Refactor `ir/force.py`**~~
+4. ~~**Refactor `semantic/wf/check.py`**~~
+5. ~~**Centralize type utilities**~~
 6. **Simplify transpilers**
 7. **Introduce loader/cache service**
 8. **Clean CLI/public API**
