@@ -5,13 +5,14 @@ from swl.dag.node import Field, ForcedFunction, Input, Literal, Record, StepCall
 from swl.types import normalize_swl_type
 
 
+def _spec_type(spec):
+    return spec.type.value if getattr(spec, 'type', None) is not None else None
+
+
 def _input(forcer, name, spec=None):
     if name not in forcer.inputs:
-        typ = None
-        desc = None
-        if spec is not None:
-            typ = spec.type.value if getattr(spec, 'type', None) is not None else None
-            desc = spec.desc
+        typ = _spec_type(spec) if spec is not None else None
+        desc = spec.desc if spec is not None else None
         optional = bool(typ and typ.endswith('?'))
         forcer.inputs[name] = Input(name, typ, desc, optional)
     return forcer.inputs[name]
@@ -106,14 +107,13 @@ def _materialize_workflow_dag_impl(forcer, function):
         return force(function.body, state=forcer)
     arg = Record({name: _input(forcer, name, spec) for name, spec in signature.inputs.items()})
     if isinstance(function.body, ir.Lambda):
-        from swl.dag.evaluator import _apply
-        value = _apply(forcer, ForcedFunction(function.body, None, signature), arg)
+        value = ForcedFunction(function.body, None, signature)
     else:
         from swl.dag.evaluator import force_value
         value = force_value(forcer, function.body, ForceEnv())
-        if isinstance(value, ForcedFunction):
-            from swl.dag.evaluator import _apply
-            value = _apply(forcer, value, arg)
+    if isinstance(value, ForcedFunction):
+        from swl.dag.evaluator import _apply
+        value = _apply(forcer, value, arg)
     if isinstance(value, ForcedFunction):
         raise ValueError(f'Workflow materialization did not resolve to a concrete value: {function.path}')
     from swl.dag.finalize import _finalize_dag
@@ -151,6 +151,20 @@ def _tool_definition(forcer, path):
     return definition
 
 
+def _workflow_inputs(signature):
+    return {
+        name: {'type': normalize_swl_type(_spec_type(spec)), 'desc': spec.desc}
+        for name, spec in signature.inputs.items()
+    }
+
+
+def _workflow_outputs(signature):
+    return {
+        name: {'type': normalize_swl_type(_spec_type(spec))}
+        for name, spec in signature.outputs.items()
+    }
+
+
 def _workflow_definition(forcer, function):
     key = ('workflow', function.path)
     if key in forcer.tool_defs:
@@ -159,8 +173,8 @@ def _workflow_definition(forcer, function):
     definition = {
         'class': 'Workflow',
         'dag': body_dag,
-        'inputs': {name: {'type': normalize_swl_type(spec.type.value if getattr(spec, 'type', None) is not None else None), 'desc': spec.desc} for name, spec in function.signature.inputs.items()},
-        'outputs': {name: {'type': normalize_swl_type(spec.type.value if getattr(spec, 'type', None) is not None else None)} for name, spec in function.signature.outputs.items()},
+        'inputs': _workflow_inputs(function.signature),
+        'outputs': _workflow_outputs(function.signature),
         'body': '',
         'run': {},
     }
@@ -183,7 +197,7 @@ def _build_task_param(forcer, signature, kind, name, param):
     if kind == 'run':
         semantic = signature.run[name]
         built = {
-            'type': semantic.type.value if semantic.type is not None else None,
+            'type': _spec_type(semantic),
             'value': semantic.parsed_default,
         }
         if param.desc is not None:
@@ -191,7 +205,7 @@ def _build_task_param(forcer, signature, kind, name, param):
         return built
     semantic = signature.inputs.get(name) if kind == 'in' else signature.outputs.get(name)
     built = {
-        'type': semantic.type.value if semantic and semantic.type is not None else param.type,
+        'type': _spec_type(semantic) if semantic is not None else param.type,
     }
     if param.desc is not None:
         built['desc'] = param.desc
