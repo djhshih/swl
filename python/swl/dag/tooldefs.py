@@ -1,6 +1,7 @@
 from swl.ir import node as ir
 from swl.dag.context import ForceEnv
 from swl.dag.evaluator import _available_inputs, _force_map, _value_key
+from swl.dag.forcer import make_force_state, force
 from swl.dag.node import Field, ForcedFunction, Input, Literal, Record, StepCall
 from swl.types import normalize_swl_type
 
@@ -96,15 +97,14 @@ def _materialize_partial_map_workflow(forcer, value, signature):
 
 
 def _materialize_workflow_dag(forcer, function):
-    from swl.dag import Forcer
-    sub_forcer = Forcer(files=forcer.lowerer.checker.loader)
+    sub_forcer = make_force_state(files=forcer.lowerer.checker.loader)
     return _materialize_workflow_dag_impl(sub_forcer, function)
 
 
 def _materialize_workflow_dag_impl(forcer, function):
     signature = function.signature
     if signature is None:
-        return forcer.force(function.body)
+        return force(function.body, state=forcer)
     arg = Record({name: _input(forcer, name, spec) for name, spec in signature.inputs.items()})
     if isinstance(function.body, ir.Lambda):
         from swl.dag.evaluator import _apply
@@ -217,7 +217,8 @@ def _validate_output_default_glob(forcer, name, default):
         if depth != 0:
             raise ValueError(f'Malformed glob pattern in output "{name}" default: {text!r}')
     if '*' in text or '?' in text:
-        pass
+        # Glob metacharacters are allowed; only bracket structure is validated here.
+        return
 
 
 def _interp_to_dict(value):
