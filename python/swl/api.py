@@ -37,4 +37,7 @@ def transpile_dag(dag_path, target):
     if target == 'nf':
         from swl.transpile.nf.emit import transpile_dag_file
         return transpile_dag_file(dag_path)
+    if target == 'smk':
+        from swl.transpile.smk.emit import transpile_dag_file
+        return transpile_dag_file(dag_path)
     raise ValueError(f'Unsupported transpilation target: {target!r}')

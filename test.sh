@@ -8,6 +8,7 @@ COMPARE_COUNT=0
 CWL_COMPARE_COUNT=0
 WDL_COMPARE_COUNT=0
 NF_COMPARE_COUNT=0
+SMK_COMPARE_COUNT=0
 
 EXPECT_COMPILE_FAIL=(
 	tests/bad_explicit.swl
@@ -172,6 +173,7 @@ print_summary() {
 	echo "  cwl golden checks: $CWL_COMPARE_COUNT"
 	echo "  wdl golden checks: $WDL_COMPARE_COUNT"
 	echo "  nf golden checks: $NF_COMPARE_COUNT"
+	echo "  smk golden checks: $SMK_COMPARE_COUNT"
 }
 
 if (( $# > 0 )); then
@@ -248,6 +250,24 @@ else
 	compare_files tests/nf/pipe.nf tests/nf/function.nf
 	compare_files tests/nf/explicit.nf tests/nf/function.nf
 	NF_COMPARE_COUNT=$((NF_COMPARE_COUNT + 2))
+
+	mkdir -p tests/smk
+	PYTHONPATH=python python -m swl.transpile.smk tests/dag/function.json \
+		-o tests/smk/function.smk
+	PYTHONPATH=python python -m swl.transpile.smk tests/dag/pipe.json \
+		-o tests/smk/pipe.smk
+	PYTHONPATH=python python -m swl.transpile.smk tests/dag/explicit.json \
+		-o tests/smk/explicit.smk
+	PYTHONPATH=python python -m swl.transpile.smk tests/dag/panel.json \
+		-o tests/smk/panel.smk
+	PYTHONPATH=python python -m swl.transpile.smk tests/dag/map.json \
+		-o tests/smk/map.smk
+	PYTHONPATH=python python -m swl.transpile.smk tests/dag/map_by.json \
+		-o tests/smk/map_by.smk
+
+	compare_files tests/smk/pipe.smk tests/smk/function.smk
+	compare_files tests/smk/explicit.smk tests/smk/function.smk
+	SMK_COMPARE_COUNT=$((SMK_COMPARE_COUNT + 2))
 
 	print_summary
 fi
