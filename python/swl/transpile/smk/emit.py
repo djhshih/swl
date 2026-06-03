@@ -22,7 +22,7 @@ def transpile_dag_file(path):
     return transpile_dag_dict(dag.to_dict())
 
 
-def transpile_dag_dict(data, workflow_id='main', _top_level=True):
+def transpile_dag_dict(data, workflow_id='main', _top_level=True, wrap_map=None):
     dag = DAG.from_dict(data)
     dag.validate()
     _validate_supported(dag)
@@ -40,16 +40,15 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
 
     lines = []
     if _top_level:
-        wildcard_lists = _collect_wildcard_lists(dag)
-        if wildcard_lists:
-            lines.append('# TODO: Define wildcard lists for mapped outputs')
-            for port in sorted(wildcard_lists):
-                lines.append(f'{port.upper()}_LIST = [...]')
+        wildcard_globs = _collect_wildcard_globs(dag)
+        if wildcard_globs:
+            for g in wildcard_globs:
+                lines.append(g)
             lines.append('')
     for step in dag.steps:
         if step.type == 'workflow':
             continue
-        lines.append(_task_to_rule(step, dag))
+        lines.append(_task_to_rule(step, dag, wrap_map))
         lines.append('')
     for sub in sub_workflows:
         lines.append(sub)
@@ -59,16 +58,69 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     return '\n'.join(lines)
 
 
-def _collect_wildcard_lists(dag):
-    ports = set()
+def _collect_wildcard_globs(dag):
+    globs = []
+    seen = set()
     for name, output in dag.outputs.items():
         value = output.value if isinstance(output, OutputSpec) else output
         if _is_mapped_output(value):
             step = _step_for_output(value)
-            if step is not None:
-                for port in step.map.get('scatter', []):
-                    ports.add(port)
-    return ports
+            if step is not None and step.id not in seen:
+                seen.add(step.id)
+                wildcard_vars = _mapped_output_wildcards(step)
+                if wildcard_vars:
+                    for var in sorted(wildcard_vars):
+                        globs.append(f'{var.upper()} = config["{var}"]')
+    return globs
+
+
+def _mapped_inner_output_default(step, output_name):
+    dag_data = (step.task or {}).get('dag', {})
+    sub_outputs = dag_data.get('outputs', {})
+    sub_value = sub_outputs.get(output_name, {})
+    if isinstance(sub_value, dict):
+        inner_value = sub_value.get('value', sub_value)
+        inner_step_id = inner_value.get('step') if isinstance(inner_value, dict) else None
+        inner_output_name = inner_value.get('output') if isinstance(inner_value, dict) else None
+        if inner_step_id and inner_output_name:
+            for s in dag_data.get('steps', []):
+                if s.get('id') == inner_step_id:
+                    out_spec = s.get('outputs', {}).get(inner_output_name, {})
+                    return out_spec.get('default')
+    return None
+
+
+def _mapped_output_wildcards(step):
+    vars_set = set()
+    dag_data = (step.task or {}).get('dag', {})
+    for out_name in dag_data.get('outputs', {}):
+        default_spec = _mapped_inner_output_default(step, out_name)
+        if default_spec:
+            rendered = _interp_to_smk(default_spec)
+            if rendered:
+                vars_in = re.findall(r'\{(\w+)\}', rendered)
+                vars_set.update(vars_in)
+    return vars_set
+
+
+def _mapped_output_expand(name, step):
+    default_spec = _mapped_inner_output_default(step, name)
+    if default_spec:
+        rendered = _interp_to_smk(default_spec)
+        if rendered:
+            vars_in = re.findall(r'\{(\w+)\}', rendered)
+            if vars_in:
+                kwargs = ', '.join(f'{v}={v.upper()}' for v in vars_in)
+                return f'expand({repr(rendered)}, {kwargs})'
+            return repr(rendered)
+    scatter_ports = sorted(step.map.get('scatter', []))
+    if not scatter_ports:
+        return repr(f'results/{step.id}/{name}')
+    first = scatter_ports[0]
+    var = first.upper()
+    dirs = [f'results/{step.id}', '{' + first + '}', name]
+    pattern = '/'.join(dirs)
+    return f'expand("{pattern}", {first}={var})'
 
 
 def _validate_supported(dag):
@@ -108,7 +160,7 @@ def _interp_to_smk(value):
     )
 
 
-def _task_to_rule(step, dag):
+def _task_to_rule(step, dag, wrap_map=None):
     task = step.task or {}
     body = task.get('body', '')
     rname = _rule_name(step.id)
@@ -116,7 +168,7 @@ def _task_to_rule(step, dag):
     is_map_by = is_mapped and step.map.get('group_by') is not None
 
     if is_map_by:
-        return _mapped_by_step_to_smk(step, dag)
+        return _mapped_by_step_to_smk(step, dag, wrap_map)
 
     scatter_ports = set()
     if is_mapped:
@@ -129,10 +181,7 @@ def _task_to_rule(step, dag):
         lines.append('    input:')
         for in_name in task_inputs:
             binding = step.bindings.get(in_name)
-            if is_mapped and in_name in scatter_ports:
-                path_expr = repr('inputs/{' + in_name + '}')
-            else:
-                path_expr = _binding_to_path(binding, in_name, is_mapped, scatter_ports)
+            path_expr = _binding_to_path(binding, in_name, is_mapped, scatter_ports, wrap_map)
             lines.append(f'        {_san(in_name)}={path_expr},')
         lines.append('')
 
@@ -191,24 +240,17 @@ def _default_output_path(step_id, out_name, is_mapped, scatter_ports):
     return repr(f'results/{step_id}/{out_name}')
 
 
-def _binding_to_path(binding, port_name, is_mapped, scatter_ports):
+def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None):
     if binding is None:
-        if is_mapped and port_name in scatter_ports:
-            return repr('inputs/{' + port_name + '}')
-        return repr(f'inputs/{port_name}')
+        return f'config["{port_name}"]'
 
     if isinstance(binding, Input):
-        if is_mapped and port_name in scatter_ports:
-            return repr('inputs/{' + port_name + '}')
-        return repr(f'inputs/{binding.name}')
+        return f'config["{binding.name}"]'
 
     if isinstance(binding, Field):
         if isinstance(binding.source, Input):
             root = binding.source
-            tail = field_path_after_first(binding)
-            if tail:
-                return repr(f'inputs/{root.name}/{tail}')
-            return f'inputs.{root.name}'
+            return f'config["{root.name}"]'
         if isinstance(binding.source, StepCall):
             prev_step = binding.source
             spec = (prev_step.task or {}).get('outputs', {}).get(binding.name, {})
@@ -268,8 +310,11 @@ def _collect_params(step):
             binding = step.bindings.get(in_name)
             if isinstance(binding, Literal):
                 params.append((_san(in_name), json.dumps(binding.value)))
-            elif isinstance(binding, Input):
-                params.append((_san(in_name), f'config["{binding.name}"]'))
+    run = (step.task or {}).get('run', {})
+    for name in ('cpu', 'memory', 'time'):
+        spec = run.get(name, {})
+        if isinstance(spec, dict) and spec.get('type') in ('int', 'str', 'float'):
+            params.append((_san(name), json.dumps(spec['value'])))
     return params
 
 
@@ -323,16 +368,7 @@ def _dag_to_smk(dag, workflow_id, rule_names):
         for name, (value, output) in sorted(mapped_outputs.items()):
             step = _step_for_output(value)
             if step is not None:
-                scatter_ports = sorted(step.map.get('scatter', []))
-                dirs = [f'results/{step.id}']
-                for port in scatter_ports:
-                    dirs.append('{' + port + '}')
-                dirs.append(name)
-                pattern = '/'.join(dirs)
-                expand_args = ', '.join(
-                    f'{port}={port.upper() + "_LIST"}' for port in scatter_ports
-                )
-                lines.append(f'        expand("{pattern}", {expand_args}),')
+                lines.append(f'        {_mapped_output_expand(name, step)},')
 
         lines.append('')
 
@@ -353,7 +389,7 @@ def _step_for_output(value):
 
 def _output_to_path(name, value, dag):
     if isinstance(value, Input):
-        return repr(f'inputs/{value.name}')
+        return f'config["{value.name}"]'
     if isinstance(value, Literal):
         return repr(value.value)
     if isinstance(value, Field):
@@ -370,7 +406,7 @@ def _output_to_path(name, value, dag):
                 return _default_output_path(prev.id, value.name, True, scatter_ports)
             return repr(f'results/{prev.id}/{value.name}')
         if isinstance(value.source, Input):
-            return repr(f'inputs/{value.source.name}/{value.name}')
+            return f'config["{value.source.name}"]'
     if isinstance(value, Record):
         parts = []
         for fname, fval in sorted(value.fields.items()):
@@ -379,7 +415,7 @@ def _output_to_path(name, value, dag):
     raise ValueError(f'Unsupported output value for Snakemake: {type(value).__name__}')
 
 
-def _mapped_by_step_to_smk(step, dag):
+def _mapped_by_step_to_smk(step, dag, wrap_map=None):
     map_info = step.map or {}
     group_key = map_info.get('group_by')
     source = map_info.get('source', {})
@@ -415,7 +451,7 @@ def _mapped_by_step_to_smk(step, dag):
     else:
         for col in col_names:
             binding = step.bindings.get(col)
-            path_expr = _binding_to_path(binding, col, True, {col})
+            path_expr = _binding_to_path(binding, col, True, {col}, wrap_map)
             lines.append(f'        {_san(col)}={path_expr},')
     lines.append('    output:')
     lines.append(f'        groups=directory("results/{rname}/group/{{{key_wildcard}}}"),')
@@ -459,4 +495,13 @@ def _subworkflow_to_smk(step, parent_id):
     if not dag_data:
         return ''
     wf_id = f'{parent_id}_{step.id}'
-    return transpile_dag_dict(dag_data, workflow_id=wf_id, _top_level=False)
+    wrap_map = None
+    if step.map is not None:
+        scatter_ports = step.map.get('scatter', [])
+        if scatter_ports:
+            wrap_map = {
+                "step_id": step.id,
+                "wildcard": scatter_ports[0],
+                "scatter_ports": set(scatter_ports),
+            }
+    return transpile_dag_dict(dag_data, workflow_id=wf_id, _top_level=False, wrap_map=wrap_map)
