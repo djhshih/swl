@@ -74,7 +74,7 @@ def _collect_wildcard_globs(dag):
     return globs
 
 
-def _mapped_inner_output_default(step, output_name):
+def _inner_output_default(step, output_name):
     dag_data = (step.task or {}).get('dag', {})
     sub_outputs = dag_data.get('outputs', {})
     sub_value = sub_outputs.get(output_name, {})
@@ -94,7 +94,7 @@ def _mapped_output_wildcards(step):
     vars_set = set()
     dag_data = (step.task or {}).get('dag', {})
     for out_name in dag_data.get('outputs', {}):
-        default_spec = _mapped_inner_output_default(step, out_name)
+        default_spec = _inner_output_default(step, out_name)
         if default_spec:
             rendered = _interp_to_smk(default_spec)
             if rendered:
@@ -104,7 +104,7 @@ def _mapped_output_wildcards(step):
 
 
 def _mapped_output_expand(name, step):
-    default_spec = _mapped_inner_output_default(step, name)
+    default_spec = _inner_output_default(step, name)
     if default_spec:
         rendered = _interp_to_smk(default_spec)
         if rendered:
@@ -177,9 +177,18 @@ def _task_to_rule(step, dag, wrap_map=None):
     lines = [f'rule {rname}:', '']
 
     task_inputs = task.get('inputs', {})
-    if task_inputs:
+    file_inputs = {}
+    string_inputs = {}
+    for in_name, spec in task_inputs.items():
+        typ = spec.get('type', 'file')
+        if typ in ('str', 'int', 'float'):
+            string_inputs[in_name] = spec
+        else:
+            file_inputs[in_name] = spec
+
+    if file_inputs:
         lines.append('    input:')
-        for in_name in task_inputs:
+        for in_name in file_inputs:
             binding = step.bindings.get(in_name)
             path_expr = _binding_to_path(binding, in_name, is_mapped, scatter_ports, wrap_map)
             lines.append(f'        {_san(in_name)}={path_expr},')
@@ -280,21 +289,40 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
 
 def _interpolate_shell(body, step):
     task = step.task or {}
-    input_names = set(task.get('inputs', {}).keys())
+    task_inputs = task.get('inputs', {})
+    input_names = set()
+    for name, spec in task_inputs.items():
+        if spec.get('type') not in ('str', 'int', 'float'):
+            input_names.add(name)
     output_names = set(step.outputs)
     param_names = {p[0] for p in _collect_params(step)}
 
-    def replace_var(m):
-        var = m.group(1) or m.group(2)
+    def _resolve_var(var):
         if var in input_names:
             return '{input.' + _san(var) + '}'
         if var in output_names:
             return '{output.' + _san(var) + '}'
         if var in param_names:
             return '{params.' + var + '}'
-        return m.group(0)
+        return None
 
-    pattern = r'(?<!\$)\$\{(\w+)\}|(?<!\$)\$(\w+)'
+    def replace_var(m):
+        if m.group(1) is not None:
+            content = m.group(1).strip()
+            if re.fullmatch(r'\w+', content):
+                resolved = _resolve_var(content)
+                return resolved if resolved else m.group(0)
+            resolved = content
+            for var in re.findall(r'\w+', content):
+                r = _resolve_var(var)
+                if r:
+                    resolved = resolved.replace(var, r, 1)
+            return '$(( ' + resolved + ' ))'
+        var = m.group(2)
+        resolved = _resolve_var(var)
+        return resolved if resolved else m.group(0)
+
+    pattern = r'(?<!\$)\$\{(.+?)\}|(?<!\$)\$(\w+)'
     result = []
     for line in body.split('\n'):
         result.append(re.sub(pattern, replace_var, line))
@@ -310,10 +338,24 @@ def _collect_params(step):
             binding = step.bindings.get(in_name)
             if isinstance(binding, Literal):
                 params.append((_san(in_name), json.dumps(binding.value)))
+            elif isinstance(binding, Field) and isinstance(binding.source, StepCall):
+                prev_step = binding.source
+                prev_spec = (prev_step.task or {}).get('outputs', {}).get(binding.name, {})
+                default_spec = prev_spec.get('default')
+                if default_spec:
+                    rendered = _interp_to_smk(default_spec)
+                    if rendered is not None:
+                        params.append((_san(in_name), repr(rendered)))
+                    else:
+                        params.append((_san(in_name), repr(f'results/{prev_step.id}/{binding.name}')))
+                else:
+                    params.append((_san(in_name), repr(f'results/{prev_step.id}/{binding.name}')))
+            else:
+                params.append((_san(in_name), f'config["{in_name}"]'))
     run = (step.task or {}).get('run', {})
     for name in ('cpu', 'memory', 'time'):
         spec = run.get(name, {})
-        if isinstance(spec, dict) and spec.get('type') in ('int', 'str', 'float'):
+        if isinstance(spec, dict) and spec.get('type') in ('int', 'str', 'float', 'memory', 'time'):
             params.append((_san(name), json.dumps(spec['value'])))
     return params
 
@@ -401,6 +443,12 @@ def _output_to_path(name, value, dag):
                 rendered = _interp_to_smk(default_spec)
                 if rendered is not None:
                     return repr(rendered)
+            if prev.type == 'workflow':
+                inner_default = _inner_output_default(prev, value.name)
+                if inner_default:
+                    rendered = _interp_to_smk(inner_default)
+                    if rendered is not None:
+                        return repr(rendered)
             if prev.map is not None:
                 scatter_ports = set(prev.map.get('scatter', []))
                 return _default_output_path(prev.id, value.name, True, scatter_ports)
