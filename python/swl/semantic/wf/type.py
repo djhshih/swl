@@ -2,6 +2,14 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 
+
+def _field_types(params):
+    return {
+        name: scalar_from_name(getattr(getattr(param, 'type', None), 'value', None))
+        for name, param in params.items()
+    }
+
+
 @dataclass(frozen=True)
 class WfType:
     pass
@@ -58,15 +66,10 @@ def scalar_from_name(name: Optional[str]) -> WfType:
 
 
 def from_task_signature(signature):
-    inputs = {}
-    for name, param in signature.inputs.items():
-        typ = getattr(getattr(param, 'type', None), 'value', None)
-        inputs[name] = scalar_from_name(typ)
-    outputs = {}
-    for name, param in signature.outputs.items():
-        typ = getattr(getattr(param, 'type', None), 'value', None)
-        outputs[name] = scalar_from_name(typ)
-    return FunctionType(RecordType(inputs, open=True), RecordType(outputs, open=False))
+    return FunctionType(
+        RecordType(_field_types(signature.inputs), open=True),
+        RecordType(_field_types(signature.outputs), open=False),
+    )
 
 
 def is_record_type(value):
