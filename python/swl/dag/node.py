@@ -109,16 +109,11 @@ class ForcedFunction:
     satisfied: Set[str] = field(default_factory=set)
 
 
-@dataclass(init=False)
+@dataclass
 class DAG:
     inputs: Dict[str, Input]
-    steps: List[StepCall]
-    outputs: Dict[str, OutputSpec]
-
-    def __init__(self, inputs, steps=None, outputs=None):
-        self.inputs = inputs
-        self.steps = steps if steps is not None else []
-        self.outputs = outputs if outputs is not None else {}
+    steps: List[StepCall] = field(default_factory=list)
+    outputs: Dict[str, OutputSpec] = field(default_factory=dict)
 
     def to_dict(self):
         return {
@@ -174,13 +169,25 @@ class DAG:
         }
 
     def validate(self):
-        step_ids = {step.id for step in self.steps}
+        step_by_id = {step.id: step for step in self.steps}
+        self._validate_step_deps(step_by_id)
+        self._validate_acyclic(step_by_id)
+        for step in self.steps:
+            if step.map is not None:
+                self._validate_mapped_ports(step)
+        self._check_no_disallowed_values()
+        self._check_output_types()
+
+    def _validate_step_deps(self, step_by_id):
         for step in self.steps:
             for dep in step.deps:
-                if dep not in step_ids:
+                if dep not in step_by_id:
                     raise ValueError(f'Step {step.id} depends on unknown step: {dep}')
+
+    def _validate_acyclic(self, step_by_id):
         visited = set()
         in_stack = set()
+
         def visit(step_id):
             if step_id in in_stack:
                 raise ValueError(f'Circular dependency detected in DAG involving step: {step_id}')
@@ -188,18 +195,12 @@ class DAG:
                 return
             visited.add(step_id)
             in_stack.add(step_id)
-            step = next(s for s in self.steps if s.id == step_id)
-            for dep in step.deps:
+            for dep in step_by_id[step_id].deps:
                 visit(dep)
             in_stack.remove(step_id)
-        for step in self.steps:
-            if step.id not in visited:
-                visit(step.id)
-        for step in self.steps:
-            if step.map is not None:
-                self._validate_mapped_ports(step)
-        self._check_no_disallowed_values()
-        self._check_output_types()
+
+        for step_id in step_by_id:
+            visit(step_id)
 
     @staticmethod
     def _walk_values(value):
@@ -276,39 +277,11 @@ class DAG:
         steps = []
         step_by_id = {}
         for item in steps_data:
-            step_outputs = item.get('outputs', {})
-            step_run = item.get('run', {})
-            step_inputs = item.get('inputs', {})
-            step_cls = StepCall
-            step = step_cls(
-                id=item['id'],
-                path=item['path'],
-                bindings={},
-                outputs=list(step_outputs.keys()),
-                run={
-                    name: value
-                    for name, spec in item.get('run', {}).items()
-                    if (value := _run_value_from_dict(name, spec, step_run, inputs, step_by_id)) is not None
-                },
-                task=item.get('definition', {
-                    'doc': None,
-                    'body': item.get('script', ''),
-                    'inputs': step_inputs,
-                    'outputs': step_outputs,
-                    'run': step_run,
-                }),
-                deps=list(item.get('deps', [])),
-                type=item.get('type', 'task'),
-                **({'source': binding_from_dict(item['map']['source'], inputs, step_by_id) if item.get('map', {}).get('source') is not None or item.get('map', {}).get('fields') is not None else None, 'map': item.get('map'), 'input_schema': item.get('input_schema'), 'output_schema': item.get('output_schema')} if item.get('map') is not None else {}),
-            )
+            step = _step_from_dict(item, inputs, step_by_id)
             steps.append(step)
             step_by_id[step.id] = step
         for step, item in zip(steps, steps_data):
-            step.bindings.update({
-                name: inputs[name]
-                for name in step.task.get('inputs', {}).keys()
-                if name in inputs and name not in item.get('bindings', {})
-            })
+            step.bindings.update(_default_input_bindings(step, inputs, item))
             step.bindings.update({
                 name: binding_from_dict(value, inputs, step_by_id)
                 for name, value in item.get('bindings', {}).items()
@@ -327,6 +300,57 @@ class DAG:
     def read(cls, path):
         with open(path, 'r') as f:
             return cls.from_dict(json.load(f))
+
+
+def _step_from_dict(item, inputs, step_by_id):
+    step_outputs = item.get('outputs', {})
+    step_run = item.get('run', {})
+    step_inputs = item.get('inputs', {})
+    map_data = item.get('map')
+    return StepCall(
+        id=item['id'],
+        path=item['path'],
+        bindings={},
+        outputs=list(step_outputs.keys()),
+        run={
+            name: value
+            for name, spec in step_run.items()
+            if (value := _run_value_from_dict(name, spec, step_run, inputs, step_by_id)) is not None
+        },
+        task=item.get('definition', {
+            'doc': None,
+            'body': item.get('script', ''),
+            'inputs': step_inputs,
+            'outputs': step_outputs,
+            'run': step_run,
+        }),
+        deps=list(item.get('deps', [])),
+        type=item.get('type', 'task'),
+        **(_mapped_step_fields(map_data, item, inputs, step_by_id) if map_data is not None else {}),
+    )
+
+
+
+def _mapped_step_fields(map_data, item, inputs, step_by_id):
+    source = None
+    if map_data.get('source') is not None or map_data.get('fields') is not None:
+        source = binding_from_dict(map_data['source'], inputs, step_by_id)
+    return {
+        'source': source,
+        'map': map_data,
+        'input_schema': item.get('input_schema'),
+        'output_schema': item.get('output_schema'),
+    }
+
+
+
+def _default_input_bindings(step, inputs, item):
+    return {
+        name: inputs[name]
+        for name in step.task.get('inputs', {}).keys()
+        if name in inputs and name not in item.get('bindings', {})
+    }
+
 
 
 def _output_spec_from_dict(data, inputs, steps):
