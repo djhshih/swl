@@ -180,6 +180,35 @@ def _inline_import_value(checker, path):
     return _function_value_from_import(stem, load_import(checker, stem, full_path))
 
 
+def _resolve_field_access(checker, rec, field, expr, demanded, issues):
+    if isinstance(rec, OpenRecord):
+        demanded.add(field)
+        rec.fields[field] = UnknownValue()
+        return rec.fields[field]
+    if isinstance(rec, ClosedRecord):
+        return rec.fields.get(field, UnknownValue())
+    if isinstance(rec, TableValue):
+        if field in rec.columns:
+            return rec.columns[field]
+        if rec.placeholder:
+            issues.append('map requires a tab argument')
+            return UnknownValue()
+        issues.append(f'Missing field on tab: {field}')
+        rec.columns[field] = UnknownValue()
+        return rec.columns[field]
+    if isinstance(rec, ComputationValue):
+        outputs = field_map(checker, rec.output_value)
+        if outputs is not None and field in outputs:
+            return outputs[field]
+        if field in rec.signature.outputs:
+            return UnknownValue()
+    if isinstance(rec, (FunctionValue, ClosureValue)):
+        issues.append(f'Cannot access field on function value: {expr}')
+        return UnknownValue()
+    issues.append(f'Cannot resolve field access: {expr}')
+    return UnknownValue()
+
+
 def eval_expr(checker, expr, imports, env, demanded, issues):
     if expr.type == wf_node.NodeType.id:
         if expr.name in env:
@@ -202,37 +231,8 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
         return ClosedRecord(fields)
 
     if expr.type == wf_node.NodeType.get:
-        rec_expr = expr.rec
-        rec = eval_expr(checker, rec_expr, imports, env, demanded, issues)
-        field = expr.member.name
-        if isinstance(rec, OpenRecord):
-            demanded.add(field)
-            rec.fields[field] = UnknownValue()
-            return rec.fields[field]
-        if isinstance(rec, ClosedRecord):
-            if field in rec.fields:
-                return rec.fields[field]
-            return UnknownValue()
-        if isinstance(rec, TableValue):
-            if field in rec.columns:
-                return rec.columns[field]
-            if rec.placeholder:
-                issues.append('map requires a tab argument')
-                return UnknownValue()
-            issues.append(f'Missing field on tab: {field}')
-            rec.columns[field] = UnknownValue()
-            return rec.columns[field]
-        if isinstance(rec, ComputationValue):
-            outputs = field_map(checker, rec.output_value)
-            if outputs is not None and field in outputs:
-                return outputs[field]
-            if field in rec.signature.outputs:
-                return UnknownValue()
-        if isinstance(rec, (FunctionValue, ClosureValue)):
-            issues.append(f'Cannot access field on function value: {expr}')
-            return UnknownValue()
-        issues.append(f'Cannot resolve field access: {expr}')
-        return UnknownValue()
+        rec = eval_expr(checker, expr.rec, imports, env, demanded, issues)
+        return _resolve_field_access(checker, rec, expr.member.name, expr, demanded, issues)
 
     if expr.type == wf_node.NodeType.update:
         left = eval_expr(checker, expr.left, imports, env, demanded, issues)
@@ -423,51 +423,41 @@ def apply_map_by_partial(checker, fun, issues):
     )
 
 
-def apply_map(checker, fun, arg, issues):
-    target = map_target(fun, issues)
-    if target is None:
-        return UnknownValue()
-    if not isinstance(arg, TableValue):
-        issues.append('map requires a tab argument')
-        return UnknownValue()
+def _populate_table_inputs(arg, target):
     if not arg.columns:
-        arg.columns.update({
-            name: TypedValue(param.type)
-            for name, param in target.signature.inputs.items()
-        })
+        arg.columns.update({name: TypedValue(param.type) for name, param in target.signature.inputs.items()})
         arg.placeholder = False
-    else:
-        for name, param in target.signature.inputs.items():
-            if name not in arg.columns or isinstance(arg.columns[name], UnknownValue):
-                arg.columns[name] = TypedValue(param.type)
-    return TableValue({name: UnknownValue() for name in target.signature.outputs.keys()})
+        return
+    for name, param in target.signature.inputs.items():
+        if name not in arg.columns or isinstance(arg.columns[name], UnknownValue):
+            arg.columns[name] = TypedValue(param.type)
 
 
-def apply_map_by(checker, fun, key, arg, issues):
+def _apply_map_like(checker, fun, arg, issues, *, mode, key=None):
     target = map_target(fun, issues)
     if target is None:
         return UnknownValue()
-    if not isinstance(key, str):
+    if mode == 'map_by' and not isinstance(key, str):
         issues.append('map_by requires a string key')
         return UnknownValue()
     if not isinstance(arg, TableValue):
-        issues.append('map_by requires a tab argument')
+        issues.append(f'{mode} requires a tab argument')
         return UnknownValue()
-    if not arg.columns:
-        arg.columns.update({
-            name: TypedValue(param.type)
-            for name, param in target.signature.inputs.items()
-        })
-        arg.placeholder = False
-    else:
-        for name, param in target.signature.inputs.items():
-            if name not in arg.columns or isinstance(arg.columns[name], UnknownValue):
-                arg.columns[name] = TypedValue(param.type)
-    if key not in arg.columns:
-        issues.append(f'Missing field on tab: {key}')
-    if key not in target.signature.outputs:
-        issues.append(f'map_by output must preserve grouping key: {key}')
+    _populate_table_inputs(arg, target)
+    if mode == 'map_by':
+        if key not in arg.columns:
+            issues.append(f'Missing field on tab: {key}')
+        if key not in target.signature.outputs:
+            issues.append(f'map_by output must preserve grouping key: {key}')
     return TableValue({name: UnknownValue() for name in target.signature.outputs.keys()})
+
+
+def apply_map(checker, fun, arg, issues):
+    return _apply_map_like(checker, fun, arg, issues, mode='map')
+
+
+def apply_map_by(checker, fun, key, arg, issues):
+    return _apply_map_like(checker, fun, arg, issues, mode='map_by', key=key)
 
 
 def record_apply_satisfied(checker, expr, fun, arg, result):
