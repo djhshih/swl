@@ -16,36 +16,28 @@ def _forced_function_key(value):
 
 
 def _assert_canonical(forcer, node):
+    children = _canonical_children(node)
+    if children is None:
+        return
+    for child in children:
+        _assert_canonical(forcer, child)
+
+
+
+def _canonical_children(node):
     if isinstance(node, ir.Lambda):
-        _assert_canonical(forcer, node.body)
-        return
+        return [node.body]
     if isinstance(node, ir.Block):
-        for bind in node.bindings:
-            _assert_canonical(forcer, bind)
-        _assert_canonical(forcer, node.result)
-        return
+        return [*node.bindings, node.result]
     if isinstance(node, ir.Variable):
-        _assert_canonical(forcer, node.value)
-        return
-    if isinstance(node, ir.Apply):
-        _assert_canonical(forcer, node.function)
-        _assert_canonical(forcer, node.arg)
-        return
+        return [node.value]
+    if isinstance(node, (ir.Apply, ir.Map, ir.Update)):
+        return [node.function, node.arg] if hasattr(node, 'function') else [node.left, node.right]
     if isinstance(node, ir.Record):
-        for value in node.fields.values():
-            _assert_canonical(forcer, value)
-        return
+        return list(node.fields.values())
     if isinstance(node, ir.Field):
-        _assert_canonical(forcer, node.record)
-        return
-    if isinstance(node, ir.Map):
-        _assert_canonical(forcer, node.function)
-        _assert_canonical(forcer, node.arg)
-        return
-    if isinstance(node, ir.Update):
-        _assert_canonical(forcer, node.left)
-        _assert_canonical(forcer, node.right)
-        return
+        return [node.record]
+    return None
 
 
 def force_value(forcer, node, env):
@@ -168,24 +160,9 @@ def _force_apply(forcer, node, env):
 def _apply(forcer, fn, arg, satisfied=None):
     if satisfied is None:
         satisfied = set()
-    if isinstance(fn, ForcedFunction) and isinstance(fn.function, ir.Function) and fn.function.kind == 'builtin' and fn.function.name in ('map', 'map_by'):
-        if fn.function.name == 'map':
-            if fn.bound is None:
-                return ForcedFunction(fn.function, Record({'f': arg}), fn.signature, satisfied)
-            if isinstance(fn.bound, Record) and 'f' in fn.bound.fields:
-                return _force_map(forcer, fn.bound.fields['f'], arg)
-            bound = _merge_bound(forcer, fn.bound, arg)
-            return ForcedFunction(fn.function, bound, fn.signature, satisfied)
-        if fn.bound is None:
-            return ForcedFunction(fn.function, Record({'f': arg}), fn.signature, satisfied)
-        if isinstance(fn.bound, Record) and 'f' in fn.bound.fields and 'key' not in fn.bound.fields:
-            return ForcedFunction(fn.function, Record({'f': fn.bound.fields['f'], 'key': arg}), fn.signature, satisfied)
-        if isinstance(fn.bound, Record) and 'f' in fn.bound.fields and 'key' in fn.bound.fields:
-            key_value = fn.bound.fields['key']
-            key = key_value.value if isinstance(key_value, Literal) else None
-            return _force_map(forcer, fn.bound.fields['f'], arg, key=key)
-        bound = _merge_bound(forcer, fn.bound, arg)
-        return ForcedFunction(fn.function, bound, fn.signature, satisfied)
+    builtin = _apply_builtin_map(forcer, fn, arg, satisfied)
+    if builtin is not _SENTINEL:
+        return builtin
     if isinstance(arg, StepCall):
         return _apply_mapped(forcer, fn, arg)
     if not isinstance(fn, ForcedFunction):
@@ -195,16 +172,9 @@ def _apply(forcer, fn, arg, satisfied=None):
     accumulated = fn.satisfied | satisfied
 
     if isinstance(fn.function, ir.Function):
-        if fn.function.kind == 'task':
-            if not _saturated_task(forcer, fn.function, bound):
-                return ForcedFunction(fn.function, bound, fn.signature, accumulated)
-            from swl.dag.emit import _emit_task_call
-            return _emit_task_call(forcer, fn.function, bound, accumulated)
-        if fn.function.kind == 'workflow':
-            if not _saturated_signature(forcer, fn.function, bound):
-                return ForcedFunction(fn.function, bound, fn.signature, accumulated)
-            from swl.dag.emit import _emit_workflow_call
-            return _emit_workflow_call(forcer, fn.function, bound, accumulated)
+        emitted = _apply_emittable_function(forcer, fn.function, bound, accumulated)
+        if emitted is not _SENTINEL:
+            return emitted
 
     if isinstance(fn.function, ir.Lambda):
         if not isinstance(bound, Record):
@@ -212,6 +182,44 @@ def _apply(forcer, fn, arg, satisfied=None):
         return _force_lambda(forcer, fn.function, bound)
 
     return ForcedFunction(fn.function, bound, fn.signature, accumulated)
+
+
+
+def _apply_builtin_map(forcer, fn, arg, satisfied):
+    if not (isinstance(fn, ForcedFunction) and isinstance(fn.function, ir.Function)):
+        return _SENTINEL
+    if fn.function.kind != 'builtin' or fn.function.name not in ('map', 'map_by'):
+        return _SENTINEL
+    if fn.function.name == 'map':
+        if fn.bound is None:
+            return ForcedFunction(fn.function, Record({'f': arg}), fn.signature, satisfied)
+        if isinstance(fn.bound, Record) and 'f' in fn.bound.fields:
+            return _force_map(forcer, fn.bound.fields['f'], arg)
+        return ForcedFunction(fn.function, _merge_bound(forcer, fn.bound, arg), fn.signature, satisfied)
+    if fn.bound is None:
+        return ForcedFunction(fn.function, Record({'f': arg}), fn.signature, satisfied)
+    if isinstance(fn.bound, Record) and 'f' in fn.bound.fields and 'key' not in fn.bound.fields:
+        return ForcedFunction(fn.function, Record({'f': fn.bound.fields['f'], 'key': arg}), fn.signature, satisfied)
+    if isinstance(fn.bound, Record) and 'f' in fn.bound.fields and 'key' in fn.bound.fields:
+        key_value = fn.bound.fields['key']
+        key = key_value.value if isinstance(key_value, Literal) else None
+        return _force_map(forcer, fn.bound.fields['f'], arg, key=key)
+    return ForcedFunction(fn.function, _merge_bound(forcer, fn.bound, arg), fn.signature, satisfied)
+
+
+
+def _apply_emittable_function(forcer, function, bound, accumulated):
+    if function.kind == 'task':
+        if not _saturated_task(forcer, function, bound):
+            return _SENTINEL
+        from swl.dag.emit import _emit_task_call
+        return _emit_task_call(forcer, function, bound, accumulated)
+    if function.kind == 'workflow':
+        if not _saturated_signature(forcer, function, bound):
+            return _SENTINEL
+        from swl.dag.emit import _emit_workflow_call
+        return _emit_workflow_call(forcer, function, bound, accumulated)
+    return _SENTINEL
 
 
 def _force_lambda(forcer, function, bound):
