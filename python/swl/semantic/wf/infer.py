@@ -111,6 +111,26 @@ def is_explicitly_bound_value(value):
     return not isinstance(value, (UnknownValue, TypedValue))
 
 
+def _infer_lambda_inputs(checker, tree, final, imports, demanded, issues):
+    env = eval_prefix_bindings(checker, tree.body[:-1], imports, demanded, issues)
+    if uses_map(checker, final.body):
+        table_demanded, table_issues, _ = eval_lambda_in_mode(checker, final, imports, env, 'table')
+        if looks_like_stale_record_errors(table_issues):
+            return table_demanded, []
+        return table_demanded, table_issues
+    env[final.param.name] = OpenRecord()
+    eval_function_body(checker, final, imports, env, demanded, issues)
+    return demanded, issues
+
+
+def _infer_value_inputs(checker, tree, final, imports, demanded, issues):
+    env = eval_prefix_bindings(checker, tree.body[:-1], imports, demanded, issues)
+    value = eval_expr(checker, final, imports, env, demanded, issues)
+    if not is_function_value(value):
+        issues.append('Workflow must evaluate to a function')
+    return demanded, issues
+
+
 def infer_inputs(checker, tree, imports):
     if tree.type != wf_node.NodeType.block or not tree.body:
         return set(), []
@@ -120,27 +140,8 @@ def infer_inputs(checker, tree, imports):
     demanded = set()
 
     if final.type == wf_node.NodeType.fun:
-        env = eval_prefix_bindings(checker, tree.body[:-1], imports, demanded, issues)
-        if uses_map(checker, final.body):
-            table_demanded, table_issues, _ = eval_lambda_in_mode(checker, final, imports, env, 'table')
-            if looks_like_stale_record_errors(table_issues):
-                return table_demanded, []
-            return table_demanded, table_issues
-
-        env[final.param.name] = OpenRecord()
-        eval_function_body(checker, final, imports, env, demanded, issues)
-        return demanded, issues
-
-    env = {}
-    for expr in tree.body[:-1]:
-        if expr.type == wf_node.NodeType.bind:
-            if builtins.match_import(expr.value) is not None:
-                continue
-            env[expr.id.name] = eval_expr(checker, expr.value, imports, env, demanded, issues)
-    value = eval_expr(checker, final, imports, env, demanded, issues)
-    if not is_function_value(value):
-        issues.append('Workflow must evaluate to a function')
-    return demanded, issues
+        return _infer_lambda_inputs(checker, tree, final, imports, demanded, issues)
+    return _infer_value_inputs(checker, tree, final, imports, demanded, issues)
 
 
 def _eval_block_items(checker, items, imports, env, demanded, issues):
@@ -773,21 +774,19 @@ def infer_root_input_value(checker, fn, imports, env, inferred_inputs, mode):
     return local_env[fn.param.name]
 
 
+def _signature_inputs_from_items(checker, items):
+    return {name: Param(name, task_type_from_wf_type(checker, typ)) for name, typ in sorted(items.items())}
+
+
 def signature_inputs_from_root_type(checker, root_input_type):
     if isinstance(root_input_type, wf_type.RecordType):
-        return {
-            name: Param(name, task_type_from_wf_type(checker, typ))
-            for name, typ in sorted(root_input_type.fields.items())
-        }
+        return _signature_inputs_from_items(checker, root_input_type.fields)
     return {}
 
 
 def signature_inputs_from_table_type(checker, root_input_type):
     if isinstance(root_input_type, wf_type.TableType):
-        return {
-            name: Param(name, task_type_from_wf_type(checker, typ))
-            for name, typ in sorted(root_input_type.columns.items())
-        }
+        return _signature_inputs_from_items(checker, root_input_type.columns)
     return {}
 
 
