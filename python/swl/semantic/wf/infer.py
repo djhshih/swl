@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass, field
 
 from swl.semantic.task.type import Param, TaskSignature
 from swl.semantic.wf import type as wf_type
@@ -7,74 +8,91 @@ from swl.semantic.wf.scope import chain_names
 from swl.syntax.wf import builtins, node as wf_node
 
 
+def _unknown_fields(fields=None):
+    if isinstance(fields, dict):
+        return dict(fields)
+    return {name: UnknownValue() for name in (fields or [])}
+
+
+@dataclass
 class OpenRecord:
+    fields: dict = field(default_factory=dict)
+
     def __init__(self, fields=None):
-        if isinstance(fields, dict):
-            self.fields = dict(fields)
-        else:
-            self.fields = {name: UnknownValue() for name in (fields or [])}
+        self.fields = _unknown_fields(fields)
 
 
+@dataclass
 class ClosedRecord:
+    fields: dict = field(default_factory=dict)
+
     def __init__(self, fields=None):
-        if isinstance(fields, dict):
-            self.fields = dict(fields)
-        else:
-            self.fields = {name: UnknownValue() for name in (fields or [])}
+        self.fields = _unknown_fields(fields)
 
 
+@dataclass
 class FunctionValue:
-    def __init__(self, name: str, signature: TaskSignature, kind: str, first_input: str = None, param=None, body=None, env=None, imports=None, imported_check=None, batch=False):
-        self.name = name
-        self.signature = signature
-        self.kind = kind
-        self.first_input = first_input or self._first_input_name()
-        self.param = param
-        self.body = body
-        self.env = dict(env or {})
-        self.imports = dict(imports or {})
-        self.imported_check = imported_check
-        self.batch = batch
+    name: str
+    signature: TaskSignature
+    kind: str
+    first_input: str = None
+    param: str = None
+    body: object = None
+    env: dict = field(default_factory=dict)
+    imports: dict = field(default_factory=dict)
+    imported_check: object = None
+    batch: bool = False
 
-    def _first_input_name(self):
-        for name in self.signature.inputs.keys():
-            return name
-        return None
+    def __post_init__(self):
+        self.first_input = self.first_input or next(iter(self.signature.inputs.keys()), None)
+        self.env = dict(self.env or {})
+        self.imports = dict(self.imports or {})
 
 
+@dataclass
 class ClosureValue:
-    def __init__(self, function: FunctionValue, bound_value=None):
-        self.function = function
-        self.bound_value = bound_value or ClosedRecord({})
+    function: FunctionValue
+    bound_value: object = None
+
+    def __post_init__(self):
+        if self.bound_value is None:
+            self.bound_value = ClosedRecord({})
 
     @property
     def signature(self):
-        remaining = {}
-        bound_fields = set()
-        if isinstance(self.bound_value, (OpenRecord, ClosedRecord)):
-            for name, value in self.bound_value.fields.items():
-                if is_explicitly_bound_value(value):
-                    bound_fields.add(name)
-        for name, param in self.function.signature.inputs.items():
-            if name not in bound_fields:
-                remaining[name] = param
+        bound_fields = {
+            name
+            for name, value in getattr(self.bound_value, 'fields', {}).items()
+            if is_explicitly_bound_value(value)
+        }
+        remaining = {
+            name: param
+            for name, param in self.function.signature.inputs.items()
+            if name not in bound_fields
+        }
         return TaskSignature(remaining, dict(self.function.signature.outputs), {})
 
 
+@dataclass
 class ComputationValue:
-    def __init__(self, function: FunctionValue, arg_value=None, output_value=None):
-        self.function = function
-        self.arg_value = arg_value
-        self.output_value = output_value or ClosedRecord({
-            name: UnknownValue() for name in function.signature.outputs.keys()
-        })
+    function: FunctionValue
+    arg_value: object = None
+    output_value: object = None
+
+    def __post_init__(self):
+        if self.output_value is None:
+            self.output_value = ClosedRecord({name: UnknownValue() for name in self.function.signature.outputs.keys()})
 
     @property
     def signature(self):
         return self.function.signature
 
 
+@dataclass
 class TableValue:
+    columns: dict = field(default_factory=dict)
+    placeholder: bool = False
+
     def __init__(self, columns=None, placeholder=False):
         self.columns = dict(columns or {})
         self.placeholder = placeholder
@@ -84,9 +102,9 @@ class UnknownValue:
     pass
 
 
+@dataclass
 class TypedValue:
-    def __init__(self, typ=None):
-        self.type = typ
+    type: object = None
 
 
 def is_explicitly_bound_value(value):
@@ -125,13 +143,10 @@ def infer_inputs(checker, tree, imports):
     return demanded, issues
 
 
-def eval_function_body(checker, fn, imports, env, demanded, issues):
+def _eval_block_items(checker, items, imports, env, demanded, issues):
     local_env = dict(env)
-    if fn.body.type != wf_node.NodeType.block:
-        return eval_expr(checker, fn.body, imports, local_env, demanded, issues)
-
     result = UnknownValue()
-    for expr in fn.body.body:
+    for expr in items:
         if expr.type == wf_node.NodeType.bind:
             value = eval_expr(checker, expr.value, imports, local_env, demanded, issues)
             local_env[expr.id.name] = value
@@ -141,20 +156,36 @@ def eval_function_body(checker, fn, imports, env, demanded, issues):
     return result
 
 
+def eval_function_body(checker, fn, imports, env, demanded, issues):
+    if fn.body.type != wf_node.NodeType.block:
+        return eval_expr(checker, fn.body, imports, dict(env), demanded, issues)
+    return _eval_block_items(checker, fn.body.body, imports, env, demanded, issues)
+
+
+def _function_value_from_import(name, imported):
+    return FunctionValue(
+        name,
+        imported.signature,
+        imported.kind,
+        imports=imported.check.imports if imported.check is not None else None,
+        imported_check=imported.check,
+        batch=imported.check.is_batch if imported.check is not None else False,
+    )
+
+
+def _inline_import_value(checker, path):
+    base_dir = os.path.dirname(checker._loading[-1]) if checker._loading else '.'
+    full_path = os.path.abspath(os.path.join(base_dir, path))
+    stem = os.path.splitext(os.path.basename(full_path))[0]
+    return _function_value_from_import(stem, load_import(checker, stem, full_path))
+
+
 def eval_expr(checker, expr, imports, env, demanded, issues):
     if expr.type == wf_node.NodeType.id:
         if expr.name in env:
             return env[expr.name]
         if expr.name in imports:
-            imported = imports[expr.name]
-            return FunctionValue(
-                expr.name,
-                imported.signature,
-                imported.kind,
-                imports=imported.check.imports if imported.check is not None else None,
-                imported_check=imported.check,
-                batch=imported.check.is_batch if imported.check is not None else False,
-            )
+            return _function_value_from_import(expr.name, imports[expr.name])
         return UnknownValue()
 
     if expr.type == wf_node.NodeType.num:
@@ -211,18 +242,7 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
     if expr.type == wf_node.NodeType.apply:
         path = builtins.match_import(expr)
         if path is not None:
-            base_dir = os.path.dirname(checker._loading[-1]) if checker._loading else '.'
-            full_path = os.path.abspath(os.path.join(base_dir, path))
-            stem = os.path.splitext(os.path.basename(full_path))[0]
-            imp = load_import(checker, stem, full_path)
-            return FunctionValue(
-                stem,
-                imp.signature,
-                imp.kind,
-                imports=imp.check.imports if imp.check is not None else None,
-                imported_check=imp.check,
-                batch=imp.check.is_batch if imp.check is not None else False,
-            )
+            return _inline_import_value(checker, path)
         map_parts = builtins.match_map(expr)
         map_by_parts = builtins.match_map_by(expr)
         if map_by_parts is not None:
@@ -253,16 +273,7 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
         return result
 
     if expr.type == wf_node.NodeType.block:
-        local_env = dict(env)
-        result = UnknownValue()
-        for item in expr.body:
-            if item.type == wf_node.NodeType.bind:
-                value = eval_expr(checker, item.value, imports, local_env, demanded, issues)
-                local_env[item.id.name] = value
-                result = value
-            else:
-                result = eval_expr(checker, item, imports, local_env, demanded, issues)
-        return result
+        return _eval_block_items(checker, expr.body, imports, env, demanded, issues)
 
     if expr.type == wf_node.NodeType.fun:
         fn_issues = []
