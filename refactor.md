@@ -543,11 +543,13 @@ Transpilers become smaller and more declarative.
 
 ## Phase 6 — Rationalize parser and lowering duplication
 
+### Status: ✅ `_until`/`_find` already removed from `parser.py`; `_record_field_names` already removed from `lower.py`; `_match` removed from `lexer.py`; `_canonical_binding` removed from CWL emit (replaced with isinstance checks)
+
 ### 6.1 Workflow parser cleanup
 
 In `syntax/wf/parser.py`:
 
-- remove unused helpers (`_until`, `_find`)
+- ~~remove unused helpers (`_until`, `_find`)~~ ✅
 - reduce repeated token checks by introducing small predicate helpers
 - consider restructuring precedence parsing for readability
 
@@ -558,7 +560,7 @@ In `ir/lower.py`:
 - split builtin matching/desugaring from general AST lowering
 - isolate chain desugaring into its own helper module
 - reduce repeated block-binding lowering logic between `_lower_tree_impl()` and `lower_expr(... block ...)`
-- remove dead `_record_field_names()`
+- ~~remove dead `_record_field_names()`~~ ✅
 
 ### 6.3 Builtin handling
 
@@ -568,7 +570,7 @@ Introduce a shared builtin representation layer, e.g.:
 
 - `syntax/wf/builtins.py` keeps AST pattern matching only
 - new `semantic/wf/builtins.py` for semantic behavior
-- new `ir/builtins.py` for lowering/forcing behavior
+- new `ir/builtins.py` for lowering/behavior
 
 This avoids implicit coordination across modules.
 
@@ -636,8 +638,9 @@ Export only stable public entry points.
 4. ~~**Refactor `semantic/wf/check.py`**~~
 5. ~~**Centralize type utilities**~~
 6. ~~**Simplify transpilers**~~
-7. **Introduce loader/cache service**
-8. **Clean CLI/public API**
+7. ~~**Rationalize parser/lowering**~~
+8. **Introduce loader/cache service**
+9. **Clean CLI/public API**
 
 This order matters because stricter contracts should come before module splitting in the transpilers.
 

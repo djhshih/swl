@@ -270,18 +270,6 @@ class Lexer:
             self.i = end
             return self.s[start:end]
 
-    def _match(self, start: int, r: str) -> str:
-        '''Advance until substring r is found and return substring not including r,
-           returning exception if r is not found.
-           Cursor position will be one past r.'''
-        end = self.s.find(r, start)
-        if end == -1:
-            raise Exception('Unexpected EOF when searching for "{}"'.format(r))
-        else:
-            # advance index past the matching substring
-            self.i = end + 1
-            return self.s[start:end]
-
     def _until(self, predicate) -> str:
         '''Advance until predicate is true and return substring,
            assuming cursor i is at the next position.

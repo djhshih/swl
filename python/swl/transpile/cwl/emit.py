@@ -1,7 +1,7 @@
 import json
 import os
 
-from swl.ir.dag import DAG, OutputSpec, Record
+from swl.ir.dag import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
 from swl.types import to_array_type, to_cwl_type
 
 
@@ -163,7 +163,7 @@ def _workflow_input_to_cwl(workflow_id, name, spec):
 
 
 def _workflow_output_to_cwl(workflow_id, name, output):
-    source = _binding_source(workflow_id, output.value)
+    source = _binding_source(output.value)
     return {
         'id': f'#{workflow_id}/{name}',
         'type': to_cwl_type(output.type),
@@ -213,18 +213,18 @@ def _step_to_cwl(workflow_id, step, tool_id, record_map=None):
 
 
 def _step_input_to_cwl(task_id, name, value):
-    if value.__class__.__name__ == 'Literal':
+    if isinstance(value, Literal):
         return {
             'id': f'#main/{task_id}/{name}',
             'default': value.value,
         }
-    kind, *rest = _canonical_binding(value)
     result = {
         'id': f'#main/{task_id}/{name}',
-        'source': _binding_source('main', value),
+        'source': _binding_source(value),
     }
-    if kind in ('input_field_nested', 'step_output_nested', 'tab_column_step_output_nested'):
-        result['valueFrom'] = f"$({rest[-1]})"
+    field_path = _field_path_after_first(value)
+    if field_path is not None:
+        result['valueFrom'] = f"$({field_path})"
     return result
 
 
@@ -272,82 +272,68 @@ def _docker_requirement(run):
     return {'class': 'DockerRequirement', 'dockerPull': image}
 
 
+def _field_path_after_first(value):
+    if not isinstance(value, Field):
+        return None
+    chain = []
+    v = value
+    while isinstance(v, Field):
+        chain.append(v)
+        v = v.source
+    if len(chain) <= 1:
+        return None
+    chain.reverse()
+    return '.'.join(f.name for f in chain[1:])
+
+
+def _binding_source(value):
+    if isinstance(value, Input):
+        return f'#main/{value.name}'
+    if isinstance(value, Literal):
+        return value.value
+    if isinstance(value, StepCall):
+        return f'#main/{value.id}'
+    if isinstance(value, Field):
+        src = value.source
+        if isinstance(src, Input):
+            return f'#main/{src.name}/{value.name}'
+        if isinstance(src, StepCall):
+            return f'#main/{src.id}/{value.name}'
+        if isinstance(src, Field):
+            root, root_name, _ = _field_chain_parts(value)
+            if isinstance(root, Input):
+                return f'#main/{root.name}'
+            if isinstance(root, StepCall):
+                return f'#main/{root.id}/{root_name}'
+    raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
+
+
+def _field_chain_parts(value):
+    chain = []
+    v = value
+    while isinstance(v, Field):
+        chain.append(v)
+        v = v.source
+    if not chain:
+        return value, None, None
+    chain.reverse()
+    return chain[0].source, chain[0].name, '.'.join(f.name for f in chain[1:])
+
+
 def _validate_supported(dag):
     for step in dag.steps:
         if getattr(step, 'map', None) is not None and step.map.get('group_by') is not None:
             _validate_map_by_preconditions(step)
     for name, output in dag.outputs.items():
         value = output.value if isinstance(output, OutputSpec) else output
-        if not isinstance(value, Record):
-            try:
-                kind = _canonical_binding(value)[0]
-            except ValueError:
-                raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}')
-            if kind == 'literal':
-                raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: literal outputs are not supported')
+        if isinstance(value, Literal):
+            raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: literal outputs are not supported')
     for step in dag.steps:
         for name, spec in step.task.get('outputs', {}).items():
             try:
                 _interp_to_cwl_glob(spec.get('default'))
             except ValueError as exc:
                 raise ValueError(f'Unsupported step output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
-
-
-def _canonical_binding(value):
-    kind = value.__class__.__name__
-    if kind == 'Input':
-        return ('input', value.name)
-    if kind == 'Literal':
-        return ('literal', value.value)
-    if kind == 'Field' and value.source.__class__.__name__ == 'Input':
-        return ('input_field', value.source.name, value.name)
-    if kind == 'Field' and getattr(value.source, 'map', None) is not None:
-        return ('tab_column_step_output', value.source, value.name)
-    if kind == 'Field' and value.source.__class__.__name__ == 'Field':
-        chain = []
-        v = value
-        while v.__class__.__name__ == 'Field':
-            chain.append(v)
-            v = v.source
-        chain.reverse()
-        root_source = chain[0].source
-        root_name = chain[0].name
-        field_path = '.'.join(f.name for f in chain[1:])
-        if root_source.__class__.__name__ == 'Input':
-            return ('input_field_nested', root_source.name, root_name, field_path)
-        if getattr(root_source, 'map', None) is not None:
-            return ('tab_column_step_output_nested', root_source, root_name, field_path)
-        return ('step_output_nested', root_source, root_name, field_path)
-    if kind == 'Field':
-        return ('step_output', value.source, value.name)
-    raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
-
-
-def _binding_source(workflow_id, value):
-    kind, *rest = _canonical_binding(value)
-    if kind == 'input':
-        return f'#main/{rest[0]}'
-    if kind == 'step_output':
-        step, output = rest
-        return f'#main/{step.id}/{output}'
-    if kind == 'tab_column_step_output':
-        step, output = rest
-        return f'#main/{step.id}/{output}'
-    if kind == 'input_field':
-        input_name, field_name = rest
-        return f'#main/{input_name}/{field_name}'
-    if kind == 'input_field_nested':
-        input_name, root_name, field_path = rest
-        return f'#main/{input_name}'
-    if kind == 'step_output_nested':
-        step, root_name, field_path = rest
-        return f'#main/{step.id}/{root_name}'
-    if kind == 'tab_column_step_output_nested':
-        step, root_name, field_path = rest
-        return f'#main/{step.id}/{root_name}'
-    if kind == 'literal':
-        return rest[0]
-    raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
 
 
 def _interp_to_cwl_glob(value):
@@ -383,23 +369,20 @@ def _has_expr_interpolation(spec):
 # record bindings ---------------------------------------------------------
 
 def _infer_record_field_type(field_value, dag):
-    kind, *rest = _canonical_binding(field_value)
-    if kind == 'input':
-        name = rest[0]
-        spec = dag.inputs.get(name)
+    if isinstance(field_value, Input):
+        spec = dag.inputs.get(field_value.name)
         typ = spec.type if hasattr(spec, 'type') else (spec or {}).get('type') if isinstance(spec, dict) else None
         return to_cwl_type(typ)
-    if kind == 'step_output':
-        step, output = rest
-        if step.task and 'outputs' in step.task and output in step.task['outputs']:
-            return to_cwl_type(step.task['outputs'][output]['type'])
-    if kind in ('step_output_nested', 'tab_column_step_output_nested'):
-        step, root_name, _ = rest
-        if step.task and 'outputs' in step.task and root_name in step.task['outputs']:
-            return to_cwl_type(step.task['outputs'][root_name]['type'])
-    if kind == 'literal':
-        return to_cwl_type(type(rest[0]).__name__)
-    if kind == 'input_field':
+    if isinstance(field_value, Literal):
+        return to_cwl_type(type(field_value.value).__name__)
+    if isinstance(field_value, StepCall):
+        return 'string'
+    if isinstance(field_value, Field):
+        root, root_name, _ = _field_chain_parts(field_value)
+        if isinstance(root, StepCall) and root.task:
+            out_spec = root.task.get('outputs', {}).get(root_name, {})
+            if out_spec:
+                return to_cwl_type(out_spec.get('type') or 'str')
         return 'string'
     return 'string'
 
@@ -414,14 +397,10 @@ def _emit_record_tool(step_id, binding_name, record, dag):
         fvalue = record.fields[fname]
         typ = _infer_record_field_type(fvalue, dag)
         tool_inputs.append({'id': f'{tool_id}/{fname}', 'type': typ})
-        try:
-            kind, *rest = _canonical_binding(fvalue)
-        except ValueError:
-            kind = None
-        if kind == 'literal':
-            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'default': rest[0]})
-        elif kind is not None:
-            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'source': _binding_source('main', fvalue)})
+        if isinstance(fvalue, Literal):
+            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'default': fvalue.value})
+        elif isinstance(fvalue, (Input, Field, StepCall)):
+            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'source': _binding_source(fvalue)})
         else:
             step_inputs.append({'id': f'{step_entry_id}/{fname}', 'default': None})
     js_lines = ['var fs = require("fs");']
