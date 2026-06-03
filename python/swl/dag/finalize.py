@@ -84,18 +84,21 @@ def _flatten_outputs(forcer, outputs):
     return _flatten_named_values(forcer, outputs)
 
 
+def _output_desc(value):
+    normalized = _normalize_output_value(value)
+    if isinstance(normalized, Field) and isinstance(normalized.source, StepCall):
+        spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
+        return spec.get('desc')
+    return None
+
+
 def _build_output_specs(forcer, outputs):
     specs = {}
     for name, value in outputs.items():
         output_type = _infer_output_type(forcer, value)
-        desc = None
-        normalized = _normalize_output_value(value)
-        if isinstance(normalized, Field) and isinstance(normalized.source, StepCall):
-            spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
-            desc = spec.get('desc')
         specs[name] = OutputSpec(
             type=output_type,
-            desc=desc,
+            desc=_output_desc(value),
             optional=is_optional_type(output_type) if output_type else False,
             value=value,
         )
@@ -122,6 +125,20 @@ def _step_field_type(field):
     return typ or 'str'
 
 
+def _input_field_type(source):
+    source_type = source.type
+    if source_type and source_type.startswith('[') and source_type.endswith(']'):
+        return source_type[1:-1]
+    return source_type or 'str'
+
+
+def _root_field_source(field):
+    current = field
+    while isinstance(current, Field) and isinstance(current.source, Field):
+        current = current.source
+    return current
+
+
 def _infer_output_type(forcer, value):
     normalized = _normalize_output_value(value)
     if isinstance(normalized, Input):
@@ -132,18 +149,13 @@ def _infer_output_type(forcer, value):
         return None
     if isinstance(normalized, Field):
         if isinstance(normalized.source, Input):
-            source_type = normalized.source.type
-            if source_type and source_type.startswith('[') and source_type.endswith(']'):
-                return source_type[1:-1]
-            return source_type or 'str'
+            return _input_field_type(normalized.source)
         if isinstance(normalized.source, StepCall):
             return _step_field_type(normalized)
         if isinstance(normalized.source, Field):
-            current = normalized
-            while isinstance(current, Field) and isinstance(current.source, Field):
-                current = current.source
-            if isinstance(current, Field) and isinstance(current.source, StepCall):
-                return _step_field_type(current)
+            root = _root_field_source(normalized)
+            if isinstance(root, Field) and isinstance(root.source, StepCall):
+                return _step_field_type(root)
             return 'str'
     return 'str'
 
@@ -180,11 +192,17 @@ def _flatten_merge_value(forcer, value):
 
 
 def _unwrap_non_record(forcer, value):
-    if isinstance(value, Input):
-        return {}
     if isinstance(value, Field):
         return {value.name: value}
     return {}
+
+
+def _used_input_names(forcer, value):
+    used = set()
+    for item in _walk_values(forcer, value.value if isinstance(value, OutputSpec) else value):
+        if isinstance(item, Input):
+            used.add(item.name)
+    return used
 
 
 def _prune_unused_inputs(forcer, root_value, outputs):
@@ -195,28 +213,24 @@ def _prune_unused_inputs(forcer, root_value, outputs):
             used.update(signature.inputs.keys())
     for step in forcer.steps:
         for value in step.bindings.values():
-            for item in _walk_values(forcer, value):
-                if isinstance(item, Input):
-                    used.add(item.name)
+            used.update(_used_input_names(forcer, value))
         mapped_source = getattr(step, 'source', None)
         if mapped_source is not None:
             mapped_ports = getattr(step, 'map', {}).get('ports') if getattr(step, 'map', None) is not None else []
-            for item in _walk_values(forcer, mapped_source):
-                if isinstance(item, Input) and not mapped_ports:
-                    used.add(item.name)
+            if not mapped_ports:
+                used.update(_used_input_names(forcer, mapped_source))
     for output in outputs.values():
-        for item in _walk_values(forcer, output.value if isinstance(output, OutputSpec) else output):
-            if isinstance(item, Input):
-                used.add(item.name)
+        used.update(_used_input_names(forcer, output))
     for step in forcer.steps:
         mapped = getattr(step, 'map', None)
-        if mapped is not None:
-            source = mapped.get('source', {})
-            ports = mapped.get('ports') or []
-            if source.get('source') == 'input' and source.get('name') not in forcer.inputs and not ports:
+        if mapped is None:
+            continue
+        source = mapped.get('source', {})
+        ports = mapped.get('ports') or []
+        if source.get('source') == 'input' and not ports:
+            if source.get('name') not in forcer.inputs:
                 _input(forcer, source['name'])
-            if source.get('source') == 'input' and not ports:
-                used.add(source['name'])
+            used.add(source['name'])
     forcer.inputs = {name: value for name, value in forcer.inputs.items() if name in used}
 
 
