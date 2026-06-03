@@ -628,25 +628,25 @@ Right now:
 
 ## Phase 8 — CLI and package surface cleanup
 
+### Status: ✅ `python/swl/api.py` created with `compile_workflow()`, `force_workflow()`, `load_workflow()`, `transpile_dag()`; `compile.py` slimmed to thin CLI wrapper; `__init__.py` left empty (no re-exports)
+
 ### `python/swl/compile.py`
 
-Refactor into:
+Refactored into:
 
-- a small library API module, e.g. `python/swl/api.py`
-- a thin CLI wrapper
+- `python/swl/api.py` — library API module
+- `python/swl/compile.py` — thin CLI wrapper importing from `api.py`
 
-Recommended API:
+API:
 
-- `compile_workflow(input_path, output_path=None)`
-- `load_workflow(path)`
-- `force_workflow(path)`
-- `transpile_dag(path, target)`
-
-If `UserError` is intended, make pipeline stages raise it consistently. Otherwise remove it and keep one error model.
+- `compile_workflow(input_path, output_path=None)` — compile .swl to DAG JSON
+- `load_workflow(path, files=None)` — load and semantically check
+- `force_workflow(path, files=None)` — load, lower, force into DAG
+- `transpile_dag(dag_path, target)` — transpile to CWL/WDL/NF
 
 ### `__init__.py`
 
-Export only stable public entry points.
+Left empty — no re-exports, functions accessed via their defining modules.
 
 ---
 
@@ -660,7 +660,7 @@ Export only stable public entry points.
 6. ~~**Simplify transpilers**~~
 7. ~~**Rationalize parser/lowering**~~
 8. ~~**Introduce loader/cache service**~~
-9. **Clean CLI/public API**
+9. ~~**Clean CLI/public API**~~
 
 This order matters because stricter contracts should come before module splitting in the transpilers.
 
