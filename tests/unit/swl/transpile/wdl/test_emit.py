@@ -2,7 +2,7 @@ import os
 import unittest
 
 from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
-from swl.ir.force import force_file
+from swl.dag.forcer import force_file
 from swl.transpile.wdl.emit import transpile_dag_dict
 
 

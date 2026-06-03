@@ -1,7 +1,6 @@
 from swl.ir import node as ir
 from swl.dag.context import ForceEnv
 from swl.dag.evaluator import _available_inputs, _force_map, _value_key
-from swl.dag.forcer import make_force_state, force
 from swl.dag.node import Field, ForcedFunction, Input, Literal, Record, StepCall
 from swl.types import normalize_swl_type
 
@@ -97,6 +96,7 @@ def _materialize_partial_map_workflow(forcer, value, signature):
 
 
 def _materialize_workflow_dag(forcer, function):
+    from swl.dag.forcer import make_force_state
     sub_forcer = make_force_state(files=forcer.lowerer.checker.loader)
     return _materialize_workflow_dag_impl(sub_forcer, function)
 
@@ -104,6 +104,7 @@ def _materialize_workflow_dag(forcer, function):
 def _materialize_workflow_dag_impl(forcer, function):
     signature = function.signature
     if signature is None:
+        from swl.dag.forcer import force
         return force(function.body, state=forcer)
     arg = Record({name: _input(forcer, name, spec) for name, spec in signature.inputs.items()})
     if isinstance(function.body, ir.Lambda):

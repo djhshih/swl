@@ -3,7 +3,7 @@ import os
 import sys
 import traceback
 
-from swl.ir.force import force_file
+from swl.dag.forcer import force_file
 
 
 def compile_workflow(input_path, output_path=None):

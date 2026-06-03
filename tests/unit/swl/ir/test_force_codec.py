@@ -3,8 +3,8 @@ import os
 import tempfile
 import unittest as ut
 
-from swl.ir.dag import Field, Input, Literal, OutputSpec, StepCall
-from swl.ir.force import DAG, Forcer, force_file
+from swl.ir.dag import DAG, Field, Input, Literal, OutputSpec, StepCall
+from swl.dag.forcer import force_file
 from swl.ir.lower import Lowerer
 
 

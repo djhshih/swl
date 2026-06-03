@@ -3,7 +3,19 @@ import unittest as ut
 
 from swl.ir import node as ir
 from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
-from swl.ir.force import Forcer, ForceEnv, force_file
+from swl.dag.context import ForceEnv
+from swl.dag.finalize import (
+    _build_output_specs,
+    _final_outputs,
+    _finalize_dag,
+    _flatten_merge_value,
+    _flatten_outputs,
+    _flatten_step_bindings,
+    _infer_output_type,
+    _prune_unused_inputs,
+)
+from swl.dag.forcer import force_file, make_force_state
+from swl.dag.evaluator import force_value
 from swl.ir.lower import lower_file
 
 
@@ -197,6 +209,10 @@ merge = import "merge.sh"
     ys = map_by g "sample" xs
     merge { bam: ys.bam, outbase: "merged" }
 '''
+
+
+def _forcer(files=None):
+    return make_force_state(files=files)
 
 
 class TestForce(ut.TestCase):
@@ -465,7 +481,8 @@ class TestForce(ut.TestCase):
         env = ForceEnv()
         env.bind('xs', Literal(42))
         with self.assertRaisesRegex(ValueError, 'map requires normalized executable callable during forcing'):
-            Forcer().force_value(
+            force_value(
+                _forcer(),
                 ir.Map(
                     ir.Lambda('x', ir.Block([], ir.Record({'bam': ir.Field(ir.Name('x'), 'bam')}))),
                     ir.Name('xs'),
@@ -475,10 +492,11 @@ class TestForce(ut.TestCase):
 
     def test_force_rejects_unsupported_ir_node(self):
         with self.assertRaisesRegex(ValueError, 'Unsupported IR node during forcing: object'):
-            Forcer().force_value(object(), None)
+            force_value(_forcer(), object(), None)
 
     def test_merge_of_records_collapses_during_force(self):
-        value = Forcer().force_value(
+        value = force_value(
+            _forcer(),
             ir.Update(
                 ir.Record({'a': ir.Literal(1)}),
                 ir.Record({'b': ir.Literal(2)}),
@@ -489,7 +507,8 @@ class TestForce(ut.TestCase):
         self.assertEqual(value.fields['b'].value, 2)
 
     def test_field_projection_prefers_right_side_of_merge(self):
-        value = Forcer().force_value(
+        value = force_value(
+            _forcer(),
             ir.Field(
                 ir.Update(
                     ir.Record({'a': ir.Literal(1)}),
@@ -503,32 +522,36 @@ class TestForce(ut.TestCase):
 
     def test_table_update_on_step_call_raises_error(self):
         with self.assertRaisesRegex(ValueError, 'Record update.*task/workflow call result'):
-            Forcer().force_value(
+            force_value(
+                _forcer(),
                 ir.Update(ir.Name('align'), ir.Record({'ref': ir.Literal('hg38.fa')})),
                 ForceEnv(values={'align': StepCall('align', '/align.sh', {}, ['out'])}),
             )
 
     def test_table_update_right_side_step_call_raises_error(self):
         with self.assertRaisesRegex(ValueError, 'Record update.*task/workflow call result'):
-            Forcer().force_value(
+            force_value(
+                _forcer(),
                 ir.Update(ir.Record({'ref': ir.Literal('hg38.fa')}), ir.Name('align')),
                 ForceEnv(values={'align': StepCall('align', '/align.sh', {}, ['out'])}),
             )
 
     def test_table_update_input_record_raises_error(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['xs'] = Input('xs', '[str]')
         with self.assertRaisesRegex(ValueError, 'Table-record update.*not supported'):
-            forcer.force_value(
+            force_value(
+                forcer,
                 ir.Update(ir.Input('xs'), ir.Record({'ref': ir.Literal('hg38.fa')})),
                 ForceEnv(),
             )
 
     def test_table_update_record_input_raises_error(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['xs'] = Input('xs', '[str]')
         with self.assertRaisesRegex(ValueError, 'Record-table update.*not supported'):
-            forcer.force_value(
+            force_value(
+                forcer,
                 ir.Update(ir.Record({'ref': ir.Literal('hg38.fa')}), ir.Input('xs')),
                 ForceEnv(),
             )
@@ -538,7 +561,8 @@ class TestForce(ut.TestCase):
         step = StepCall(id='align', path='/a.sh', bindings={}, outputs=['bam'])
         env.bind('ys', step)
         with self.assertRaisesRegex(ValueError, 'Record update.*on a task/workflow call result'):
-            Forcer().force_value(
+            force_value(
+                _forcer(),
                 ir.Update(
                     ir.Record({'extra': ir.Literal('x')}),
                     ir.Name('ys'),
@@ -553,7 +577,8 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['steps'][2]['deps'], ['sort'])
 
     def test_output_flattening_handles_nested_merged_records(self):
-        outputs = Forcer()._final_outputs(
+        outputs = _final_outputs(
+            _forcer(),
             Merge(
                 Record({'a': Literal(1)}),
                 Merge(Record({'b': Literal(2)}), Record({'c': Literal(3)})),
@@ -562,10 +587,10 @@ class TestForce(ut.TestCase):
         self.assertEqual(sorted(outputs.keys()), ['a', 'b', 'c'])
 
     def test_merge_flattening_collapses_record_merges_in_outputs(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x')
         forcer.steps = []
-        outputs = forcer._flatten_outputs({
+        outputs = _flatten_outputs(forcer, {
             'result': Merge(
                 Record({'a': Literal(1), 'b': Literal(2)}),
                 Record({'c': Literal(3)}),
@@ -575,10 +600,10 @@ class TestForce(ut.TestCase):
         self.assertIsInstance(outputs['a'], Literal)
 
     def test_merge_flattening_collapses_input_record_merge_in_outputs(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x')
         forcer.steps = []
-        outputs = forcer._flatten_outputs({
+        outputs = _flatten_outputs(forcer, {
             'result': Merge(
                 Input('x'),
                 Record({'y': Literal(1)}),
@@ -588,7 +613,7 @@ class TestForce(ut.TestCase):
         self.assertEqual(outputs['y'].value, 1)
 
     def test_merge_flattening_step_bindings(self):
-        forcer = Forcer()
+        forcer = _forcer()
         step = StepCall(id='test', path='/test.sh', bindings={
             'input': Merge(
                 Record({'x': Literal(1)}),
@@ -596,19 +621,19 @@ class TestForce(ut.TestCase):
             ),
         }, outputs=['out'])
         forcer.steps = [step]
-        forcer._flatten_step_bindings()
+        _flatten_step_bindings(forcer)
         self.assertEqual(sorted(step.bindings.keys()), ['x', 'y'])
 
     def test_merge_flattening_rejects_incompatible_non_record(self):
-        forcer = Forcer()
+        forcer = _forcer()
         with self.assertRaisesRegex(ValueError, 'Cannot flatten merge'):
-            forcer._flatten_merge_value(
+            _flatten_merge_value(forcer,
                 Merge(Literal(1), Literal(2)),
             )
 
     def test_merge_flattening_preserves_single_non_record(self):
-        forcer = Forcer()
-        result = forcer._flatten_merge_value(
+        forcer = _forcer()
+        result = _flatten_merge_value(forcer,
             Merge(
                 Record({'a': Literal(1)}),
                 Input('x'),
@@ -621,8 +646,8 @@ class TestForce(ut.TestCase):
     # P4d: deeply nested merge trees -----------------------------------------
 
     def test_deeply_nested_merge_tree_flattens_to_fields(self):
-        forcer = Forcer()
-        result = forcer._flatten_merge_value(
+        forcer = _forcer()
+        result = _flatten_merge_value(forcer,
             Merge(
                 Merge(
                     Record({'a': Literal(1)}),
@@ -638,7 +663,7 @@ class TestForce(ut.TestCase):
         self.assertEqual(set(result.fields.keys()), {'a', 'b', 'c', 'd'})
 
     def test_deeply_nested_merge_in_step_bindings_vanishes_from_final_dag(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x')
         step = StepCall(id='test', path='/test.sh', bindings={
             'in': Merge(
@@ -650,14 +675,14 @@ class TestForce(ut.TestCase):
             ),
         }, outputs=['out'])
         forcer.steps = [step]
-        forcer._flatten_step_bindings()
+        _flatten_step_bindings(forcer)
         self.assertEqual(set(step.bindings.keys()), {'a', 'b'})
 
     def test_deeply_nested_merge_in_outputs_flattens_completely(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x')
         forcer.steps = []
-        flat = forcer._flatten_outputs({
+        flat = _flatten_outputs(forcer, {
             'result': Merge(
                 Merge(
                     Record({'a': Literal(1)}),
@@ -675,8 +700,8 @@ class TestForce(ut.TestCase):
                                      f'{name} should be a leaf binding, not Merge/Record')
 
     def test_merge_flattening_three_way_records_merges_all_fields(self):
-        forcer = Forcer()
-        result = forcer._flatten_merge_value(
+        forcer = _forcer()
+        result = _flatten_merge_value(forcer,
             Merge(
                 Merge(
                     Record({'a': Literal(1), 'b': Literal(2)}),
@@ -689,8 +714,8 @@ class TestForce(ut.TestCase):
         self.assertEqual(set(result.fields.keys()), {'a', 'b', 'c', 'd', 'e'})
 
     def test_merge_flattening_overlapping_fields_right_wins(self):
-        forcer = Forcer()
-        result = forcer._flatten_merge_value(
+        forcer = _forcer()
+        result = _flatten_merge_value(forcer,
             Merge(
                 Merge(
                     Record({'x': Literal(1)}),
@@ -704,19 +729,19 @@ class TestForce(ut.TestCase):
     # P4c: optionality propagation -------------------------------------------
 
     def test_force_ir_input_optionality_propagates(self):
-        forcer = Forcer()
-        val = forcer.force_value(ir.Input('x', type='file?', desc=None), None)
+        forcer = _forcer()
+        val = force_value(forcer, ir.Input('x', type='file?', desc=None), None)
         self.assertTrue(forcer.inputs['x'].optional)
         self.assertEqual(forcer.inputs['x'].type, 'file?')
 
     def test_force_ir_input_required_when_no_question_mark(self):
-        forcer = Forcer()
-        val = forcer.force_value(ir.Input('x', type='file', desc=None), None)
+        forcer = _forcer()
+        val = force_value(forcer, ir.Input('x', type='file', desc=None), None)
         self.assertFalse(forcer.inputs['x'].optional)
 
     def test_force_ir_input_required_when_type_none(self):
-        forcer = Forcer()
-        val = forcer.force_value(ir.Input('x', type=None, desc=None), None)
+        forcer = _forcer()
+        val = force_value(forcer, ir.Input('x', type=None, desc=None), None)
         self.assertFalse(forcer.inputs['x'].optional)
 
     def test_optionality_serializes_in_dag_when_true(self):
@@ -740,7 +765,7 @@ class TestForce(ut.TestCase):
     # P4a: non-saturating records in DAG ------------------------------------
 
     def test_non_saturating_record_in_step_binding_gets_flattened(self):
-        forcer = Forcer()
+        forcer = _forcer()
         step = StepCall(id='test', path='/test.sh', bindings={
             'params': Record({'x': Literal(1), 'y': Literal(2)}),
         }, outputs=['out'],
@@ -748,7 +773,7 @@ class TestForce(ut.TestCase):
                   'outputs': {'out': {'type': 'int'}}, 'run': {}},
         )
         forcer.steps = [step]
-        forcer._flatten_step_bindings()
+        _flatten_step_bindings(forcer)
         self.assertNotIn('params', step.bindings)
         self.assertIn('x', step.bindings)
         self.assertIn('y', step.bindings)
@@ -756,9 +781,9 @@ class TestForce(ut.TestCase):
         self.assertEqual(step.bindings['y'].value, 2)
 
     def test_non_saturating_record_in_outputs_gets_flattened(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.steps = []
-        flat = forcer._flatten_outputs({
+        flat = _flatten_outputs(forcer, {
             'nested': Record({
                 'a': Literal(1),
                 'b': Record({'c': Literal(3)}),
@@ -772,9 +797,9 @@ class TestForce(ut.TestCase):
 
     def test_merge_record_field_stepcall_preserves_field(self):
         step = StepCall(id='producer', path='/p.sh', bindings={}, outputs=['result'])
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.steps = []
-        result = forcer._flatten_merge_value(
+        result = _flatten_merge_value(forcer,
             Merge(
                 Record({'a': Literal(1)}),
                 Field(step, 'result'),
@@ -786,9 +811,9 @@ class TestForce(ut.TestCase):
         self.assertIs(result.fields['result'].source, step)
 
     def test_merge_record_field_input_preserves_field(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x', 'file')
-        result = forcer._flatten_merge_value(
+        result = _flatten_merge_value(forcer,
             Merge(
                 Record({'a': Literal(1)}),
                 Field(Input('x'), 'field_x'),
@@ -799,9 +824,9 @@ class TestForce(ut.TestCase):
         self.assertIn('field_x', result.fields)
 
     def test_merge_record_with_bare_input_drops_input(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x', 'file')
-        result = forcer._flatten_merge_value(
+        result = _flatten_merge_value(forcer,
             Merge(
                 Record({'a': Literal(1)}),
                 Input('x'),
@@ -816,7 +841,7 @@ class TestForce(ut.TestCase):
             id='producer', path='/p.sh', bindings={}, outputs=['out'],
             task={'body': '', 'inputs': {}, 'outputs': {'out': {'type': 'file'}}, 'run': {}},
         )
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x', 'file')
         forcer.steps = [step]
         dag = DAG(
@@ -824,7 +849,7 @@ class TestForce(ut.TestCase):
             steps=[step],
             outputs={},
         )
-        outputs = forcer._flatten_outputs({
+        outputs = _flatten_outputs(forcer, {
             'result': Merge(
                 Record({'a': Literal(1)}),
                 Record({'b': Field(step, 'out')}),
@@ -847,10 +872,10 @@ class TestForce(ut.TestCase):
                 'outputs': {'inner': {'type': 'file', 'desc': 'inner file'}},
             },
         )
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.steps = [step]
         outer = Field(Field(step, 'inner'), 'leaf')
-        typ = forcer._infer_output_type(outer)
+        typ = _infer_output_type(forcer, outer)
         self.assertEqual(typ, 'file')
 
     def test_infer_output_type_nested_field_chain_mapped_resolves_to_array(self):
@@ -862,15 +887,15 @@ class TestForce(ut.TestCase):
             },
             map={'source': {'source': 'input', 'name': 'xs'}},
         )
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.steps = [step]
         outer = Field(Field(step, 'inner'), 'leaf')
-        typ = forcer._infer_output_type(outer)
+        typ = _infer_output_type(forcer, outer)
         self.assertEqual(typ, '[file]')
 
     def test_infer_output_type_record_returns_none(self):
-        forcer = Forcer()
-        typ = forcer._infer_output_type(Record({'a': Literal(1)}))
+        forcer = _forcer()
+        typ = _infer_output_type(forcer, Record({'a': Literal(1)}))
         self.assertIsNone(typ)
 
     # Q5b: output descriptions ---------------------------------------------
@@ -883,25 +908,25 @@ class TestForce(ut.TestCase):
                 'outputs': {'bam': {'type': 'file', 'desc': 'aligned BAM'}},
             },
         )
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x', 'file')
         forcer.steps = [step]
-        specs = forcer._build_output_specs({
+        specs = _build_output_specs(forcer, {
             'result': Field(step, 'bam'),
         })
         self.assertEqual(specs['result'].desc, 'aligned BAM')
 
     def test_output_desc_none_for_input_source(self):
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x', 'file')
-        specs = forcer._build_output_specs({
+        specs = _build_output_specs(forcer, {
             'result': Input('x'),
         })
         self.assertIsNone(specs['result'].desc)
 
     def test_output_desc_none_for_literal_source(self):
-        forcer = Forcer()
-        specs = forcer._build_output_specs({
+        forcer = _forcer()
+        specs = _build_output_specs(forcer, {
             'result': Literal(42),
         })
         self.assertIsNone(specs['result'].desc)
@@ -914,11 +939,11 @@ class TestForce(ut.TestCase):
             task={'body': '', 'inputs': {}, 'outputs': {'out': {'type': 'file'}}, 'run': {}},
             map={'source': {'source': 'input', 'name': 'xs'}, 'group_by': 'key'},
         )
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.steps = [step]
         forcer.inputs['xs'] = Input('xs', '[str]', optional=True)
         unused = set()
-        forcer._prune_unused_inputs(None, {})
+        _prune_unused_inputs(forcer, None, {})
         self.assertIn('xs', forcer.inputs)
 
     # Q5e: compile-time guard for Record in outputs -----------------------
@@ -928,10 +953,10 @@ class TestForce(ut.TestCase):
             id='producer', path='/p.sh', bindings={}, outputs=['out'],
             task={'body': '', 'inputs': {}, 'outputs': {'out': {'type': 'file'}}, 'run': {}},
         )
-        forcer = Forcer()
+        forcer = _forcer()
         forcer.inputs['x'] = Input('x', 'file')
         forcer.steps = [step]
-        dag = forcer._finalize_dag(
+        dag = _finalize_dag(forcer,
             Record({'nested': Record({'a': Literal(1)})})
         )
         self.assertIn('a', dag.outputs)

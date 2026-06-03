@@ -1,7 +1,7 @@
 import json
 import traceback
 
-from swl.ir.force import force_file
+from swl.dag.forcer import force_file
 
 
 def _mapped_step_summary(step):
