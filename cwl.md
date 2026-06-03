@@ -1,383 +1,235 @@
-# CWL Transpilation: Status and Implementation Plan
+# CWL Transpiler: Implementation Status
+
+## Overview
+
+The CWL transpiler (`python/swl/transpile/cwl/`) converts compiled SWL DAGs into packed CWL v1.0 documents (`cwlVersion: v1.0`) with a `$graph` containing one `Workflow` node and one `CommandLineTool`/`ExpressionTool`/`Workflow` per distinct step. It follows the same architecture as the Snakemake, Nextflow, and WDL transpilers. The transpiler is ~572 lines of Python (`emit.py`).
+
+**Status:** Implemented. Covers simple tasks, pipelines, named ports, resources (cpu/memory/time/image), output path templates, scattered mapped steps, `map_by` (grouped scatter) via ExpressionTool grouping + wrapper CommandLineTool, record bindings via ExpressionTool, nested field projections via `valueFrom`, `expr` interpolation via `InlineJavascriptRequirement`, optional types (`['null', Type]`), sub-workflow inlining, and array types (`[file]`, `[str]`, `[int]`, `[float]`). Shell script variables (`${cpu}`, `${ref}`) pass through literally without resolution.
 
 ---
 
-## 1. What is Implemented
-
-The CWL transpiler lives at `swl/transpile/cwl/emit.py`. It reads DAG JSON and emits a packed CWL v1.0 document (`cwlVersion: v1.0`) with a `$graph` containing one `Workflow` node and one `CommandLineTool` per distinct task.
-
-### 1.1 Task step → CommandLineTool
-
-| DAG feature | CWL output | Test |
-|---|---|---|
-| `step.type == "task"` with embedded script | `CommandLineTool` + `InitialWorkDirRequirement` materializing `script.sh` | `test_transpile_function_workflow` |
-| Input params (`file`/`str`/`int`/`float`) | Tool `inputs` with `type: File`/`string`/`int`/`float` | same |
-| Output params with interpolation | `outputBinding.glob` as `$(inputs.var + '.ext')` expression | `test_output_glob_uses_cwl_expression` |
-| CPU resource (`run.cpu`) | `ResourceRequirement.coresMin` | `test_transpile_function_workflow` |
-| Memory resource (`run.memory`) | `ResourceRequirement.ramMin` (value in MB) | same |
-| Docker image (`run.image`) | `DockerRequirement.dockerPull` | same |
-| `run.time` | Silently dropped (CWL has no standard time limit) | none |
-
-### 1.2 Workflow block
-
-| DAG feature | CWL output | Test |
-|---|---|---|
-| Workflow inputs | `Workflow.inputs` with `type` and optional `doc` | `test_transpile_function_workflow` |
-| Step calls with bindings | `Workflow.steps[]` with `in` array wiring inputs | same |
-| Input binding (workflow input) | Source `#main/input_name` | same |
-| Step output binding | Source `#main/step_id/output_name` | same |
-| Literal binding | `default` value on step input port | `test_rejects_non_task_workflow_output` (indirect) |
-| Field projection (step output) | Source `#main/step_id/field_name` | `_canonical_binding` handling |
-| Field projection (input field) | Source `#main/input_name/field_name` | same |
-| Workflow outputs | `Workflow.outputs` with `outputSource` and inferred type | `test_transpile_function_workflow` |
-| Sub-workflow step | Embedded `Workflow` node in `$graph` | `test_imported_workflow_output_transpiles_as_workflow_step` |
-
-### 1.3 Mapped steps (`map` → scatter)
-
-| DAG feature | CWL output | Test |
-|---|---|---|
-| `MappedStep` without `group_by` | `scatter` on input ports + `scatterMethod: dotproduct` | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` |
-| Mapped workflow | Scattered step referencing sub-workflow | `test_batch_mapped_workflow_emits_scattered_subworkflow` |
-| Mapped lambda (generated sub-workflow) | Generated `Workflow` node + scattered call | `test_batch_mapped_simple_lambda_emits_generated_scattered_subworkflow` |
-| Root partial `map` | Scattered sub-workflow from partial application | `test_root_partial_map_transpiles_as_scattered_subworkflow` |
-| `map.source` via `input` | Each schema column gets a workflow input + scatter port | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` |
-| `map.source` via `table` | Column bindings resolved to workflow input references | same (table branch) |
-
-### 1.4 Rejected (clear error)
-
-| Feature | Error message | Test |
-|---|---|---|
-| `map_by` (any `group_by`) | `CWL transpilation does not yet support map_by grouping` | `test_map_by_transpile_reports_explicit_grouping_not_supported` |
-| Merge bindings in step inputs | `merge values are not supported` | `test_rejects_merged_task_input_binding` |
-| Record bindings in step inputs | `record values are not supported` | (via `_step_input_error`) |
-| Function-valued outputs | `function outputs are not supported` | (via `_workflow_output_error`) |
-| Literal workflow outputs | `literal outputs are not supported` | `test_rejects_non_task_workflow_output` |
-| `expr` interpolation in output paths | `Unsupported interpolation for CWL glob` | `test_rejects_output_expr_interpolation` |
-| Merge/Record workflow outputs | `merge outputs are not supported` / `record outputs are not supported` | (via `_workflow_output_error`) |
-| Merge bindings at deserialization | `Unsupported step binding during deserialization` | `test_rejects_merged_task_input_binding` |
-| Nested `Field(Field(...))` | `field source ... is not supported` | (via `_step_input_error`) |
-
----
-
-## 2. What is Not Implemented
-
-### 2.1 `map_by` (grouped scatter)
-
-**Status:** Explicitly rejected at `emit.py:195`.
-
-**DAG signal:** `MappedStep` with `map.group_by` set.
-
-**Reference:** `map_by_cwl.md` describes the full approach.
-
-**What's needed:** Replace the rejection with a two-phase emission:
-- **Phase 1 — Grouping:** An `ExpressionTool` with `InlineJavascriptRequirement` that reads the table columns as arrays, partitions rows by the key column, and writes per-group JSON files.
-- **Phase 2 — Scatter:** A generated wrapper `CommandLineTool` (or `Workflow` for mapped workflows) that reads each group JSON and invokes the original function's script once per row, collecting outputs.
-
-**Edge cases to handle:**
-- The mapped function is a task vs. a workflow (different wrapper generation)
-- The mapped function's inputs include array-typed params (arrays-of-arrays — reject initially)
-- Large number of groups (thousands of JSON files)
-- `expr` interpolation inside the wrapped function (must reject)
-
-### 2.2 Record bindings
-
-**Status:** Rejected at `emit.py:238`.
-
-**DAG signal:** Binding with `{source: "record", fields: {...}}`.
-
-**What's needed:** A record binding represents a constructed value (e.g., `{ bam: calls.bam, outbase: "merged" }`). CWL has no native record literal. Options:
-- **Option A:** Flatten the record at compiler time: if the record directly saturates a task call, expand its fields into individual step inputs. This is already partially done by forcing (partial application produces flat inputs when the record saturates a task). For non-saturating records, emit an `ExpressionTool` that constructs the record from individual inputs.
-- **Option B:** Emit an intermediate `ExpressionTool` step that takes each field as a separate input and produces the record as a JSON output. Downstream steps reference the JSON's field via `$(step.field)`.
-
-### 2.3 Merge bindings
-
-**Status:** Rejected. The DAG serializer cannot even represent merge bindings in step bindings (`dag.py:_binding_to_binding_dict` raises on Merge), and the CWL transpiler rejects them.
-
-**DAG signal:** Binding with `{source: "merge", left: ..., right: ...}`.
-
-**What's needed:** Merge bindings arise from `A | B | C` pipeline desugaring and from explicit `//` operators. In most cases the compiler's chain desugaring already produces flat bindings. Remaining case: explicit record update expressions that reach the DAG. Fix should be at the compiler level (in `force.py`), not in the transpiler:
-- Add merge-flattening logic to forcing so that merge bindings are resolved to flat per-field bindings before DAG output.
-- If a merge cannot be flattened (e.g., merging two non-overlapping records that feed a single port), reject at the DAG validation level with a clear message.
-
-### 2.4 Nested field projections
-
-**Status:** Rejected at `emit.py:242`.
-
-**DAG signal:** `Field(Field(...), name)` — a field projection whose source is itself a field projection.
-
-**What's needed:** Nested field projections (`x.y.z`) require the intermediate value to be resolved. CWL cannot chain field accesses natively. Options:
-- **Option A:** Flatten at compiler time: if `x` is a step output and its type is known, resolve `x.y.z` to a direct step output reference.
-- **Option B:** Emit an intermediate `ExpressionTool` that takes `x` as input and emits `x.y.z`.
-
-### 2.5 `expr` interpolation in output paths
-
-**Status:** Rejected at `emit.py:336-337`.
-
-**DAG signal:** Interpolation part with `kind: "expr"` (e.g., `${outbase / 2}`).
-
-**What's needed:** `expr` parts are arbitrary expressions, not simple variable references. CWL `$( ... )` expressions are JavaScript — they can represent arbitrary expressions if `InlineJavascriptRequirement` is declared. Options:
-- **Prefix CWL requirement:** If the task or workflow has any `expr` interpolation, add `InlineJavascriptRequirement` and emit the expression as-is wrapped in `$( ... )`.
-- **Keep rejecting:** Arbitrary SWL expressions may reference variables or operators that don't map to CWL's JS expression scope. Conservative approach: continue rejecting.
-
-### 2.6 Time resource
-
-**Status:** Silently dropped at `emit.py:175-183`.
-
-**DAG signal:** `run.time.value` is present but `_resource_requirement` only reads `cpu` and `memory`.
-
-**What's needed:** CWL v1.0 has no standard time limit in `ResourceRequirement`. Options:
-- Emit as a hints entry: `{"class": "Hint", "timeLimit": <value>}`
-- Emit in a non-standard extension namespace
-- Continue dropping (current behavior)
-
-### 2.7 Optional type serialization
-
-**Status:** DAG does not serialize optionality. The `?` suffix in task annotations (e.g., `file?`) is used during semantic checking but is not present in the DAG output.
-
-**What's needed:** If optionality is to be represented in CWL:
-- Store optional flag in the DAG `InputSpec`
-- CWL represents optional types as `["null", "File"]` (union with null)
-- This depends on DAG schema changes first
-
-### 2.8 Merge workflow outputs
-
-**Status:** Rejected at `emit.py:255`.
-
-**DAG signal:** `dag.outputs` containing `{source: "merge", ...}`.
-
-**What's needed:** Same root cause as §2.3. Fix at compiler level: flatten merge bindings before DAG output so the transpiler never sees them.
-
-### 2.9 Record workflow outputs
-
-**Status:** Rejected at `emit.py:257`.
-
-**DAG signal:** `dag.outputs` containing `{source: "record", ...}`.
-
-**What's needed:** Records at workflow output level mean the workflow returns a constructed record, not a step output. Options:
-- Decompose at compiler time: add synthetic steps to construct the record
-- Support at transpiler time: emit `ExpressionTool` output construction
-
----
-
-## 3. Gap Analysis Summary
-
-| Feature | Severity | Root cause layer | Fix layer |
-|---|---|---|---|
-| `map_by` (grouped scatter) | **Blocking** for `map_by` workflows | Transpiler lacks two-phase emission | Transpiler: add ExpressionTool grouping + wrapper scatter (map_by_cwl.md) |
-| Record bindings in step inputs | High | Transpiler rejects; compiler may not flatten all cases | Both: flatten in compiler, support remainder in transpiler |
-| Merge bindings | High | Chain desugaring handles `\|`, explicit `//` may not flatten | Compiler: merge-flatten in force.py |
-| Nested field projections | Medium | Compiler emits `Field(Field(...))` for multi-level access | Transpiler: ExpressionTool intermediary |
-| `expr` interpolation | Medium | SWL arbitrary expressions don't map to CWL JS | Transpiler: optional InlineJavascriptRequirement + passthrough |
-| Time resource | Low | CWL lacks standard time limit | Transpiler: emit as hints entry |
-| Optional type serialization | Low | DAG schema missing optional flag | DAG schema: add optional field |
-| Merge workflow outputs | Medium | Same as merge bindings | Compiler: merge-flatten |
-| Record workflow outputs | Low | Rare in practice; compiler may emit for lambda results | Transpiler: ExpressionTool construction |
-| `run` params missing in DAG | Low | Workflow steps' definition.run may be empty when inherited | Compiler: propagate run params to definition |
-
----
-
-## 4. Implementation Plan
-
-### Phase 1: `map_by` via ExpressionTool grouping + scattered wrapper
-
-**Goal:** Replace `_validate_supported` rejection of `group_by` with full two-phase emission.
-
-**Implementation steps:**
-
-1. **Add `_validate_map_by_preconditions(step)`** — check that:
-   - `map.source` is present and is either `input` or `table`
-   - `map.group_by` names a column in `map.source.columns` or `step.input_schema`
-   - The mapped function's inputs do not include array types (arrays-of-arrays not representable; reject with clear message)
-   - The mapped function's output paths contain no `expr` interpolation
-
-2. **Implement `_emit_grouping_expression_tool(step)`** — generate a CWL `ExpressionTool`:
-   - Inputs: one per column in `step.input_schema` (typed as arrays matching the CWL array-of-items form), plus a `key_name: string` input
-   - Requirements: `InlineJavascriptRequirement`
-   - Outputs: `groups: File[]` with `outputBinding.glob: "groups/*.json"`
-   - Expression (JavaScript): partition rows by key, write one JSON file per group using `fs.writeFileSync`
-   - Structure of each group JSON:
-     ```json
-     { "key": "sample_A", "columns": { "fastq1": [...], "fastq2": [...] } }
-     ```
-
-3. **Implement `_emit_group_wrapper_tool(step)`** — generate a `CommandLineTool`:
-   - Input: a single `File` (the group JSON); additional broadcast inputs from non-scatter bindings
-   - Script: reads the group JSON, iterates over rows, calls the original tool's script for each row, collects outputs
-   - Outputs: generated from `step.output_schema` (arrays — each group produces one output row)
-
-4. **Implement `_emit_map_by_workflow_step(step, ...)`** that emits two CWL workflow steps:
-   - Grouping step: calls the ExpressionTool
-   - Processing step: calls the wrapper tool, `scatter` on the group file input
-
-5. **Handle the mapped function being a sub-workflow** (not just a task):
-   - The wrapper is a generated `Workflow` (using `SubworkflowFeatureRequirement`) that reads group JSON via inline `ExpressionTool`, calls the inner sub-workflow per row, and collects outputs.
-
-6. **Update `_step_to_cwl` or call site:** When `step.map.group_by` is present, call `_emit_map_by_workflow_step` instead of the normal scatter path.
-
-7. **Tests:**
-   - `test_map_by_task_transpiles_to_grouping_and_scatter` — full DAG with simple `map_by` on a task
-   - `test_map_by_workflow_transpiles` — `map_by` on a sub-workflow
-   - `test_map_by_rejects_array_inputs` — verify rejection of array-typed inputs in mapped function
-   - `test_map_by_rejects_expr_interpolation` — verify rejection of `expr` in wrapped function's outputs
-
-**Complexity assessment:** ~250-350 lines of new Python code + ~100 lines of tests. The ExpressionTool JS and the wrapper bash script are the riskiest parts — they need careful quoting and edge-case handling.
-
-### Phase 2: Merge flattening at compiler level
-
-**Goal:** Eliminate merge bindings from DAG output so the transpiler never sees them.
-
-**Implementation steps:**
-
-1. **Identify merge sources:** Merge bindings in the DAG come from:
-   - Pipeline chain desugaring (`A | B` → `x // a` bindings) — already flat in most cases
-   - Explicit record update expressions (`r1 // r2`) in the SWL source
-   - Partial application with `//` in the call site
-
-2. **Add flattening pass in `force.py`** (after IR forcing, before DAG construction):
-   - Walk all step bindings. When a binding is a `Merge`, recursively decompose it:
-     - If both sides are `Input` or `Field(StepCall)`, flatten to individual per-field bindings
-     - If one side cannot be decomposed (e.g., a `TableSource`), raise a compile-time error
-   - Walk `dag.outputs`. Same treatment.
-
-3. **Remove rejection in `_validate_supported`:** Once merges are flattened by the compiler, the transpiler never encounters them.
-
-4. **Tests:**
-   - Verify that existing pipeline tests (`function.swl`, `pipe.swl`) produce no merge bindings in DAG
-   - Add test for explicit `//` in source that should be flattened
-   - Add test for `//` that cannot be flattened (e.g., record-update on a table column) → expected compile error
-
-### Phase 3: Record bindings via ExpressionTool
-
-**Goal:** Support record bindings that reach the transpiler (non-saturating records).
-
-**Implementation steps:**
-
-1. **Determine if record can be saturated:** If the record binding is in a step's bindings for a named input, check whether the step's task expects a single record-typed input. If yes, the record is "saturating" and its fields should be flattened into individual inputs at compiler time.
-
-2. **For non-saturating records at transpiler time:**
-   - Generate an `ExpressionTool` that takes each record field as a separate input
-   - The tool constructs the record as a JSON object and emits it as a `File`
-   - Replace the record binding in downstream steps with a reference to the ExpressionTool's file output
-
-3. **Tests:**
-   - Create a DAG where a record does not saturate a task call
-   - Verify that transpilation produces an intermediate ExpressionTool step
-
-### Phase 4: Time resource hints
-
-**Goal:** Preserve `run.time` in CWL output (currently dropped).
-
-**Implementation steps:**
-
-1. **Modify `_resource_requirement` (or create `_emit_runtime`):** After emitting `ResourceRequirement`, emit `time` as a hints entry:
-   ```python
-   hints = []
-   if 'time' in run:
-       hints.append({'class': 'TimeLimit', 'timeLimit': run['time'].get('value')})
-   ```
-
-2. **If hint approach is too non-standard:** Emit as a custom extension:
-   ```python
-   {'extension': 'https://swl-lang.org/timeLimit', 'value': run['time'].get('value')}
-   ```
-
-3. **Tests:**
-   - Verify that function workflow CWL output includes time hint
-
-### Phase 5: `expr` interpolation passthrough
-
-**Goal:** Support `expr` interpolation parts by adding `InlineJavascriptRequirement` and passing the expression through.
-
-**Implementation steps:**
-
-1. **Modify `_interp_to_cwl_glob`:** Instead of raising on `expr` parts, emit the expression text as-is within `$( ... )`.
-
-2. **Add `InlineJavascriptRequirement` to tool requirements** if any output uses `expr` interpolation.
-
-3. **Tests:**
-   - Create a `.swl` file with `expr` interpolation in output path
-   - Verify transpilation succeeds and includes `InlineJavascriptRequirement`
-   - Verify the emitted expression preserves the original expression text
-
-### Phase 6: Nested field projections
-
-**Goal:** Support `Field(Field(...), ...)` patterns.
-
-**Implementation steps:**
-
-1. **Add `_emit_field_resolution_expression_tool(binding)`:** For a nested field chain like `x.y.z`:
-   - Create an ExpressionTool that takes the source binding as input
-   - Resolve the field chain via JS expression: `$(inputs.source.y.z)`
-   - Output the resolved value
-
-2. **Wire the ExpressionTool output** as the input to the downstream step.
-
-3. **Tests:**
-   - Construct a DAG with `Field(Field(step_output, "inner"), "leaf")`
-   - Verify transpilation produces an intermediate ExpressionTool
-
-### Phase 7: Optional type support
-
-**Goal:** Represent optional types in CWL as union types.
-
-**Implementation steps:**
-
-1. **Add optional flag to DAG `InputSpec`:** Requires DAG schema change (add optional `optional: bool` field).
-
-2. **Modify `_cwl_type`:** When `optional=True`, emit `["null", <type>]` instead of just `<type>`.
-
-3. **Tests:**
-   - Transpile a DAG with optional input and verify CWL type is `["null", "File"]`
-
----
-
-## 5. Effort Summary
-
-| Phase | Feature | Layer | Estimated effort |
-|---|---|---|---|
-| 1 | `map_by` | Transpiler | ~350 lines emit.py, ~100 lines tests |
-| 2 | Merge flattening | Compiler (force.py) | ~80 lines force.py, ~40 lines tests |
-| 3 | Record bindings | Transpiler | ~150 lines emit.py, ~60 lines tests |
-| 4 | Time resource hints | Transpiler | ~20 lines emit.py, ~20 lines tests |
-| 5 | `expr` interpolation | Transpiler | ~30 lines emit.py, ~30 lines tests |
-| 6 | Nested field projections | Transpiler | ~100 lines emit.py, ~50 lines tests |
-| 7 | Optional types | DAG schema + transpiler | ~40 lines across dag.py + emit.py, ~30 lines tests |
-
-**Total estimate:** ~800 lines Python + ~330 lines tests.
-
----
-
-## 6. Dependencies and Ordering
+## Architecture
 
 ```
-Phase 2 (merge flattening) ─┐
-                              ├──→ Phase 6 (field projections) can start
-Phase 1 (map_by) ────────────┤     after Phase 2 (fewer edge cases)
-                              │
-Phase 3 (record bindings) ───┘
-
-Phase 4 (time hints) ─── independent
-Phase 5 (expr interp) ─── independent
-Phase 7 (optional types) ─── depends on DAG schema change
+transpile/cwl/
+├── __init__.py     # exports transpile_dag_dict, transpile_dag_file
+├── __main__.py     # python -m entry point
+├── cli.py          # CLI wrapper (uses transpile/_cli.py)
+└── emit.py         # ~572 lines, the transpiler
 ```
 
-Phase 2 should be done first because it cleans up the DAG and reduces the number of edge cases the transpiler must handle. Phase 1 is the highest user value (unblocks `map_by`). Phases 4-7 are incremental improvements.
+### Entry points
+
+- `transpile_dag_file(path)` — read DAG JSON from disk, transpile to packed CWL
+- `transpile_dag_dict(data, workflow_id='main')` — main transpilation from parsed DAG data
+
+### Key internal functions
+
+| Function | Purpose |
+|----------|---------|
+| `_tool_to_cwl(step)` | Convert a task step to `CommandLineTool` with `InitialWorkDirRequirement`, `ResourceRequirement`, `DockerRequirement`, `TimeLimit` hints. Recursively packs sub-workflow definitions |
+| `_step_to_cwl(workflow_id, step, tool_id, record_map)` | Emit a workflow step entry with `in` array wiring, `scatter` + `scatterMethod: dotproduct` for mapped steps |
+| `_workflow_input_to_cwl(workflow_id, name, spec)` | Emit `Workflow.inputs[]` entries with type and optional doc |
+| `_workflow_output_to_cwl(workflow_id, name, output)` | Emit `Workflow.outputs[]` with `outputSource` |
+| `_step_input_to_cwl(task_id, name, value)` | Convert a DAG binding to a step `in` entry with source and optional `valueFrom` for field projections |
+| `_tool_input_to_cwl(tool_id, name, spec)` | Emit tool input port with type mapping |
+| `_tool_output_to_cwl(tool_id, name, spec)` | Emit tool output with `outputBinding.glob` as `$(...)` CWL expression |
+| `_resource_requirement(run)` | Map `run.cpu` → `coresMin`, `run.memory` → `ramMin` (MB) |
+| `_docker_requirement(run)` | Map `run.image` → `dockerPull` |
+| `_hints_from_run(run)` | Map `run.time` → `TimeLimit` hint |
+| `_binding_source(value)` | Resolve a DAG binding to a CWL `source` string (Input → `#main/name`, StepCall → `#main/step_id`, Field → `#main/root/name`) |
+| `_interp_to_cwl_glob(value)` | Render a SWL `word` interpolation dict to a CWL expression `$(inputs.var + '.ext')` |
+| `_has_expr_interpolation(spec)` | Check if an output spec contains `expr` interpolation parts; if so, `InlineJavascriptRequirement` is added |
+| `_validate_supported(dag)` | Validate map_by preconditions, reject literal workflow outputs, validate output interpolation |
+| `_emit_record_tool(step_id, binding_name, record, dag)` | Generate an `ExpressionTool` + step entry for a Record binding — constructs JSON from field inputs |
+| `_emit_map_by_graph(step, dag)` | Generate ExpressionTool (grouping) + CommandLineTool (wrapper) + two step entries for `map_by` grouped scatter |
+| `_gen_wrapper_script(col_names, out_names, original_body)` | Generate the Python wrapper bash script for map_by processing — reads group JSON, iterates rows, calls inner script per row |
 
 ---
 
-## 7. Reference: Key Code Locations
+## SWL → CWL v1.0 Mapping
 
-| What | File | Lines |
+### Well Supported
+
+| SWL Concept | CWL v1.0 Output | Details |
 |---|---|---|
-| Transpiler entry point | `swl/transpile/cwl/emit.py` | 7-49 |
-| Task → CommandLineTool | `_tool_to_cwl` | 52-89 |
-| Step → CWL step (includes scatter) | `_step_to_cwl` | 111-141 |
-| Workflow inputs/outputs | `_workflow_input_to_cwl`, `_workflow_output_to_cwl` | 92-108 |
-| Binding validation (rejections) | `_validate_supported` | 193-211 |
-| Canonical binding classification | `_canonical_binding` | 214-226 |
-| CWL type mapping | `_cwl_type` | 306-323 |
-| Interpolation → CWL glob | `_interp_to_cwl_glob` | 326-339 |
-| `map_by` rejection | `_validate_supported` | 195-196 |
-| `map_by` analysis | `map_by_cwl.md` | full file |
-| DAG data model | `swl/ir/dag.py` | full file |
-| DAG JSON format specification | `dag.md` | full file |
+| **Task step** | `CommandLineTool` with `InitialWorkDirRequirement` | Script body materialized as `script.sh` |
+| **Named input ports** | Tool `inputs[]` with `type` | `file` → `File`, `str` → `string`, `int` → `int`, `float` → `float` |
+| **Named output ports** | Tool `outputs[]` with `outputBinding.glob` | Output paths use `$(inputs.var + '.ext')` CWL expression |
+| **`run.cpu`** | `ResourceRequirement.coresMin` | |
+| **`run.memory`** | `ResourceRequirement.ramMin` | Value in MB |
+| **`run.time`** | `TimeLimit` hint | Emitted as hints entry (not standard ResourceRequirement) |
+| **`run.image`** | `DockerRequirement.dockerPull` | |
+| **Workflow inputs** | `Workflow.inputs[]` with type and optional doc | |
+| **Input binding (workflow input)** | `source: #main/input_name` | Direct workflow input reference |
+| **Input binding (literal)** | `default: <value>` | Inline literal value on step input port |
+| **Step output binding** | `source: #main/step_id/output_name` | Cross-step reference |
+| **Field projection** | `source: #main/root/name` + `valueFrom: $(field_path)` | CWL `valueFrom` with `$(...)` expression for nested access |
+| **`word` interpolation in output defaults** | `$(inputs.var + '.literal')` | `word_interp()` from `common.py` with `var_fn=lambda n: f"inputs.{n}"` |
+| **`expr` interpolation in output defaults** | `$((expr) + '.literal')` with `InlineJavascriptRequirement` | Expression text passed through with parens; `InlineJavascriptRequirement` added to tool |
+| **Workflow output** | `outputs[]` with `outputSource` | Type inferred from source binding |
+| **Sub-workflow (no map)** | Embedded `Workflow` node in `$graph` | Recursively transpiled; ID prefixed with step name |
+| **Mapped step (scatter)** | `scatter: [ports]` + `scatterMethod: dotproduct` | Workflow inputs for scatter ports promoted to `Array` types |
+| **Mapped workflow** | Scattered step referencing sub-workflow | Sub-workflow `Workflow` node in `$graph` + `scatter` step |
+| **Mapped lambda** | Generated `Workflow` node + scattered call | Lambda body wrapped in generated sub-workflow, called with scatter |
+| **`map_by` (grouped scatter)** | ExpressionTool (grouping) + CommandLineTool (wrapper) | Two-step: groups rows by key via JS, then processes each group via Python wrapper script |
+| **Record binding** | `ExpressionTool` with `InlineJavascriptRequirement` | Constructs JSON record from individual field inputs; step entry inserted before consumer |
+| **`[file]` / `[str]` / `[int]` / `[float]` array types** | `{type: array, items: File/string/int/float}` | Properly mapped via `to_cwl_type()` |
+| **Optional types (`type?`)** | `['null', Type]` union type | Handled via `to_cwl_type()` optional suffix handling |
+
+### Weakly Supported
+
+| SWL Concept | Status | Issue |
+|---|---|---|
+| **Shell variable interpolation (`${var}`)** | Passes through literally | `${cpu}`, `${ref}` in the `InitialWorkDirRequirement` entry are undefined bash variables. CWL provides no template mechanism for materialized script files. The transpiler does not resolve `${cpu}` → staged file path or resource value |
+| **`$memory / cpu` expression** | Passes through literally | Same issue — `${memory / cpu}` is undefined bash |
+| **Expression variable scope** | No `inputs.` prefix for `expr` parts | `${outbase / 2}` becomes `$((outbase / 2) + '.bam')` — `outbase` is not `inputs.outbase` in the JS scope. User must use `inputs.outbase` in expression text |
+
+### Not Supported (explicitly rejected)
+
+| SWL Concept | Behavior |
+|---|---|
+| **Merge bindings** | Raises `ValueError`: "Unsupported binding for CWL transpilation" (via `_binding_source`) |
+| **Literal workflow outputs** | Raises `ValueError`: "literal outputs are not supported" |
+
+### CWL-specific details
+
+- **Packed document format**: All tools and the workflow are flat in `$graph[]`. Tool IDs are `#step_id`, workflow is `#main`. Input/output IDs use hierarchical paths like `#align/fastq1`.
+- **Scatter implementation**: All scatter ports are listed explicitly in `scatter: [...]`. `scatterMethod: dotproduct` pairs up array elements by position.
+- **`map_by` implementation**: A two-phase emission:
+  1. An `ExpressionTool` with `InlineJavascriptRequirement` partitions array inputs by a key column and writes per-group JSON files using `fs.writeFileSync`
+  2. A `CommandLineTool` wrapper iterates over group JSON files, calling the original script per row via Python `subprocess.run`
+- **Record binding implementation**: An `ExpressionTool` takes record fields as separate inputs, constructs a JSON object via JS, writes it to `record.json`, and returns a `File`. The downstream step references this file.
+- **Nested field projections**: `Field(Field(...), ...)` chains are resolved by `field_chain_parts()` to find the root source. The first access is the `source`, remaining accesses become `valueFrom: $(rest.path)`.
+- **Optional types**: SWL `type?` suffix is mapped to CWL `['null', Type]` union. This is handled in `to_cwl_type()` for both `File` and scalar types.
+- **Requirements emission**: Workflow always declares `ScatterFeatureRequirement` and `MultipleInputFeatureRequirement`. Tools declare `InitialWorkDirRequirement`, `ResourceRequirement`, `DockerRequirement`, `InlineJavascriptRequirement`, and `TimeLimit` hints as needed.
+
+---
+
+## Support Matrix
+
+| Feature | Status | Tests |
+|---------|--------|-------|
+| Simple task → CommandLineTool | ✅ Well supported | function, pipe, explicit |
+| Pipeline chain (|) | ✅ Well supported | function, pipe (equivalence) |
+| Named I/O ports | ✅ Well supported | All |
+| Resources (cpu/memory/image) | ✅ Well supported | function |
+| Time resource hint | ✅ Well supported | function (TimeLimit check) |
+| Workflow input/output | ✅ Well supported | All |
+| Output path templates (`$(inputs.var)`) | ✅ Well supported | function, pipe, explicit |
+| Literal input bindings | ✅ Well supported | partial |
+| Field projections | ✅ Well supported | All (source wiring) |
+| Sub-workflow (no map) | ✅ Well supported | import_partial |
+| Sub-workflow (mapped) | ✅ Supported | panel (scattered sub-workflow) |
+| `[file]` / `[str]` / `[int]` / `[float]` types | ✅ Supported | panel (array inputs) |
+| Optional types (`type?`) | ✅ Supported | optional_workflow_output test |
+| Nested field projections (`a.b.c`) | ✅ Supported | nested_field_binding test |
+| Record bindings | ✅ Supported | record_binding_step_input test |
+| `expr` interpolation in outputs | ✅ Supported | expr_interpolation_passthrough test |
+| Mapped step (scatter) | ✅ Well supported | batch (task, workflow, lambda) |
+| `map_by` (grouped scatter) | ✅ Well supported | map_by_transpile_emits, map_by_from_compiled_dag |
+| Shell variable interpolation (`${var}`) | ❌ Passes through verbatim | — |
+| `$var` / `${memory / cpu}` resolution | ❌ Undefined at runtime | — |
+| Merge bindings | ❌ Rejected | rejects_merged_task_input_binding |
+| Literal workflow outputs | ❌ Rejected | (via _validate_supported) |
+
+### Coverage
+
+The test suite (`bash test.sh`):
+- Generates `tests/cwl/*.cwl` from all compiled DAGs (`function`, `pipe`, `explicit`, `panel`, `map`)
+- Compares `pipe.cwl` and `explicit.cwl` against `function.cwl` for equivalence of golden output
+- `panel.cwl` and `map.cwl` are generated but have no golden comparison
+- `map_by.cwl` generation is commented out (TODO) but `map_by` is tested via unit tests
+- Unit tests: 18 test cases in `tests/unit/swl/transpile/cwl/test_emit.py`
+
+---
+
+## Known Limitations
+
+1. **Shell variable interpolation**: The script body in `InitialWorkDirRequirement` is materialized as-is. `${cpu}`, `${ref}` and similar bash-style substitutions pass through literally but are never defined as bash variables by CWL. At runtime `bwa mem -t ${cpu} ${ref} ...` would expand `$cpu` and `$ref` to empty strings. A fix would need to prepend variable assignments using CWL expression syntax or environment variable declarations:
+   ```bash
+   cpu="$(echo $(inputs.cpu))"  # Not valid — ResourceRequirement values aren't in CWL expression scope
+   ```
+   Unlike WDL (`~{var}`) or SMK (`{input.var}`), CWL has no template mechanism for InitialWorkDir script entries.
+
+2. **Expression interpolation variable scope**: `${outbase / 2}` in an output default becomes `$((outbase / 2) + '.bam')`. The expression text passes through without `inputs.` prefixing. Users must write `${inputs.outbase / 2}` for expression outputs to reference CWL input variables correctly.
+
+3. **Merge bindings not supported**: Merge bindings (from `//` operators at the DAG level) are rejected. These should be flattened at compile time before DAG generation.
+
+4. **Literal workflow outputs not supported**: Workflow-level outputs that are literal values (not step outputs) are explicitly rejected.
+
+5. **`map_by` wrapper Python dependency**: The generated wrapper CommandLineTool for `map_by` uses Python 3 with `subprocess` and `json` modules. This introduces a runtime dependency on `python3` that may not be available in all CWL execution environments (e.g., restricted containers).
+
+---
+
+## Example Output
+
+### Simple pipeline (`function.swl`)
+
+Input DAG: `align | sort | call` (3-task pipeline)
+
+Output (`function.cwl`):
+
+```json
+{
+  "cwlVersion": "v1.0",
+  "$graph": [
+    {
+      "id": "#align",
+      "class": "CommandLineTool",
+      "baseCommand": ["bash", "script.sh"],
+      "inputs": [
+        {"id": "#align/fastq1", "type": "File"},
+        {"id": "#align/fastq2", "type": "File"},
+        {"id": "#align/outbase", "type": "string"},
+        {"id": "#align/ref", "type": "File"},
+        {"id": "#align/ref_amb", "type": "File"},
+        ...
+      ],
+      "outputs": [{
+        "id": "#align/bam",
+        "type": "File",
+        "outputBinding": {"glob": "$(inputs.outbase + '.bam')"}
+      }],
+      "requirements": [
+        {"class": "InitialWorkDirRequirement",
+         "listing": [{"entryname": "script.sh",
+                      "entry": "bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam"}]},
+        {"class": "ResourceRequirement", "coresMin": 2},
+        {"class": "DockerRequirement", "dockerPull": "djhshih/seqkit:0.1"}
+      ],
+      "hints": [{"class": "TimeLimit", "timeLimit": 3150}]
+    },
+    ...
+    {
+      "id": "#main",
+      "class": "Workflow",
+      "inputs": [
+        {"id": "#main/fastq1", "type": "File"},
+        {"id": "#main/outbase", "type": "string"},
+        ...
+      ],
+      "outputs": [
+        {"id": "#main/bam", "type": "File", "outputSource": "#main/sort/bam"},
+        {"id": "#main/bai", "type": "File", "outputSource": "#main/sort/bai"},
+        {"id": "#main/bcf", "type": "File", "outputSource": "#main/call/bcf"}
+      ],
+      "requirements": [
+        {"class": "ScatterFeatureRequirement"},
+        {"class": "MultipleInputFeatureRequirement"}
+      ],
+      "steps": [
+        {"id": "#main/align", "run": "#align",
+         "in": [
+           {"id": "#main/align/fastq1", "source": "#main/fastq1"},
+           {"id": "#main/align/ref", "source": "#main/ref"},
+           ...
+         ],
+         "out": ["#main/align/bam"]},
+        {"id": "#main/sort", "run": "#sort", ...},
+        {"id": "#main/call", "run": "#call", ...}
+      ]
+    }
+  ]
+}
+```
