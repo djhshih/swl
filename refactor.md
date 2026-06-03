@@ -25,16 +25,16 @@ Primary focus areas:
 
 The codebase already has a clear conceptual pipeline, but implementation-wise it is concentrated in a few large, mixed-responsibility files:
 
-- `python/swl/semantic/wf/check.py`
-- `python/swl/ir/force.py`
-- `python/swl/transpile/cwl/emit.py`
-- to a lesser extent `python/swl/ir/lower.py` and `python/swl/ir/dag.py`
+- `python/swl/semantic/wf/check.py` (1155 lines)
+- `python/swl/ir/force.py` (1136 lines)
+- `python/swl/transpile/cwl/emit.py` (742 lines)
+- to a lesser extent `python/swl/ir/lower.py` (442 lines) and `python/swl/ir/dag.py` (474 lines)
 
 The biggest maintainability problem is not just file size; it is **contract duplication**:
 
 - type normalization appears in multiple places
 - mapped-step semantics are partly in the forcer and partly re-inferred in transpilers
-- bindings have multiple serialized shapes (`source: step`, bare `step/output`, `kind: field`, etc.)
+- bindings have **three** serialized shapes (`_binding_to_dict` in dag.py, `_binding_to_binding_dict` in dag.py, `_binding_to_public_dict` in force.py)
 - workflow/task loading and validation logic is duplicated between checker and forcer
 - transpilers still contain fallback logic for DAG forms that `dag.md` says should already be normalized away
 
@@ -82,18 +82,18 @@ This file handles:
 - DAG finalization
 - binding serialization helpers
 
-This is the compiler’s most overloaded file.
+This is the compiler's most overloaded file.
 
 #### `python/swl/transpile/cwl/emit.py`
 This file handles:
 
-- DAG validation
+- DAG validation (overlaps with `dag.py:DAG.validate()`)
 - CWL rendering
 - nested workflow packaging
 - ad hoc record tool synthesis
 - map and map_by lowering
 - output type inference fallback
-- binding canonicalization helpers
+- binding canonicalization helpers (reverse-engineering DAG serialization)
 
 It is doing compiler cleanup that should largely happen before transpilation.
 
@@ -108,6 +108,7 @@ Examples:
 - binding classification/canonicalization exists separately in `ir/dag.py` serialization code and `transpile/cwl/emit.py`
 - workflow/task file parsing and bash-variable validation is performed in both `semantic/wf/check.py` and `ir/force.py`
 - map input classification is produced in forcing, but CWL still has stale logic around `map.get('ports')`
+- field-chain traversal duplicated: `dag.py:_nested_field_to_dict` and `cwl/emit.py:_field_chain` walk Field chains identically
 
 This redundancy makes the code fragile when the DAG contract evolves.
 
@@ -121,9 +122,9 @@ Concrete examples found:
 - `python/swl/semantic/task/type.py`: `TypeChecker.infer_workflow_input()` appears unused
 - `python/swl/ir/lower.py`: `_record_field_names()` appears unused
 - `python/swl/syntax/wf/parser.py`: `_until()` and `_find()` appear unused
-- `python/swl/ir/force.py`: duplicate `if isinstance(value, StepCall): return set(value.outputs)` in `_available_inputs`
-- `python/swl/transpile/cwl/emit.py`: unreachable line in `_cwl_type()` after an earlier `return`
-- debug/evaluation scripts in package root likely not part of production pipeline:
+- `python/swl/ir/force.py`: duplicate `if isinstance(value, StepCall): return set(value.outputs)` in `_available_inputs` (lines 302-303 and 304-305)
+- `python/swl/transpile/cwl/emit.py`: unreachable `return` on line 443 in `_cwl_type` after line 442 returns
+- debug/evaluation scripts in package root not part of production pipeline:
   - `python/swl/eval.py`
   - `python/swl/eval_ir.py`
   - `python/swl/eval_force.py`
@@ -132,7 +133,7 @@ Concrete examples found:
   - `python/swl/eval_wf_semantic.py`
 - checked-in caches/artifacts:
   - `python/.pytest_cache/`
-  - many `__pycache__/`
+  - `python/swl/**/__pycache__/`
   - compiled `.pyc` files under `python/swl/**/__pycache__/`
 
 These are immediate cleanup candidates.
@@ -141,15 +142,21 @@ These are immediate cleanup candidates.
 
 ### 4. Inconsistent DAG/binding surface
 
-`dag.md` specifies a normalized DAG contract, but implementation still supports multiple binding shapes and compiler-era forms.
+`dag.md` specifies a normalized DAG contract, but the implementation has **three** serialization formats for bindings:
 
-Examples:
+| Function | Location | Step-output encoding | Used for |
+|----------|----------|---------------------|----------|
+| `_binding_to_dict` | `ir/dag.py:287` | `{'step': id, 'output': name}` | outputs, nested bindings |
+| `_binding_to_binding_dict` | `ir/dag.py:353` | `{'source': id, 'output': name}` | step bindings in `to_dict()` |
+| `_binding_to_public_dict` | `ir/force.py:1121` | `{'source': 'step', 'step': id, 'output': name}` | map source metadata in forcing |
 
-- `ir/dag.py` serializes bindings differently for outputs vs step bindings
-- step bindings use a different mini-schema than general bindings
-- `transpile/cwl/emit.py` has to reverse-engineer “canonical bindings” from runtime objects instead of receiving one normalized binding API
+Additionally:
+
+- step bindings use a different mini-schema than general bindings (`_binding_to_binding_dict` omits `source` key for trivial Input bindings, returning `{}`)
+- `transpile/cwl/emit.py` has to reverse-engineer "canonical bindings" via `_canonical_binding()` instead of receiving one normalized binding API
 - `DAG.from_dict()` contains compatibility logic for heterogeneous encodings
-- transpilers still reject `Merge` and `Record` forms that `dag.md` says should mostly be flattened before emission
+- `_nested_field_to_dict` (dag.py:369) and `_field_chain` (cwl/emit.py:332) duplicate field-chain flattening
+- transpilers still reject `Merge` and `Record` forms that `dag.md` says should be flattened before emission
 
 This is a major source of bloat.
 
@@ -159,7 +166,7 @@ This is a major source of bloat.
 
 Example:
 
-- `transpile/cwl/emit.py` creates ad hoc input specs with `type('InputSpec', (), {...})()`
+- `transpile/cwl/emit.py` creates ad hoc input specs with `type('InputSpec', (), {...})()` (lines 57, 62)
 
 This is a maintainability smell. The project already uses dataclasses elsewhere; fake runtime types should be replaced with real structs/helpers.
 
@@ -178,10 +185,23 @@ Currently this is spread across:
 
 - `semantic/task/type.py`
 - `semantic/wf/type.py`
-- `ir/force.py`
-- all three transpilers
+- `ir/force.py` (`_normalize_swl_type`, `_as_array_type`, `_is_optional_type`)
+- `transpile/cwl/emit.py` (`_cwl_type`, `_as_array_type`)
+- `transpile/wdl/emit.py` (`_wdl_type`)
+- `transpile/nf/emit.py` (`_input_qualifier`)
 
 This invites drift.
+
+---
+
+### 7. Load/cache duplication
+
+Import/file loading and definition caching are spread across checker, lowerer, and forcer:
+
+- `semantic/wf/check.py:_load_imports` reads and parses source files
+- `ir/force.py:_tool_definition` reparses `.sh` files and recomputes signatures
+- `ir/lower.py:_cached_workflow_body` maintains its own cache of lowered workflows
+- each stage knows too much about path resolution and relative imports
 
 ---
 
@@ -211,15 +231,15 @@ This invites drift.
    - or delete if they are no longer used
 
 4. Remove clearly unused functions/classes:
-   - `compile.py:UserError` if not part of intended API
+   - `compile.py:UserError` — also audit whether the pipeline should raise it or remove the catch
    - `semantic/task/type.py:TypeChecker.infer_workflow_input`
    - `ir/lower.py:_record_field_names`
    - `syntax/wf/parser.py:_until`
    - `syntax/wf/parser.py:_find`
 
-5. Remove trivial duplication and unreachable code:
-   - duplicate `StepCall` branch in `ir/force.py:_available_inputs`
-   - unreachable second return in `transpile/cwl/emit.py:_cwl_type`
+5. Fix dead/duplicate branches:
+   - duplicate `StepCall` branch in `ir/force.py:_available_inputs` (lines 302-303 and 304-305)
+   - unreachable second return in `transpile/cwl/emit.py:_cwl_type` after line 442
 
 ### Outcome
 
@@ -229,7 +249,7 @@ Low-risk cleanup that shrinks noise immediately and makes the next phases easier
 
 ## Phase 1 — Define strict internal contracts first
 
-This phase is the most important.
+This phase is the most important. It aligns with `dag.md` §R1 (explicit over inferred) and §R2 (flatten before emitting).
 
 ### 1.1 Create a single normalized binding model
 
@@ -240,11 +260,11 @@ Introduce a dedicated binding module, e.g.:
   - serialization/deserialization helpers
   - validation helpers
 
-Move binding-related logic out of scattered locations:
+Consolidate binding-related logic out of scattered locations:
 
-- from `ir/dag.py`
-- from `ir/force.py`
-- from `transpile/cwl/emit.py`
+- from `ir/dag.py` (consolidate `_binding_to_dict`, `_binding_to_binding_dict`, `_nested_field_to_dict`)
+- from `ir/force.py` (eliminate `_binding_to_public_dict`)
+- from `transpile/cwl/emit.py` (eliminate `_canonical_binding`, `_field_chain`)
 
 Target API:
 
@@ -265,9 +285,10 @@ In particular:
   - `{'source': step_id, 'output': ...}`
   - `{'kind': 'field', ...}`
   - `{'source': 'step', ...}`
+  - empty dict `{}` as a degenerate binding shape
 - choose one encoding per binding kind and use it everywhere
 
-Recommended JSON forms:
+Recommended JSON forms (per `dag.md`):
 
 - input: `{ "source": "input", "name": ... }`
 - step output: `{ "source": "step_output", "step": ..., "output": ... }`
@@ -280,28 +301,31 @@ Then deprecate support for alternate shapes.
 
 ### 1.3 Move DAG invariant checks into compiler core
 
-Strengthen finalization so the final DAG always satisfies `dag.md`.
+Strengthen finalization so the final DAG always satisfies `dag.md` §R2 and the Binding contracts.
 
 Compiler should guarantee before emission:
 
-- no `Merge` in final DAG
-- direct-call `Record` saturation completed
-- normalized mapped-step metadata complete (`scatter`, `broadcast`)
-- explicit output types present
-- explicit optionality preserved
+- no `Merge` in final DAG (per dag.md Binding contract: "Merge bindings must not appear in the final DAG")
+- direct-call `Record` saturation completed (per dag.md Record contract: "If a record literal directly saturates a known task or workflow interface, the compiler must flatten it")
+- normalized mapped-step metadata complete (`scatter`, `broadcast`) — every input in exactly one category
+- explicit output types present (per dag.md OutputSpec contract: "Every emitted workflow output must have an explicit scalar or gathered-array type")
+- explicit optionality preserved (per dag.md §R1: "Optional vs required parameters" currently lost at serialization)
 - no transpiler-specific fallback assumptions needed
 
-Then simplify transpiler validators so they check only target-specific limitations, not compiler cleanup failures.
+Once these are guaranteed, remove redundant validation from transpilers:
+- `transpile/cwl/emit.py:_validate_supported` overlaps with `dag.py:DAG.validate()`
+- `transpile/cwl/emit.py:_step_input_error` rejects Merge/Record/ForcedFunction — should be unreachable
+- `transpile/cwl/emit.py:_workflow_output_error` rejects Merge/ForcedFunction — should be unreachable
 
 ### Outcome
 
-This creates a clear compiler/transpiler boundary and removes a large source of duplication.
+This creates a clear compiler/transpiler boundary and removes the root cause of most transpiler complexity.
 
 ---
 
 ## Phase 2 — Split `ir/force.py` by responsibility
 
-Current `ir/force.py` should be decomposed into smaller units.
+Current `ir/force.py` should be decomposed into smaller units. The exact split should serve the forcing stage's natural sub-tasks: context management, value evaluation, step emission, DAG finalization, tool definition loading, and merge handling.
 
 ### Proposed split
 
@@ -453,7 +477,9 @@ From:
 - `semantic/task/type.py`
 - `semantic/wf/type.py`
 - `ir/force.py:_normalize_swl_type`, `_as_array_type`, `_is_optional_type`
-- transpiler `_cwl_type`, `_wdl_type`, `_input_qualifier`
+- `transpile/cwl/emit.py:_cwl_type`, `_as_array_type`
+- `transpile/wdl/emit.py:_wdl_type`
+- `transpile/nf/emit.py:_input_qualifier`
 
 ### Outcome
 
@@ -469,18 +495,21 @@ Once the DAG is stricter, simplify all transpilers to consume it directly.
 
 Refactor `transpile/cwl/emit.py` into:
 
-- `validate.py` for target-only checks
-- `bindings.py` for CWL binding expression rendering
+- `validate.py` for target-only checks (remove checks already guaranteed by compiler)
+- `bindings.py` for CWL binding expression rendering (replace `_canonical_binding`)
 - `tools.py` for `CommandLineTool`/subworkflow emission
 - `workflow.py` for top-level workflow emission
 - `map.py` for map/map_by-specific CWL logic
 
 ### Specific simplifications
 
-- remove `_canonical_binding()` if normalized bindings already provide one shape
-- remove fallback output type inference where `OutputSpec.type` is guaranteed
+- remove `_canonical_binding()` — normalized bindings already provide one shape
+- remove `_field_chain()` — field chains handled by normalized binding model
+- remove fallback output type inference (`_infer_output_type`) where `OutputSpec.type` is guaranteed
 - remove stale `ports` logic and rely on `map.scatter` / `map.broadcast`
 - replace fake dynamic `InputSpec` objects with real helper dataclasses or plain dict helpers
+- remove `_validate_supported` checks that duplicate DAG-level invariants (Merge rejection, unsupported binding types)
+- remove `_step_input_error` / `_workflow_output_error` — guaranteed unreachable by Phase 1.3
 
 ### 5.2 WDL transpiler
 
@@ -488,7 +517,8 @@ Simplify around explicit types from `OutputSpec` and normalized step bindings.
 
 Potential cleanup:
 
-- less inference in `_infer_output_type`
+- remove `_infer_output_type` — `OutputSpec.type` is guaranteed to be present
+- remove `_dict_infer_output_type` — same reason
 - less dict/object dual handling in `_binding_to_wdl_expr`
 - stronger assumption that merges are already impossible
 
@@ -614,13 +644,19 @@ This order matters because stricter contracts should come before module splittin
 
 - `python/.pytest_cache/`
 - `python/swl/**/__pycache__/`
-- likely move/delete:
-  - `python/swl/eval.py`
-  - `python/swl/eval_ir.py`
-  - `python/swl/eval_force.py`
-  - `python/swl/eval_task.py`
-  - `python/swl/eval_task_semantic.py`
-  - `python/swl/eval_wf_semantic.py`
+
+### Re-organize
+
+Move eval scripts to python/swl/eval/
+
+  - `python/swl/eval.py`  -> python/swl/eval/syntax_wf.py
+  - `python/swl/eval_ir.py`  -> python/swl/eval/ir.py
+  - `python/swl/eval_force.py` -> python/swl/eval/force.py
+  - `python/swl/eval_task.py` -> python/swl/eval/syntax_task.py
+  - `python/swl/eval_task_semantic.py` -> python/swl/eval/semantic_task.py
+  - `python/swl/eval_wf_semantic.py` -> python/swl/eval/semantic_wf.py
+
+Update test.sh with new paths.
 
 ### Shrink / split
 
@@ -632,9 +668,18 @@ This order matters because stricter contracts should come before module splittin
 - `python/swl/ir/dag.py`
 - `python/swl/ir/lower.py`
 
+### Consolidate into single binding module
+
+- `python/swl/ir/dag.py:_binding_to_dict`
+- `python/swl/ir/dag.py:_binding_to_binding_dict`
+- `python/swl/ir/dag.py:_nested_field_to_dict`
+- `python/swl/ir/force.py:_binding_to_public_dict`
+- `python/swl/transpile/cwl/emit.py:_canonical_binding`
+- `python/swl/transpile/cwl/emit.py:_field_chain`
+
 ### Introduce
 
-- `python/swl/ir/binding.py`
+- `python/swl/ir/binding.py` — replaces all above
 - `python/swl/ir/forcing/` package
 - `python/swl/semantic/wf/imports.py`
 - `python/swl/semantic/wf/infer.py`
@@ -716,6 +761,21 @@ The refactor is successful when:
 - type conversion logic has a single source of truth
 - new contributors can understand each stage without reading a 1000-line file
 
+Size of codebase before:
+
+```
+$ cloc python/
+github.com/AlDanial/cloc v 2.06  T=0.05 s (755.9 files/s, 147447.1 lines/s)
+-------------------------------------------------------------------------------
+Language                     files          blank        comment           code
+-------------------------------------------------------------------------------
+Python                          37           1067            140           6197
+Markdown                         1              3              0              5
+-------------------------------------------------------------------------------
+SUM:                            38           1070            140           6202
+-------------------------------------------------------------------------------
+```
+
 ---
 
 ## Suggested first PR breakdown
@@ -724,9 +784,11 @@ The refactor is successful when:
 - remove caches/artifacts
 - remove unused helpers/classes
 - fix obvious duplication/unreachable code
+- remove `_nested_field_to_dict` / `_field_chain` duplication
 
 ### PR 2: canonical binding module
 - add normalized binding representation
+- consolidate `_binding_to_dict`, `_binding_to_binding_dict`, `_binding_to_public_dict` into one
 - migrate `DAG.to_dict()` / `from_dict()`
 - add round-trip tests
 
@@ -740,6 +802,6 @@ The refactor is successful when:
 - migrate transpilers and forcer to shared type helpers
 
 ### PR 6: transpiler simplification
-- remove fallback normalization logic from CWL/WDL/NF emitters
+- remove fallback normalization logic from CWL/WDL/NF emitters (`_canonical_binding`, `_infer_output_type`, `_field_chain`, `ports` fallback, ad hoc `InputSpec`)
 
 This sequence keeps risk manageable while steadily improving maintainability.
