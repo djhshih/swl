@@ -4,7 +4,47 @@ import swl.ir.node as ir
 from swl.semantic.task.type import Param, TaskSignature
 from swl.semantic.wf.check import Checker
 from swl.syntax.wf import builtins, node as wf_node
-from swl.syntax.wf.parser import Parser as WfParser
+
+
+def _builtin_map_signature():
+    return TaskSignature({'f': Param('f', None), 'xs': Param('xs', None)}, {}, {})
+
+
+def _builtin_map_by_signature():
+    return TaskSignature({'f': Param('f', None), 'key': Param('key', None), 'xs': Param('xs', None)}, {}, {})
+
+
+def _normalize_twice(lowerer, node):
+    return lowerer.normalize(lowerer.normalize(node))
+
+
+def _literal_or_none(expr):
+    return expr.value if expr.type == wf_node.NodeType.str else None
+
+
+def _extend_signature_inputs(inputs, available, sig):
+    for name, param in sig.inputs.items():
+        if name not in available:
+            inputs[name] = param
+    available.update(sig.inputs.keys())
+    available.update(sig.outputs.keys())
+
+
+def _lower_block_items(lowerer, items, env, imports):
+    bindings = []
+    local_env = dict(env)
+    for item in items[:-1]:
+        if item.type != wf_node.NodeType.bind:
+            continue
+        value = lowerer.lower_binding(item, local_env, imports)
+        local_env = dict(local_env)
+        if item.id.name in imports:
+            local_env[item.id.name] = value
+            continue
+        var = ir.Variable(lowerer._alloc_var_id(), item.id.name, value)
+        local_env[item.id.name] = ir.Ref(var.id, var.name)
+        bindings.append(var)
+    return bindings, local_env, lowerer.lower_expr(items[-1], local_env, imports)
 
 
 class Lowerer:
@@ -36,27 +76,12 @@ class Lowerer:
         if tree.type != wf_node.NodeType.block:
             return self.normalize(self._ensure_block_root(self.lower_expr(tree, env, imports), signature))
 
-        bindings = []
-        exprs = tree.body
-        for expr in exprs[:-1]:
-            if expr.type == wf_node.NodeType.bind:
-                value = self.lower_binding(expr, env, imports)
-                env = dict(env)
-                if expr.id.name in imports:
-                    env[expr.id.name] = value
-                    continue
-                var = ir.Variable(self._alloc_var_id(), expr.id.name, value)
-                env[expr.id.name] = ir.Ref(var.id, var.name)
-                bindings.append(var)
-        result = self.lower_expr(exprs[-1], env, imports)
-        if isinstance(result, ir.Lambda):
-            if signature is not None:
-                result = ir.Lambda(result.param, result.body, signature, getattr(result, 'is_batch', False))
-            if not bindings:
-                return self.normalize(self.normalize(result))
+        bindings, env, result = _lower_block_items(self, tree.body, env, imports)
+        if isinstance(result, ir.Lambda) and signature is not None:
+            result = ir.Lambda(result.param, result.body, signature, getattr(result, 'is_batch', False))
         if not bindings:
-            return self.normalize(self.normalize(result))
-        return self.normalize(self.normalize(ir.Block(bindings, result)))
+            return _normalize_twice(self, result)
+        return _normalize_twice(self, ir.Block(bindings, result))
 
     def lower_binding(self, expr, env, imports):
         if expr.type == wf_node.NodeType.bind and expr.id.name in imports:
@@ -64,23 +89,22 @@ class Lowerer:
             return self._function_from_import(expr.id.name, imported)
         return self.lower_expr(expr.value, env, imports)
 
+    def _lower_name(self, name, env, imports):
+        if name in env:
+            return env[name]
+        if name in imports:
+            return self._function_from_import(name, imports[name])
+        if self.signature is not None and name in self.signature.inputs:
+            param = self.signature.inputs[name]
+            typ = param.type.value if param.type is not None else None
+            return ir.Input(name, typ, param.desc)
+        raise ValueError(f'Undefined variable: {name}')
+
     def lower_expr(self, expr, env, imports):
         if expr.type == wf_node.NodeType.id:
-            if expr.name in env:
-                return env[expr.name]
-            if expr.name in imports:
-                return self._function_from_import(expr.name, imports[expr.name])
-            if self.signature is not None and expr.name in self.signature.inputs:
-                param = self.signature.inputs[expr.name]
-                typ = param.type.value if param.type is not None else None
-                desc = param.desc
-                return ir.Input(expr.name, typ, desc)
-            raise ValueError(f'Undefined variable: {expr.name}')
+            return self._lower_name(expr.name, env, imports)
 
-        if expr.type == wf_node.NodeType.num:
-            return ir.Literal(expr.value)
-
-        if expr.type == wf_node.NodeType.str:
+        if expr.type in (wf_node.NodeType.num, wf_node.NodeType.str):
             return ir.Literal(expr.value)
 
         if expr.type == wf_node.NodeType.rec:
@@ -111,20 +135,19 @@ class Lowerer:
                 )
             if builtin == 'map_by_apply':
                 key_expr, function_expr, arg_expr = builtins.match_map_by(expr)
-                key = key_expr.value if key_expr.type == wf_node.NodeType.str else None
                 return ir.Map(
                     self.lower_expr(function_expr, env, imports),
                     self.lower_expr(arg_expr, env, imports),
-                    key=key,
+                    key=_literal_or_none(key_expr),
                 )
             if builtin == 'map_partial':
                 return ir.Apply(
-                    ir.Function('map', 'builtin', self._builtin_map_signature()),
+                    ir.Function('map', 'builtin', _builtin_map_signature()),
                     self.lower_expr(expr.arg, env, imports),
                 )
             if builtin == 'map_by_partial':
                 return ir.Apply(
-                    ir.Function('map_by', 'builtin', self._builtin_map_by_signature()),
+                    ir.Function('map_by', 'builtin', _builtin_map_by_signature()),
                     self.lower_expr(expr.arg, env, imports),
                 )
             satisfied = self.checker._apply_satisfied.get(id(expr), set())
@@ -138,24 +161,10 @@ class Lowerer:
             local_env = dict(env)
             local_env[expr.param.name] = ir.Name(expr.param.name)
             body = self.lower_expr(expr.body, local_env, imports)
-            if isinstance(body, ir.Block):
-                return ir.Lambda(expr.param.name, body)
-            return ir.Lambda(expr.param.name, ir.Block([], body))
+            return ir.Lambda(expr.param.name, self._ensure_block(body))
 
         if expr.type == wf_node.NodeType.block:
-            bindings = []
-            local_env = dict(env)
-            for item in expr.body[:-1]:
-                if item.type == wf_node.NodeType.bind:
-                    value = self.lower_binding(item, local_env, imports)
-                    local_env = dict(local_env)
-                    if item.id.name in imports:
-                        local_env[item.id.name] = value
-                        continue
-                    var = ir.Variable(self._alloc_var_id(), item.id.name, value)
-                    local_env[item.id.name] = ir.Ref(var.id, var.name)
-                    bindings.append(var)
-            result = self.lower_expr(expr.body[-1], local_env, imports)
+            bindings, _, result = _lower_block_items(self, expr.body, env, imports)
             if not bindings:
                 return result
             return ir.Block(bindings, result)
@@ -170,11 +179,6 @@ class Lowerer:
 
         raise ValueError(f'Unhandled AST node type during lowering: {expr.type}, expression: {expr}')
 
-    def _builtin_map_signature(self):
-        return TaskSignature({'f': Param('f', None), 'xs': Param('xs', None)}, {}, {})
-
-    def _builtin_map_by_signature(self):
-        return TaskSignature({'f': Param('f', None), 'key': Param('key', None), 'xs': Param('xs', None)}, {}, {})
 
     def _lower_inline_import(self, path):
         from swl.semantic.wf.imports import load_import
@@ -217,9 +221,9 @@ class Lowerer:
         return None
 
     def _lower_chain_items(self, expr, env, imports):
-        if expr.type == wf_node.NodeType.chain:
-            return self._lower_chain_items(expr.left, env, imports) + self._lower_chain_items(expr.right, env, imports)
-        return [self.lower_expr(expr, env, imports)]
+        if expr.type != wf_node.NodeType.chain:
+            return [self.lower_expr(expr, env, imports)]
+        return self._lower_chain_items(expr.left, env, imports) + self._lower_chain_items(expr.right, env, imports)
 
     def normalize(self, node):
         if isinstance(node, ir.Lambda):
@@ -268,9 +272,9 @@ class Lowerer:
         return self._merge_terms(terms)
 
     def _flatten_update_terms(self, node):
-        if isinstance(node, ir.Update):
-            return self._flatten_update_terms(node.left) + self._flatten_update_terms(node.right)
-        return [node]
+        if not isinstance(node, ir.Update):
+            return [node]
+        return self._flatten_update_terms(node.left) + self._flatten_update_terms(node.right)
 
     def _merge_terms(self, terms):
         if not terms:
@@ -299,17 +303,12 @@ class Lowerer:
         inputs = dict(signatures[0].inputs)
         available = set(signatures[0].inputs.keys()).union(signatures[0].outputs.keys())
         for sig in signatures[1:]:
-            for name, param in sig.inputs.items():
-                if name not in available:
-                    inputs[name] = param
-            available.update(sig.inputs.keys())
-            available.update(sig.outputs.keys())
+            _extend_signature_inputs(inputs, available, sig)
         outputs = {}
         run = {}
         for sig in signatures:
             outputs.update(sig.outputs)
             run.update(sig.run)
-        from swl.semantic.task.type import TaskSignature
         return TaskSignature(inputs, outputs, run)
 
     def _chain_to_lambda_block(self, items, signature):
@@ -326,11 +325,13 @@ class Lowerer:
         result = self._merge_terms([ir.Ref(bind.id, bind.name) for bind in bindings]) if bindings else ir.Record({})
         return ir.Lambda(param, ir.Block(bindings, result), self._compose_signature(items, signature))
 
+    def _ensure_block(self, node):
+        return node if isinstance(node, ir.Block) else ir.Block([], node)
+
     def _ensure_block_root(self, node, signature):
         if isinstance(node, ir.Lambda):
-            body = node.body if isinstance(node.body, ir.Block) else ir.Block([], node.body)
             sig = signature if signature is not None else node.signature
-            return ir.Lambda(node.param, body, sig)
+            return ir.Lambda(node.param, self._ensure_block(node.body), sig)
         return node
 
     def _normalize_with_bindings(self, node, binding_map):
@@ -372,6 +373,9 @@ class Lowerer:
                 return helper
         return node
 
+    def _generated_lambda_signature(self, param, outputs):
+        return TaskSignature({param: Param(param, None)}, {out: Param(out, None) for out in outputs}, {})
+
     def _generated_callable_from_lambda(self, node):
         if not isinstance(node, ir.Lambda):
             return None
@@ -379,15 +383,15 @@ class Lowerer:
         outputs = self._infer_lambda_output_names(helper)
         if outputs is None:
             return None
-        from swl.semantic.task.type import Param, TaskSignature
         name = f'map_lambda_{self.next_generated_id}'
         self.next_generated_id += 1
+        signature = self._generated_lambda_signature(node.param, outputs)
         return ir.Function(
             name,
             'workflow',
-            TaskSignature({node.param: Param(node.param, None)}, {out: Param(out, None) for out in outputs}, {}),
+            signature,
             f'<generated:{name}>',
-            body=ir.Lambda(node.param, helper.body, TaskSignature({node.param: Param(node.param, None)}, {out: Param(out, None) for out in outputs}, {})),
+            body=ir.Lambda(node.param, helper.body, signature),
         )
 
     def _generated_callable_from_apply(self, function, arg):
