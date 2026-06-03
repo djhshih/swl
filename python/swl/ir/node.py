@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Dict, List, Optional, Set
 
 from swl.semantic.task.type import TaskSignature
@@ -6,7 +6,16 @@ from swl.semantic.task.type import TaskSignature
 
 @dataclass(frozen=True)
 class Node:
-    pass
+    _repr_fields = None
+
+    def __repr__(self):
+        names = self._repr_fields
+        if names is None:
+            names = tuple(f.name for f in fields(self))
+        if not names:
+            return f'{type(self).__name__}()'
+        parts = ''.join(f'  {name}={getattr(self, name)!r},\n' for name in names)
+        return f'{type(self).__name__}(\n{parts})'
 
 
 @dataclass(frozen=True)
@@ -36,9 +45,6 @@ class Ref(Node):
     id: int
     name: str
 
-    def __repr__(self):
-        return f'Ref(id={self.id!r}, name={self.name!r})'
-
 
 @dataclass(frozen=True)
 class Record(Node):
@@ -61,27 +67,11 @@ class Field(Node):
     record: Node
     name: str
 
-    def __repr__(self):
-        return (
-            f'Field(\n'
-            f'  record={self.record!r},\n'
-            f'  name={self.name!r},\n'
-            f')'
-        )
-
 
 @dataclass(frozen=True)
 class Update(Node):
     left: Node
     right: Node
-
-    def __repr__(self):
-        return (
-            f'Update(\n'
-            f'  left={self.left!r},\n'
-            f'  right={self.right!r},\n'
-            f')'
-        )
 
 
 @dataclass(frozen=True)
@@ -93,18 +83,6 @@ class Function(Node):
     body: Optional[Node] = None
     is_batch: bool = False
 
-    def __repr__(self):
-        return (
-            f'Function(\n'
-            f'  name={self.name!r},\n'
-            f'  kind={self.kind!r},\n'
-            f'  signature={self.signature!r},\n'
-            f'  path={self.path!r},\n'
-            f'  body={self.body!r},\n'
-            f'  is_batch={self.is_batch!r},\n'
-            f')'
-        )
-
 
 @dataclass(frozen=True)
 class Lambda(Node):
@@ -112,16 +90,6 @@ class Lambda(Node):
     body: 'Block'
     signature: Optional[TaskSignature] = None
     is_batch: bool = False
-
-    def __repr__(self):
-        return (
-            f'Lambda(\n'
-            f'  param={self.param!r},\n'
-            f'  body={self.body!r},\n'
-            f'  signature={self.signature!r},\n'
-            f'  is_batch={self.is_batch!r},\n'
-            f')'
-        )
 
 
 @dataclass(frozen=True)
@@ -138,14 +106,7 @@ class Apply(Node):
     signature: Optional[TaskSignature] = None
     satisfied: Set[str] = field(default_factory=set)
 
-    def __repr__(self):
-        return (
-            f'Apply(\n'
-            f'  function={self.function!r},\n'
-            f'  arg={self.arg!r},\n'
-            f'  signature={self.signature!r},\n'
-            f')'
-        )
+    _repr_fields = ('function', 'arg', 'signature')
 
 
 @dataclass(frozen=True)
@@ -154,30 +115,12 @@ class Map(Node):
     arg: Node
     key: Optional[str] = None
 
-    def __repr__(self):
-        return (
-            f'Map(\n'
-            f'  function={self.function!r},\n'
-            f'  arg={self.arg!r},\n'
-            f'  key={self.key!r},\n'
-            f')'
-        )
-
 
 @dataclass(frozen=True)
 class Variable(Node):
     id: int
     name: str
     value: Node
-
-    def __repr__(self):
-        return (
-            f'Variable(\n'
-            f'  id={self.id!r},\n'
-            f'  name={self.name!r},\n'
-            f'  value={self.value!r},\n'
-            f')'
-        )
 
 
 @dataclass(frozen=True)
