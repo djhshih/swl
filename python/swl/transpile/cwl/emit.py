@@ -53,15 +53,9 @@ def transpile_dag_dict(data, workflow_id='main'):
         if getattr(step, 'map', None) is None:
             continue
         source = step.map.get('source', {})
-        if source.get('source') == 'input' and 'name' in source:
-            for name, typ in (getattr(step, 'input_schema', None) or {}).items():
-                if name not in workflow_inputs:
-                    workflow_inputs[name] = type('InputSpec', (), {'type': to_array_type(typ), 'desc': None})()
-            continue
-        if source.get('source') == 'table':
-            for name, typ in (getattr(step, 'input_schema', None) or {}).items():
-                if name not in workflow_inputs:
-                    workflow_inputs[name] = type('InputSpec', (), {'type': to_array_type(typ), 'desc': None})()
+        for name, typ in (getattr(step, 'input_schema', None) or {}).items():
+            if name not in workflow_inputs:
+                workflow_inputs[name] = {'type': to_array_type(typ), 'desc': None}
 
     all_tools = tools[:]
     for mt in map_by_tools.values():
@@ -95,7 +89,7 @@ def transpile_dag_dict(data, workflow_id='main'):
                 'outputSource': source,
             })
         else:
-            outputs.append(_workflow_output_to_cwl(workflow_id, name, output, dag))
+            outputs.append(_workflow_output_to_cwl(workflow_id, name, output))
 
     workflow = {
         'id': '#main',
@@ -168,13 +162,11 @@ def _workflow_input_to_cwl(workflow_id, name, spec):
     }
 
 
-def _workflow_output_to_cwl(workflow_id, name, output, dag):
-    value = output.value if isinstance(output, OutputSpec) else output
-    source = _binding_source(workflow_id, value)
-    output_type = output.type if isinstance(output, OutputSpec) else _infer_output_type(name, value, dag)
+def _workflow_output_to_cwl(workflow_id, name, output):
+    source = _binding_source(workflow_id, output.value)
     return {
         'id': f'#{workflow_id}/{name}',
-        'type': to_cwl_type(output_type),
+        'type': to_cwl_type(output.type),
         'outputSource': source,
     }
 
@@ -199,28 +191,24 @@ def _step_to_cwl(workflow_id, step, tool_id, record_map=None):
         'out': [f'#main/{step.id}/{name}' for name in step.outputs],
     }
     if getattr(step, 'map', None) is not None:
-        ports = step.map.get('ports') or []
-        if not ports:
-            ports = sorted((getattr(step, 'input_schema', None) or {}).keys())
-        if ports:
+        scatter_ports = step.map.get('scatter') or sorted((getattr(step, 'input_schema', None) or {}).keys())
+        if scatter_ports:
             source = step.map.get('source', {})
             if source.get('source') == 'input' and 'name' in source:
-                for port in ports:
+                for port in scatter_ports:
                     if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
                         data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
-                data['scatter'] = [f'#main/{step.id}/{port}' for port in ports]
-                data['scatterMethod'] = 'dotproduct'
             elif source.get('source') == 'table':
                 columns = source.get('columns', {})
-                for port in ports:
+                for port in scatter_ports:
                     column = columns.get(port)
                     source_ref = f'#main/{port}'
                     if isinstance(column, dict) and column.get('source') == 'input' and 'name' in column:
                         source_ref = f"#main/{column['name']}"
                     if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
                         data['in'].append({'id': f'#main/{step.id}/{port}', 'source': source_ref})
-                data['scatter'] = [f'#main/{step.id}/{port}' for port in ports]
-                data['scatterMethod'] = 'dotproduct'
+            data['scatter'] = [f'#main/{step.id}/{port}' for port in scatter_ports]
+            data['scatterMethod'] = 'dotproduct'
     return data
 
 
@@ -290,15 +278,14 @@ def _validate_supported(dag):
             _validate_map_by_preconditions(step)
     for name, output in dag.outputs.items():
         value = output.value if isinstance(output, OutputSpec) else output
-        error = _workflow_output_error(value)
-        if error is not None:
-            raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: {error}')
-
+        if not isinstance(value, Record):
+            try:
+                kind = _canonical_binding(value)[0]
+            except ValueError:
+                raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}')
+            if kind == 'literal':
+                raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: literal outputs are not supported')
     for step in dag.steps:
-        for name, value in step.bindings.items():
-            error = _step_input_error(value)
-            if error is not None:
-                raise ValueError(f'Unsupported step input binding for CWL transpilation: {step.id}.{name}: {error}')
         for name, spec in step.task.get('outputs', {}).items():
             try:
                 _interp_to_cwl_glob(spec.get('default'))
@@ -317,7 +304,12 @@ def _canonical_binding(value):
     if kind == 'Field' and getattr(value.source, 'map', None) is not None:
         return ('tab_column_step_output', value.source, value.name)
     if kind == 'Field' and value.source.__class__.__name__ == 'Field':
-        chain = _field_chain(value)
+        chain = []
+        v = value
+        while v.__class__.__name__ == 'Field':
+            chain.append(v)
+            v = v.source
+        chain.reverse()
         root_source = chain[0].source
         root_name = chain[0].name
         field_path = '.'.join(f.name for f in chain[1:])
@@ -329,44 +321,6 @@ def _canonical_binding(value):
     if kind == 'Field':
         return ('step_output', value.source, value.name)
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
-
-
-def _field_chain(value):
-    chain = []
-    while value.__class__.__name__ == 'Field':
-        chain.append(value)
-        value = value.source
-    chain.reverse()
-    return chain
-
-
-def _step_input_error(value):
-    if isinstance(value, Record):
-        return None
-    try:
-        _canonical_binding(value)
-        return None
-    except ValueError as exc:
-        text = str(exc)
-        kind = value.__class__.__name__
-        if kind == 'Field':
-            return f'field source {value.source.__class__.__name__} is not supported'
-        return text.removeprefix('Unsupported binding for CWL transpilation: ').strip()
-
-
-def _workflow_output_error(value):
-    if isinstance(value, Record):
-        return None
-    try:
-        kind = _canonical_binding(value)[0]
-        if kind == 'literal':
-            return 'literal outputs are not supported'
-        return None
-    except ValueError:
-        kind = value.__class__.__name__
-        if kind == 'Field':
-            return f'field source {value.source.__class__.__name__} is not supported'
-        return f'{kind} outputs are not supported'
 
 
 def _binding_source(workflow_id, value):
@@ -394,31 +348,6 @@ def _binding_source(workflow_id, value):
     if kind == 'literal':
         return rest[0]
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
-
-
-def _infer_output_type(name, value, dag):
-    kind, *rest = _canonical_binding(value)
-    if kind == 'step_output':
-        step, output = rest
-        typ = to_cwl_type(step.task['outputs'][output]['type'])
-        if getattr(step, 'map', None) is not None:
-            return {'type': 'array', 'items': typ}
-        return typ
-    if kind == 'tab_column_step_output':
-        step, output = rest
-        return to_cwl_type('[' + step.task['outputs'][output]['type'] + ']')
-    if kind in ('step_output_nested', 'tab_column_step_output_nested'):
-        step, root_name, field_path = rest
-        typ = to_cwl_type(step.task['outputs'][root_name]['type'])
-        if getattr(step, 'map', None) is not None:
-            return {'type': 'array', 'items': typ}
-        return typ
-    if kind in ('input_field', 'input_field_nested'):
-        return 'string'
-    if kind == 'literal':
-        return to_cwl_type(type(rest[0]).__name__)
-    return 'string'
-
 
 
 def _interp_to_cwl_glob(value):

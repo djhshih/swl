@@ -492,6 +492,8 @@ Less stringly-typed drift and easier spec evolution.
 
 ## Phase 5 — Simplify transpilers after DAG cleanup
 
+### Status: ✅ CWL transpiler: removed `_field_chain`, `_infer_output_type`, `_step_input_error`, `_workflow_output_error`, stale `ports` logic, ad hoc `InputSpec`; WDL transpiler: removed `_infer_output_type`, `_dict_infer_output_type`, `_validate_supported`, `_validate_binding`, `_validate_output_binding`, `_dict_binding_to_wdl_expr`, `_record_struct_name`, `_emit_dict_struct`, dict/object dual handling; NF transpiler: removed `_dict_binding_to_channel`, `_collect_mapped_steps`, `_validate_binding` (no-op), dict/object dual handling
+
 Once the DAG is stricter, simplify all transpilers to consume it directly.
 
 ### 5.1 CWL transpiler
@@ -633,7 +635,7 @@ Export only stable public entry points.
 3. ~~**Refactor `ir/force.py`**~~
 4. ~~**Refactor `semantic/wf/check.py`**~~
 5. ~~**Centralize type utilities**~~
-6. **Simplify transpilers**
+6. ~~**Simplify transpilers**~~
 7. **Introduce loader/cache service**
 8. **Clean CLI/public API**
 

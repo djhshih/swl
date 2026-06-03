@@ -12,7 +12,10 @@ def transpile_dag_file(path):
 def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     dag = DAG.from_dict(data)
     dag.validate()
-    _validate_supported(dag)
+    for name, output in dag.outputs.items():
+        value = output.value if isinstance(output, OutputSpec) else output
+        if isinstance(value, Literal):
+            raise ValueError(f'WDL does not support literal workflow outputs: {name}')
 
     structs = _collect_structs(dag)
     tasks = {}
@@ -252,7 +255,7 @@ def _dag_to_wdl(dag, workflow_id, tasks):
         for name, output in dag.outputs.items():
             binding = output.value if isinstance(output, OutputSpec) else output
             expr = _binding_to_wdl_expr(binding, None, dag)
-            typ = _infer_output_type(name, output, dag)
+            typ = to_wdl_type(output.type, output.optional)
             lines.append(f'        {typ} {name} = {expr}')
         lines.append('    }')
 
@@ -287,38 +290,7 @@ def _binding_to_wdl_expr(binding, current_step_id, dag):
     if isinstance(binding, StepCall):
         return _call_alias(binding.id)
 
-    if isinstance(binding, dict):
-        return _dict_binding_to_wdl_expr(binding, current_step_id, dag)
-
     raise ValueError(f'Unsupported binding for WDL: {type(binding).__name__}')
-
-
-def _dict_binding_to_wdl_expr(binding, current_step_id, dag):
-    source = binding.get('source')
-    if source == 'input':
-        return binding['name']
-    if source == 'literal':
-        return _literal_to_wdl(binding.get('value'))
-    if source == 'field':
-        inner = _dict_binding_to_wdl_expr(binding['value'], current_step_id, dag)
-        return f'{inner}.{binding["field"]}'
-    if source == 'step_call':
-        return _call_alias(binding['step'])
-    if 'step' in binding and 'output' in binding:
-        alias = _call_alias(binding['step'])
-        return f'{alias}.{binding["output"]}'
-    if source == 'record':
-        struct_name = _record_struct_name(binding)
-        fields = []
-        for fname, fbinding in binding.get('fields', {}).items():
-            fexpr = _dict_binding_to_wdl_expr(fbinding, current_step_id, dag)
-            fields.append(f'{fname}: {fexpr}')
-        return f'{struct_name} {{{", ".join(fields)}}}'
-    if source == 'merge':
-        raise ValueError(
-            f'Merge bindings must be flattened before WDL transpilation'
-        )
-    raise ValueError(f'Unsupported binding source for WDL: {source!r}')
 
 
 def _literal_to_wdl(value):
@@ -329,12 +301,6 @@ def _literal_to_wdl(value):
     if value is None:
         raise ValueError('None/null literals cannot be represented in WDL')
     return str(value)
-
-
-def _record_struct_name(binding):
-    fields = binding.get('fields', {})
-    keys = tuple(sorted(fields.keys()))
-    return '_Rec_' + '_'.join(k.capitalize() for k in keys)
 
 
 def _mapped_step_to_wdl(step, tasks):
@@ -558,21 +524,11 @@ def _collect_structs(dag):
                 if shape and shape not in seen:
                     seen.add(shape)
                     structs.append(_emit_struct(binding))
-            if isinstance(binding, dict) and binding.get('source') == 'record':
-                shape = tuple(sorted(binding.get('fields', {}).keys()))
-                if shape and shape not in seen:
-                    seen.add(shape)
-                    structs.append(_emit_dict_struct(binding))
     return structs
 
 
 def _struct_name_for(binding):
-    if isinstance(binding, Record):
-        keys = tuple(sorted(binding.fields.keys()))
-    elif isinstance(binding, dict):
-        keys = tuple(sorted(binding.get('fields', {}).keys()))
-    else:
-        keys = binding
+    keys = tuple(sorted(binding.fields.keys()))
     return '_Rec_' + '_'.join(k.capitalize() for k in keys)
 
 
@@ -600,52 +556,6 @@ def _emit_struct(record):
     return '\n'.join(lines)
 
 
-def _emit_dict_struct(binding):
-    name = _struct_name_for(binding)
-    lines = [f'struct {name} {{']
-    for fname in sorted(binding.get('fields', {}).keys()):
-        lines.append(f'    String {fname}')
-    lines.append('}')
-    return '\n'.join(lines)
-
-
-def _infer_output_type(name, binding, dag):
-    if isinstance(binding, OutputSpec):
-        return to_wdl_type(binding.type, binding.optional)
-    if isinstance(binding, Field) and isinstance(binding.source, StepCall):
-        step = binding.source
-        out_type = (step.task or {}).get('outputs', {}).get(binding.name, {}).get('type', 'str')
-        wdl_t = to_wdl_type(out_type)
-        if getattr(step, 'map', None) is not None:
-            return f'Array[{wdl_t}]'
-        return wdl_t
-    if isinstance(binding, Field) and isinstance(binding.source, Input):
-        input_spec = dag.inputs.get(binding.source.name)
-        if input_spec:
-            return to_wdl_type(input_spec.type)
-        return 'String'
-    if isinstance(binding, Input):
-        spec = dag.inputs.get(binding.name)
-        return to_wdl_type(spec.type if spec else 'str')
-    if isinstance(binding, Literal):
-        return _infer_literal_type(binding.value)
-    if isinstance(binding, dict):
-        return _dict_infer_output_type(binding, dag)
-    return 'String'
-
-
-def _dict_infer_output_type(binding, dag):
-    source = binding.get('source')
-    if source == 'input':
-        spec = dag.inputs.get(binding['name'])
-        return to_wdl_type(spec.type if spec else 'str')
-    if source == 'literal':
-        return _infer_literal_type(binding.get('value'))
-    if 'step' in binding and 'output' in binding:
-        return 'String'
-    return 'String'
-
-
 def _infer_literal_type(value):
     if isinstance(value, bool):
         return 'Boolean'
@@ -656,22 +566,3 @@ def _infer_literal_type(value):
     if value is None:
         return 'String?'
     return 'String'
-
-
-def _validate_supported(dag):
-    for step in dag.steps:
-        for name, value in step.bindings.items():
-            _validate_binding(value, step.id)
-
-    for name, output in dag.outputs.items():
-        value = output.value if isinstance(output, OutputSpec) else output
-        _validate_output_binding(value, name)
-
-
-def _validate_binding(value, step_id):
-    pass
-
-
-def _validate_output_binding(value, name):
-    if isinstance(value, Literal):
-        raise ValueError(f'WDL does not support literal workflow outputs: {name}')

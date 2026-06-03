@@ -265,44 +265,11 @@ def _binding_to_channel(binding, channels, current_step):
             'survived to DAG output. Use explicit field bindings instead.'
         )
 
-    if isinstance(binding, dict):
-        mapped_steps = _collect_mapped_steps(current_step)
-        return _dict_binding_to_channel(binding, channels, current_step, mapped_steps)
-
     if isinstance(binding, StepCall):
         pname = _process_name(binding.id)
         return f'{pname}.out'
 
     raise ValueError(f'Unsupported binding for Nextflow: {type(binding).__name__}')
-
-
-def _dict_binding_to_channel(binding, channels, current_step, mapped_steps=None):
-    source = binding.get('source')
-    if source == 'input':
-        return channels[binding['name']]
-    if source == 'literal':
-        val = json.dumps(binding.get('value'))
-        return f'Channel.value({val})'
-    if source == 'field':
-        inner = _dict_binding_to_channel(binding['value'], channels, current_step, mapped_steps)
-        return f'{inner}.map{{ it.{binding["field"]} }}'
-    if 'step' in binding and 'output' in binding:
-        pname = _process_name(binding['step'])
-        ch = f'{pname}.out.{_nf_emit_name(binding["output"])}'
-        if mapped_steps and binding['step'] in mapped_steps:
-            ch += '.toList()'
-        return ch
-    if source == 'record':
-        raise ValueError(
-            f'Record binding {binding.get("name", "?")} must be flattened '
-            'before Nextflow transpilation. '
-            'Use explicit field bindings instead of record bindings.'
-        )
-    if source == 'merge':
-        raise ValueError(
-            'Merge bindings must be flattened before Nextflow transpilation'
-        )
-    raise ValueError(f'Unsupported binding source for Nextflow: {source!r}')
 
 
 def _mapped_step_to_call(step, channels, processes):
@@ -398,31 +365,8 @@ def _wf_name(workflow_id):
     return name.upper()
 
 
-def _collect_mapped_steps(step):
-    if step is None:
-        return set()
-    mapped = set()
-    for name, binding in step.bindings.items():
-        if isinstance(binding, Field) and isinstance(binding.source, StepCall):
-            if getattr(binding.source, 'map', None) is not None:
-                mapped.add(binding.source.id)
-    return mapped
-
-
 def _validate_supported(dag):
-    for step in dag.steps:
-        for name, binding in step.bindings.items():
-            _validate_binding(binding, step)
-
     for name, output in dag.outputs.items():
         binding = output.value if isinstance(output, OutputSpec) else output
-        _validate_output_binding(binding, name)
-
-
-def _validate_binding(value, step):
-    pass
-
-
-def _validate_output_binding(value, name):
-    if isinstance(value, Literal):
-        raise ValueError(f'Nextflow does not support literal workflow outputs: {name}')
+        if isinstance(binding, Literal):
+            raise ValueError(f'Nextflow does not support literal workflow outputs: {name}')
