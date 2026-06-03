@@ -1,6 +1,6 @@
 import os
 
-from swl.ir import node as ir
+import swl.ir.node as ir
 from swl.semantic.task.type import Param, TaskSignature
 from swl.semantic.wf.check import Checker
 from swl.syntax.wf import builtins, node as wf_node

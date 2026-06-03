@@ -1,7 +1,7 @@
 import traceback
 
 from swl.ir.lower import Lowerer
-from swl.ir import node as ir
+import swl.ir.node as ir
 
 
 def _print(node, indent='', tree_mode=False):

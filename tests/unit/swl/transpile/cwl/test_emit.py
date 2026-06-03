@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.dag.forcer import force_file
 from swl.transpile.cwl.emit import transpile_dag_dict
 

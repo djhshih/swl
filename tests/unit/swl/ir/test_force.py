@@ -1,8 +1,8 @@
 import os
 import unittest as ut
 
-from swl.ir import node as ir
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+import swl.ir.node as ir
+from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.dag.context import ForceEnv
 from swl.dag.finalize import (
     _build_output_specs,

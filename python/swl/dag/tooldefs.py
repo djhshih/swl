@@ -1,4 +1,4 @@
-from swl.ir import node as ir
+import swl.ir.node as ir
 from swl.dag.context import ForceEnv
 from swl.dag.evaluator import _available_inputs, _force_map, _value_key
 from swl.dag.node import Field, ForcedFunction, Input, Literal, Record, StepCall

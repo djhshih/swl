@@ -1,7 +1,7 @@
 import os
 import unittest as ut
 
-from swl.ir import node as ir
+import swl.ir.node as ir
 from swl.ir.lower import parse_and_lower
 
 

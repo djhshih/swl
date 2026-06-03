@@ -1,6 +1,6 @@
 import json
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.types import to_nf_qualifier
 
 

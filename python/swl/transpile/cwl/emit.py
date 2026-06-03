@@ -1,7 +1,7 @@
 import json
 import os
 
-from swl.ir.dag import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
+from swl.dag.node import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
 from swl.types import to_array_type, to_cwl_type
 
 

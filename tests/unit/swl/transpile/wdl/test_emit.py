@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.dag.forcer import force_file
 from swl.transpile.wdl.emit import transpile_dag_dict
 
@@ -355,7 +355,7 @@ map call_variant
         self._assert_wdl_contains(wdl, 'workflow main {')
 
     def test_struct_emits_field_types_from_bindings(self):
-        from swl.ir.dag import Input as DagInput, Literal, Record, StepCall, Field
+        from swl.dag.node import Input as DagInput, Literal, Record, StepCall, Field
         producer = StepCall(
             id='producer', path='/tmp/p.sh', bindings={}, outputs=['bam'],
             task={
