@@ -1,6 +1,7 @@
 import json
 
 from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.types import to_nf_qualifier
 
 
 def transpile_dag_file(path):
@@ -35,14 +36,6 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     lines.append(_dag_to_nf(dag, workflow_id, processes))
     return '\n'.join(lines)
 
-
-def _input_qualifier(swl_type):
-    return {
-        'file': ('path', None),
-        'str': ('val', 'string'),
-        'int': ('val', 'integer'),
-        'float': ('val', 'float'),
-    }.get(swl_type, ('val', 'string'))
 
 
 def _process_name(step_id):
@@ -79,7 +72,7 @@ def _task_to_process(step):
             tuple_parts = []
             for in_name in input_names:
                 spec = inputs.get(in_name, {})
-                qual, _ = _input_qualifier(spec.get('type'))
+                qual, _ = to_nf_qualifier(spec.get('type'))
                 if qual == 'path':
                     tuple_parts.append(f'path({in_name})')
                 else:
@@ -87,7 +80,7 @@ def _task_to_process(step):
             lines.append(f'    tuple {"(" + ", ".join(tuple_parts) + ")" if len(tuple_parts) > 1 else tuple_parts[0]}')
         else:
             for in_name, spec in inputs.items():
-                qual, _ = _input_qualifier(spec.get('type'))
+                qual, _ = to_nf_qualifier(spec.get('type'))
                 if qual == 'path':
                     lines.append(f'    path {in_name}')
                 else:
@@ -98,7 +91,7 @@ def _task_to_process(step):
     if outputs:
         lines.append('    output:')
         for out_name, spec in outputs.items():
-            qual, _ = _input_qualifier(spec.get('type'))
+            qual, _ = to_nf_qualifier(spec.get('type'))
             default = spec.get('default')
             if default:
                 path_expr = _interp_to_nf(default)

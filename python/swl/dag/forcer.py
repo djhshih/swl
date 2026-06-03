@@ -39,7 +39,6 @@ from swl.dag.emit import (
     _step_dependencies,
     _walk_values,
     _value_dependencies,
-    _as_array_type,
     _logical_table_source,
     _binding_to_public_dict,
 )
@@ -52,7 +51,6 @@ from swl.dag.finalize import (
     _prune_unused_inputs,
     _assert_wireable_output,
     _infer_output_type,
-    _is_optional_type,
     _final_outputs,
     _collect_output_fields,
     _flatten_merge_value,
@@ -66,7 +64,6 @@ from swl.dag.tooldefs import (
     _materialize_workflow_dag,
     _build_task_section,
     _build_task_param,
-    _normalize_swl_type,
     _validate_output_default_glob,
     _input,
     _forced_signature,
@@ -75,6 +72,7 @@ from swl.dag.tooldefs import (
     _is_unsaturated_builtin_map,
     _materialize_partial_map_workflow,
 )
+from swl.types import is_optional_type, normalize_swl_type, to_array_type
 
 
 class Forcer:
@@ -198,17 +196,11 @@ class Forcer:
     def _value_dependencies(self, value):
         return _value_dependencies(self, value)
 
-    def _as_array_type(self, typ):
-        return _as_array_type(self, typ)
-
     def _logical_table_source(self, source):
         return _logical_table_source(self, source)
 
     def _binding_to_public_dict(self, value):
         return _binding_to_public_dict(value)
-
-    def _normalize_swl_type(self, value):
-        return _normalize_swl_type(self, value)
 
     def _refine_input_metadata(self):
         _refine_input_metadata(self)
@@ -230,9 +222,6 @@ class Forcer:
 
     def _infer_output_type(self, value):
         return _infer_output_type(self, value)
-
-    def _is_optional_type(self, output_type):
-        return _is_optional_type(self, output_type)
 
     def _final_outputs(self, value):
         return _final_outputs(self, value)

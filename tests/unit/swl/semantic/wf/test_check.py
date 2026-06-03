@@ -3,7 +3,8 @@ import tempfile
 import unittest as ut
 
 from swl.semantic.wf import type as wf_type
-from swl.semantic.wf.check import Checker, ClosedRecord, ClosureValue, ComputationValue, FunctionValue, UnknownValue
+from swl.semantic.wf.check import Checker
+from swl.semantic.wf.infer import ClosedRecord, ClosureValue, ComputationValue, FunctionValue, UnknownValue, application_result, apply_function
 
 
 _ALIGN = '''# @ Align
@@ -362,7 +363,7 @@ class TestWorkflowCheck(ut.TestCase):
         checker = Checker()
         imported = checker._load_import('align', os.path.join(root, 'align.sh'))
         fn = FunctionValue('align', imported.signature, 'task')
-        closure = checker._apply_function(fn, ClosedRecord({'ref': object(), 'ref_fai': object()}), set())
+        closure = apply_function(checker, fn, ClosedRecord({'ref': object(), 'ref_fai': object()}), set())
         self.assertIsInstance(closure, ClosureValue)
         self.assertIn('ref', closure.bound_value.fields)
         self.assertIn('ref_fai', closure.bound_value.fields)
@@ -382,8 +383,8 @@ class TestWorkflowCheck(ut.TestCase):
         checker = Checker()
         imported = checker._load_import('align', os.path.join(root, 'align.sh'))
         fn = FunctionValue('align', imported.signature, 'task')
-        value = checker._application_result(
-            fn,
+        value = application_result(
+            checker, fn,
             ClosedRecord({
                 'fastq1': UnknownValue(),
                 'fastq2': UnknownValue(),

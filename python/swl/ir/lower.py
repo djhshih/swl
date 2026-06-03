@@ -177,10 +177,11 @@ class Lowerer:
         return TaskSignature({'f': Param('f', None), 'key': Param('key', None), 'xs': Param('xs', None)}, {}, {})
 
     def _lower_inline_import(self, path):
+        from swl.semantic.wf.imports import load_import
         base_dir = os.path.dirname(self.checker._loading[-1]) if self.checker._loading else '.'
         full_path = os.path.abspath(os.path.join(base_dir, path))
         stem = os.path.splitext(os.path.basename(full_path))[0]
-        imported = self.checker._load_import(stem, full_path)
+        imported = load_import(self.checker, stem, full_path)
         return self._function_from_import(stem, imported)
 
     def _function_from_import(self, name, imported):

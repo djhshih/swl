@@ -1,7 +1,8 @@
-from swl.dag.emit import _as_array_type, _walk_values
 from swl.dag.merge import _canonicalize_merges, _flatten_value_terms, _normalize_output_value, _value_key
 from swl.dag.node import DAG, Field, ForcedFunction, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.dag.tooldefs import _forced_signature, _input
+from swl.dag.emit import _walk_values
+from swl.types import is_optional_type, to_array_type
 
 
 def _finalize_dag(forcer, value):
@@ -45,7 +46,7 @@ def _merge_input_type(forcer, name, current, candidates):
     if not unique:
         return None
     if len(unique) > 1:
-        array_unique = list(dict.fromkeys(_as_array_type(forcer, value) for value in unique))
+        array_unique = list(dict.fromkeys(to_array_type(value) for value in unique))
         if len(array_unique) == 1:
             return array_unique[0]
         raise ValueError(f'Conflicting input types during forcing: {name}: {unique}')
@@ -98,7 +99,7 @@ def _build_output_specs(forcer, outputs):
         specs[name] = OutputSpec(
             type=output_type,
             desc=desc,
-            optional=_is_optional_type(forcer, output_type) if output_type else False,
+            optional=is_optional_type(output_type) if output_type else False,
             value=value,
         )
     return specs
@@ -130,7 +131,7 @@ def _infer_output_type(forcer, value):
             spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
             typ = spec.get('type')
             if getattr(normalized.source, 'map', None) is not None and typ is not None:
-                return _as_array_type(forcer, typ)
+                return to_array_type(typ)
             return typ or 'str'
         if isinstance(normalized.source, Field):
             current = normalized
@@ -140,14 +141,10 @@ def _infer_output_type(forcer, value):
                 spec = (current.source.task or {}).get('outputs', {}).get(current.name, {})
                 typ = spec.get('type')
                 if getattr(current.source, 'map', None) is not None and typ is not None:
-                    return _as_array_type(forcer, typ)
+                    return to_array_type(typ)
                 return typ or 'str'
             return 'str'
     return 'str'
-
-
-def _is_optional_type(forcer, output_type):
-    return bool(output_type and output_type.endswith('?'))
 
 
 def _flatten_merge_value(forcer, value):

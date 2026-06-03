@@ -1,6 +1,7 @@
 import json
 
 from swl.ir.dag import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.types import to_wdl_type
 
 
 def transpile_dag_file(path):
@@ -42,25 +43,6 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     return '\n'.join(lines)
 
 
-def _wdl_type(swl_type, optional=False):
-    if isinstance(swl_type, str) and swl_type.endswith('?'):
-        optional = True
-        swl_type = swl_type[:-1]
-    base = {
-        'file': 'File',
-        'str': 'String',
-        'int': 'Int',
-        'float': 'Float',
-        '[file]': 'Array[File]',
-        '[str]': 'Array[String]',
-        '[int]': 'Array[Int]',
-        '[float]': 'Array[Float]',
-    }.get(swl_type, 'String')
-    if optional:
-        return base + '?'
-    return base
-
-
 def _task_name(step_id):
     name = step_id.replace('-', '_').lstrip('_')
     if not name:
@@ -97,7 +79,7 @@ def _task_to_wdl(step):
     if inputs:
         lines.append('    input {')
         for name, spec in inputs.items():
-            t = _wdl_type(spec.get('type'))
+            t = to_wdl_type(spec.get('type'))
             lines.append(f'        {t} {name}')
         lines.append('    }')
         lines.append('')
@@ -113,7 +95,7 @@ def _task_to_wdl(step):
     if outputs:
         lines.append('    output {')
         for name, spec in outputs.items():
-            t = _wdl_type(spec.get('type'))
+            t = to_wdl_type(spec.get('type'))
             default = spec.get('default')
             if default:
                 path_expr = _interp_to_wdl(default)
@@ -224,7 +206,7 @@ def _dag_to_wdl(dag, workflow_id, tasks):
             group_key = m.get('group_by')
             col_names = [group_key] + [n for n in schema if n != group_key]
             decomposed_inputs[step.id] = [
-                (col, f'Array[{_wdl_type(schema.get(col, "str"))}]')
+                (col, f'Array[{to_wdl_type(schema.get(col, "str"))}]')
                 for col in col_names
             ]
 
@@ -233,7 +215,7 @@ def _dag_to_wdl(dag, workflow_id, tasks):
         for name, spec in dag.inputs.items():
             if name in input_blacklist:
                 continue
-            t = _wdl_type(spec.type)
+            t = to_wdl_type(spec.type)
             lines.append(f'        {t} {name}')
         for step_id, cols in decomposed_inputs.items():
             for col_name, col_type in cols:
@@ -454,13 +436,13 @@ def _mapped_by_step_to_wdl(step, tasks):
 
     if isinstance(source, dict) and source.get('source') == 'input':
         non_key_names = [n for n in col_names if n != group_key]
-        key_t = _wdl_type(input_schema.get(group_key, 'str'))
+        key_t = to_wdl_type(input_schema.get(group_key, 'str'))
         val_t = _val_type(non_key_names, input_schema) if non_key_names else 'String'
         zip_expr = _build_zip_chain_from_names(col_names)
         lines.append(f'    Array[Pair[{key_t}, Array[{val_t}]]] {grouped_var} = collect_by_key({zip_expr})')
     else:
         zip_expr = _build_zip_chain(col_names, source)
-        key_t = _wdl_type(input_schema.get(group_key, 'str'))
+        key_t = to_wdl_type(input_schema.get(group_key, 'str'))
         val_t = _val_type(col_names, input_schema)
         lines.append(f'    Array[Pair[{key_t}, Array[{val_t}]]] {grouped_var} = collect_by_key({zip_expr})')
 
@@ -469,11 +451,11 @@ def _mapped_by_step_to_wdl(step, tasks):
     g_var = f'{step.id}_g'
     lines.append(f'    scatter ({g_var} in {grouped_var}) {{')
 
-    lines.append(f'        {_wdl_type(input_schema.get(group_key, "str"))} {group_key}_val = {g_var}.left')
+    lines.append(f'        {to_wdl_type(input_schema.get(group_key, "str"))} {group_key}_val = {g_var}.left')
     for col in col_names:
         if col == group_key:
             continue
-        t = _wdl_type(input_schema.get(col, 'str'))
+        t = to_wdl_type(input_schema.get(col, 'str'))
         lines.append(f'        Array[{t}] {col}_vals = {g_var}.right.{_col_access_path(col, col_names)}')
 
     call_line = f'        call {tname}'
@@ -532,18 +514,18 @@ def _column_expr(col, source):
 
 
 def _key_type(key, schema):
-    return _wdl_type(schema.get(key, 'str'))
+    return to_wdl_type(schema.get(key, 'str'))
 
 
 def _val_type(col_names, schema):
     if len(col_names) == 1:
-        return _wdl_type(schema.get(col_names[0], 'str'))
+        return to_wdl_type(schema.get(col_names[0], 'str'))
     if len(col_names) == 2:
-        return f'Pair[{_wdl_type(schema.get(col_names[0], "str"))}, {_wdl_type(schema.get(col_names[1], "str"))}]'
-    inner = _wdl_type(schema.get(col_names[-1], 'str'))
+        return f'Pair[{to_wdl_type(schema.get(col_names[0], "str"))}, {to_wdl_type(schema.get(col_names[1], "str"))}]'
+    inner = to_wdl_type(schema.get(col_names[-1], 'str'))
     for col in reversed(col_names[1:-1]):
-        inner = f'Pair[{_wdl_type(schema.get(col, "str"))}, {inner}]'
-    return f'Pair[{_wdl_type(schema.get(col_names[0], "str"))}, {inner}]'
+        inner = f'Pair[{to_wdl_type(schema.get(col, "str"))}, {inner}]'
+    return f'Pair[{to_wdl_type(schema.get(col_names[0], "str"))}, {inner}]'
 
 
 def _col_access_path(col, col_names):
@@ -594,17 +576,17 @@ def _struct_name_for(binding):
     return '_Rec_' + '_'.join(k.capitalize() for k in keys)
 
 
-def _infer_field_wdl_type(fbinding):
+def _infer_fieldto_wdl_type(fbinding):
     if isinstance(fbinding, Input):
-        return _wdl_type(fbinding.type or 'str')
+        return to_wdl_type(fbinding.type or 'str')
     if isinstance(fbinding, Literal):
         return _infer_literal_type(fbinding.value)
     if isinstance(fbinding, Field):
         if isinstance(fbinding.source, StepCall):
             out_type = (fbinding.source.task or {}).get('outputs', {}).get(fbinding.name, {}).get('type', 'str')
-            return _wdl_type(out_type)
+            return to_wdl_type(out_type)
         if isinstance(fbinding.source, Input):
-            return _wdl_type(fbinding.source.type or 'str')
+            return to_wdl_type(fbinding.source.type or 'str')
     return 'String'
 
 
@@ -612,7 +594,7 @@ def _emit_struct(record):
     name = _struct_name_for(record)
     lines = [f'struct {name} {{']
     for fname in sorted(record.fields.keys()):
-        typ = _infer_field_wdl_type(record.fields[fname])
+        typ = _infer_fieldto_wdl_type(record.fields[fname])
         lines.append(f'    {typ} {fname}')
     lines.append('}')
     return '\n'.join(lines)
@@ -629,22 +611,22 @@ def _emit_dict_struct(binding):
 
 def _infer_output_type(name, binding, dag):
     if isinstance(binding, OutputSpec):
-        return _wdl_type(binding.type, binding.optional)
+        return to_wdl_type(binding.type, binding.optional)
     if isinstance(binding, Field) and isinstance(binding.source, StepCall):
         step = binding.source
         out_type = (step.task or {}).get('outputs', {}).get(binding.name, {}).get('type', 'str')
-        wdl_t = _wdl_type(out_type)
+        wdl_t = to_wdl_type(out_type)
         if getattr(step, 'map', None) is not None:
             return f'Array[{wdl_t}]'
         return wdl_t
     if isinstance(binding, Field) and isinstance(binding.source, Input):
         input_spec = dag.inputs.get(binding.source.name)
         if input_spec:
-            return _wdl_type(input_spec.type)
+            return to_wdl_type(input_spec.type)
         return 'String'
     if isinstance(binding, Input):
         spec = dag.inputs.get(binding.name)
-        return _wdl_type(spec.type if spec else 'str')
+        return to_wdl_type(spec.type if spec else 'str')
     if isinstance(binding, Literal):
         return _infer_literal_type(binding.value)
     if isinstance(binding, dict):
@@ -656,7 +638,7 @@ def _dict_infer_output_type(binding, dag):
     source = binding.get('source')
     if source == 'input':
         spec = dag.inputs.get(binding['name'])
-        return _wdl_type(spec.type if spec else 'str')
+        return to_wdl_type(spec.type if spec else 'str')
     if source == 'literal':
         return _infer_literal_type(binding.get('value'))
     if 'step' in binding and 'output' in binding:

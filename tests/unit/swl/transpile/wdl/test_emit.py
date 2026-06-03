@@ -310,17 +310,17 @@ map call_variant
         self.assertIn('File? x = x', wdl)
 
     def test_wdl_type_mapping(self):
-        from swl.transpile.wdl.emit import _wdl_type
-        self.assertEqual(_wdl_type('file'), 'File')
-        self.assertEqual(_wdl_type('str'), 'String')
-        self.assertEqual(_wdl_type('int'), 'Int')
-        self.assertEqual(_wdl_type('float'), 'Float')
-        self.assertEqual(_wdl_type('[file]'), 'Array[File]')
-        self.assertEqual(_wdl_type('[str]'), 'Array[String]')
-        self.assertEqual(_wdl_type('[int]'), 'Array[Int]')
-        self.assertEqual(_wdl_type('[float]'), 'Array[Float]')
-        self.assertEqual(_wdl_type('file', optional=True), 'File?')
-        self.assertEqual(_wdl_type('str', optional=True), 'String?')
+        from swl.types import to_wdl_type
+        self.assertEqual(to_wdl_type('file'), 'File')
+        self.assertEqual(to_wdl_type('str'), 'String')
+        self.assertEqual(to_wdl_type('int'), 'Int')
+        self.assertEqual(to_wdl_type('float'), 'Float')
+        self.assertEqual(to_wdl_type('[file]'), 'Array[File]')
+        self.assertEqual(to_wdl_type('[str]'), 'Array[String]')
+        self.assertEqual(to_wdl_type('[int]'), 'Array[Int]')
+        self.assertEqual(to_wdl_type('[float]'), 'Array[Float]')
+        self.assertEqual(to_wdl_type('file', optional=True), 'File?')
+        self.assertEqual(to_wdl_type('str', optional=True), 'String?')
 
     def test_task_name_sanitization(self):
         from swl.transpile.wdl.emit import _task_name

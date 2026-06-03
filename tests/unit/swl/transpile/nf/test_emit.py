@@ -292,11 +292,11 @@ map call_variant
         self.assertIn('toList', _input_channel('x', spec_arr))
 
     def test_input_qualifier(self):
-        from swl.transpile.nf.emit import _input_qualifier
-        self.assertEqual(_input_qualifier('file'), ('path', None))
-        self.assertEqual(_input_qualifier('str'), ('val', 'string'))
-        self.assertEqual(_input_qualifier('int'), ('val', 'integer'))
-        self.assertEqual(_input_qualifier('float'), ('val', 'float'))
+        from swl.types import to_nf_qualifier
+        self.assertEqual(to_nf_qualifier('file'), ('path', None))
+        self.assertEqual(to_nf_qualifier('str'), ('val', 'string'))
+        self.assertEqual(to_nf_qualifier('int'), ('val', 'integer'))
+        self.assertEqual(to_nf_qualifier('float'), ('val', 'float'))
 
     def test_empty_inputs_outputs(self):
         dag = DAG(inputs={}, steps=[], outputs={})

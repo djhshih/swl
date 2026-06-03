@@ -2,6 +2,7 @@ import json
 import os
 
 from swl.ir.dag import DAG, OutputSpec, Record
+from swl.types import to_array_type, to_cwl_type
 
 
 def transpile_dag_file(path):
@@ -55,12 +56,12 @@ def transpile_dag_dict(data, workflow_id='main'):
         if source.get('source') == 'input' and 'name' in source:
             for name, typ in (getattr(step, 'input_schema', None) or {}).items():
                 if name not in workflow_inputs:
-                    workflow_inputs[name] = type('InputSpec', (), {'type': _as_array_type(typ), 'desc': None})()
+                    workflow_inputs[name] = type('InputSpec', (), {'type': to_array_type(typ), 'desc': None})()
             continue
         if source.get('source') == 'table':
             for name, typ in (getattr(step, 'input_schema', None) or {}).items():
                 if name not in workflow_inputs:
-                    workflow_inputs[name] = type('InputSpec', (), {'type': _as_array_type(typ), 'desc': None})()
+                    workflow_inputs[name] = type('InputSpec', (), {'type': to_array_type(typ), 'desc': None})()
 
     all_tools = tools[:]
     for mt in map_by_tools.values():
@@ -90,7 +91,7 @@ def transpile_dag_dict(data, workflow_id='main'):
             _, source = record_output_map[name]
             outputs.append({
                 'id': f'#{workflow_id}/{name}',
-                'type': _cwl_type(output.type),
+                'type': to_cwl_type(output.type),
                 'outputSource': source,
             })
         else:
@@ -162,7 +163,7 @@ def _workflow_input_to_cwl(workflow_id, name, spec):
     desc = spec.desc if hasattr(spec, 'desc') else spec.get('desc')
     return {
         'id': f'#{workflow_id}/{name}',
-        'type': _cwl_type(typ),
+        'type': to_cwl_type(typ),
         **({'doc': desc} if desc else {}),
     }
 
@@ -173,7 +174,7 @@ def _workflow_output_to_cwl(workflow_id, name, output, dag):
     output_type = output.type if isinstance(output, OutputSpec) else _infer_output_type(name, value, dag)
     return {
         'id': f'#{workflow_id}/{name}',
-        'type': _cwl_type(output_type),
+        'type': to_cwl_type(output_type),
         'outputSource': source,
     }
 
@@ -242,7 +243,7 @@ def _step_input_to_cwl(task_id, name, value):
 def _tool_input_to_cwl(tool_id, name, spec):
     return {
         'id': f'{tool_id}/{name}',
-        'type': _cwl_type(spec.get('type')),
+        'type': to_cwl_type(spec.get('type')),
         **({'doc': spec.get('desc')} if spec.get('desc') else {}),
     }
 
@@ -250,7 +251,7 @@ def _tool_input_to_cwl(tool_id, name, spec):
 def _tool_output_to_cwl(tool_id, name, spec):
     return {
         'id': f'{tool_id}/{name}',
-        'type': _cwl_type(spec.get('type')),
+        'type': to_cwl_type(spec.get('type')),
         'outputBinding': {
             'glob': _interp_to_cwl_glob(spec.get('default')),
         },
@@ -399,59 +400,25 @@ def _infer_output_type(name, value, dag):
     kind, *rest = _canonical_binding(value)
     if kind == 'step_output':
         step, output = rest
-        typ = _cwl_type(step.task['outputs'][output]['type'])
+        typ = to_cwl_type(step.task['outputs'][output]['type'])
         if getattr(step, 'map', None) is not None:
             return {'type': 'array', 'items': typ}
         return typ
     if kind == 'tab_column_step_output':
         step, output = rest
-        return _cwl_type('[' + step.task['outputs'][output]['type'] + ']')
+        return to_cwl_type('[' + step.task['outputs'][output]['type'] + ']')
     if kind in ('step_output_nested', 'tab_column_step_output_nested'):
         step, root_name, field_path = rest
-        typ = _cwl_type(step.task['outputs'][root_name]['type'])
+        typ = to_cwl_type(step.task['outputs'][root_name]['type'])
         if getattr(step, 'map', None) is not None:
             return {'type': 'array', 'items': typ}
         return typ
     if kind in ('input_field', 'input_field_nested'):
         return 'string'
     if kind == 'literal':
-        return _cwl_type(type(rest[0]).__name__)
+        return to_cwl_type(type(rest[0]).__name__)
     return 'string'
 
-
-
-def _as_array_type(value):
-    if value is None or (isinstance(value, str) and value.startswith('[') and value.endswith(']')):
-        return value
-    return f'[{value}]'
-
-
-def _cwl_type(value):
-    optional = isinstance(value, str) and value.endswith('?')
-    if optional:
-        value = value[:-1]
-    if value == '[file]':
-        base = {'type': 'array', 'items': 'File'}
-        return ['null', base] if optional else base
-    if value == '[str]':
-        base = {'type': 'array', 'items': 'string'}
-        return ['null', base] if optional else base
-    if value == '[int]':
-        base = {'type': 'array', 'items': 'int'}
-        return ['null', base] if optional else base
-    if value == '[float]':
-        base = {'type': 'array', 'items': 'float'}
-        return ['null', base] if optional else base
-    base = {
-        'file': 'File',
-        'str': 'string',
-        'string': 'string',
-        'int': 'int',
-        'float': 'float',
-        'bool': 'boolean',
-        'boolean': 'boolean',
-    }.get(value, 'string')
-    return ['null', base] if optional else base
 
 
 def _interp_to_cwl_glob(value):
@@ -492,17 +459,17 @@ def _infer_record_field_type(field_value, dag):
         name = rest[0]
         spec = dag.inputs.get(name)
         typ = spec.type if hasattr(spec, 'type') else (spec or {}).get('type') if isinstance(spec, dict) else None
-        return _cwl_type(typ)
+        return to_cwl_type(typ)
     if kind == 'step_output':
         step, output = rest
         if step.task and 'outputs' in step.task and output in step.task['outputs']:
-            return _cwl_type(step.task['outputs'][output]['type'])
+            return to_cwl_type(step.task['outputs'][output]['type'])
     if kind in ('step_output_nested', 'tab_column_step_output_nested'):
         step, root_name, _ = rest
         if step.task and 'outputs' in step.task and root_name in step.task['outputs']:
-            return _cwl_type(step.task['outputs'][root_name]['type'])
+            return to_cwl_type(step.task['outputs'][root_name]['type'])
     if kind == 'literal':
-        return _cwl_type(type(rest[0]).__name__)
+        return to_cwl_type(type(rest[0]).__name__)
     if kind == 'input_field':
         return 'string'
     return 'string'
@@ -637,7 +604,7 @@ def _emit_map_by_graph(step, dag):
     for col in col_names:
         grouping_tool['inputs'].append({
             'id': f'{group_tool_id}/{col}',
-            'type': {'type': 'array', 'items': _cwl_type(schema[col])},
+            'type': {'type': 'array', 'items': to_cwl_type(schema[col])},
         })
 
     wrapper_out_names = sorted(output_schema.keys())
@@ -645,7 +612,7 @@ def _emit_map_by_graph(step, dag):
     for oname in wrapper_out_names:
         wrapper_outputs.append({
             'id': f'{wrapper_tool_id}/{oname}',
-            'type': {'type': 'array', 'items': _cwl_type(output_schema[oname])},
+            'type': {'type': 'array', 'items': to_cwl_type(output_schema[oname])},
             'outputBinding': {'glob': f'{oname}s/*{oname}'},
         })
 

@@ -3,6 +3,7 @@ from swl.dag.context import _SENTINEL
 from swl.dag.evaluator import _can_project_record_fields, _project_field, _project_input
 from swl.dag.merge import _value_key
 from swl.dag.node import Field, Input, Merge, Record, StepCall, TableSource
+from swl.types import normalize_swl_type, to_array_type
 
 
 def _emit_task_call(forcer, function, bound, satisfied=None):
@@ -60,7 +61,7 @@ def _emit_mapped_step(forcer, fn, source, key=None):
     outputs = list(target.signature.outputs.keys())
     step_id = _step_id(forcer, target.name)
     bindings, map_info = _mapped_step_bindings(forcer, fn, source, key=key)
-    from swl.dag.tooldefs import _forced_signature, _tool_definition, _workflow_definition, _normalize_swl_type
+    from swl.dag.tooldefs import _forced_signature, _tool_definition, _workflow_definition
     signature = _forced_signature(forcer, fn)
     step = StepCall(
         id=step_id,
@@ -72,8 +73,8 @@ def _emit_mapped_step(forcer, fn, source, key=None):
         deps=sorted(_step_dependencies(forcer, bindings or {'source': source})),
         type=target.kind,
         map=map_info,
-        input_schema={name: _normalize_swl_type(forcer, spec.type.value if getattr(spec, 'type', None) is not None else None) for name, spec in signature.inputs.items()} if signature is not None else None,
-        output_schema={name: _normalize_swl_type(forcer, spec.type.value if getattr(spec, 'type', None) is not None else None) for name, spec in signature.outputs.items()} if signature is not None else None,
+        input_schema={name: normalize_swl_type(spec.type.value if getattr(spec, 'type', None) is not None else None) for name, spec in signature.inputs.items()} if signature is not None else None,
+        output_schema={name: normalize_swl_type(spec.type.value if getattr(spec, 'type', None) is not None else None) for name, spec in signature.outputs.items()} if signature is not None else None,
     )
     forcer.steps.append(step)
     return step
@@ -185,12 +186,6 @@ def _value_dependencies(forcer, value):
         if isinstance(item, Field) and isinstance(item.source, StepCall):
             deps.add(item.source.id)
     return deps
-
-
-def _as_array_type(forcer, typ):
-    if typ is None or (isinstance(typ, str) and typ.startswith('[') and typ.endswith(']')):
-        return typ
-    return f'[{typ}]'
 
 
 def _logical_table_source(forcer, source):

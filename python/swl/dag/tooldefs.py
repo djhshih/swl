@@ -2,14 +2,7 @@ from swl.ir import node as ir
 from swl.dag.context import ForceEnv
 from swl.dag.evaluator import _available_inputs, _force_map, _value_key
 from swl.dag.node import Field, ForcedFunction, Input, Literal, Record, StepCall
-
-
-def _normalize_swl_type(forcer, value):
-    if value == 'File':
-        return 'file'
-    if value == 'string':
-        return 'str'
-    return value
+from swl.types import normalize_swl_type
 
 
 def _input(forcer, name, spec=None):
@@ -132,10 +125,11 @@ def _tool_definition(forcer, path):
     if path in forcer.tool_defs:
         return forcer.tool_defs[path]
     from swl.semantic.task.type import signature_from_task
-    from swl.semantic.wf.check import _validate_bash_variables
+    from swl.semantic.wf.bashvars import _validate_bash_variables
+    from swl.semantic.wf.imports import read_file
     from swl.syntax.task import bash as task_bash
     from swl.syntax.task.parser import Parser as TaskParser
-    src = forcer.lowerer.checker._read_file(path)
+    src = read_file(forcer.lowerer.checker, path)
     task = TaskParser().parse(src)
     signature = signature_from_task(task)
     parsed_body = task_bash.Parser().parse(task.body)
@@ -162,8 +156,8 @@ def _workflow_definition(forcer, function):
     definition = {
         'class': 'Workflow',
         'dag': body_dag,
-        'inputs': {name: {'type': _normalize_swl_type(forcer, spec.type.value if getattr(spec, 'type', None) is not None else None), 'desc': spec.desc} for name, spec in function.signature.inputs.items()},
-        'outputs': {name: {'type': _normalize_swl_type(forcer, spec.type.value if getattr(spec, 'type', None) is not None else None)} for name, spec in function.signature.outputs.items()},
+        'inputs': {name: {'type': normalize_swl_type(spec.type.value if getattr(spec, 'type', None) is not None else None), 'desc': spec.desc} for name, spec in function.signature.inputs.items()},
+        'outputs': {name: {'type': normalize_swl_type(spec.type.value if getattr(spec, 'type', None) is not None else None)} for name, spec in function.signature.outputs.items()},
         'body': '',
         'run': {},
     }
