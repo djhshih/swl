@@ -3,57 +3,61 @@ from swl.dag.context import _SENTINEL
 from swl.dag.evaluator import _can_project_record_fields, _project_field, _project_input
 from swl.dag.merge import _value_key
 from swl.dag.node import Field, Input, Merge, Record, StepCall, TableSource
-from swl.types import normalize_swl_type, to_array_type
+from swl.types import normalize_swl_type
+
+
+def _step_output_record(call, outputs):
+    return Record({name: Field(call, name) for name in outputs})
+
+
+def _emit_step_call(forcer, function, bound, satisfied, *, run, task, step_type='task'):
+    inputs = _normalize_task_inputs(forcer, function, bound)
+    _validate_bindings(forcer, inputs, satisfied, function.name)
+    key = _step_call_key(forcer, function, inputs)
+    if key in forcer.step_cache:
+        return forcer.step_cache[key]
+    if step_type == 'task':
+        forcer.call_counter += 1
+    outputs = list(function.signature.outputs.keys())
+    call = StepCall(
+        id=_step_id(forcer, function.name),
+        path=function.path,
+        bindings=inputs,
+        outputs=outputs,
+        run=run,
+        task=task,
+        deps=sorted(_step_dependencies(forcer, inputs)),
+        type=step_type,
+    )
+    forcer.steps.append(call)
+    result = _step_output_record(call, outputs)
+    forcer.step_cache[key] = result
+    return result
 
 
 def _emit_task_call(forcer, function, bound, satisfied=None):
-    inputs = _normalize_task_inputs(forcer, function, bound)
-    _validate_bindings(forcer, inputs, satisfied, function.name)
-    key = _step_call_key(forcer, function, inputs)
-    if key in forcer.step_cache:
-        return forcer.step_cache[key]
-    forcer.call_counter += 1
-    outputs = list(function.signature.outputs.keys())
-    call_id = _step_id(forcer, function.name)
     from swl.dag.tooldefs import _tool_definition
-    call = StepCall(
-        id=call_id,
-        path=function.path,
-        bindings=inputs,
-        outputs=outputs,
+    return _emit_step_call(
+        forcer,
+        function,
+        bound,
+        satisfied,
         run=_normalize_task_run(forcer, function, bound),
         task=_tool_definition(forcer, function.path),
-        deps=sorted(_step_dependencies(forcer, inputs)),
     )
-    forcer.steps.append(call)
-    result = Record({name: Field(call, name) for name in outputs})
-    forcer.step_cache[key] = result
-    return result
 
 
 def _emit_workflow_call(forcer, function, bound, satisfied=None):
-    inputs = _normalize_task_inputs(forcer, function, bound)
-    _validate_bindings(forcer, inputs, satisfied, function.name)
-    key = _step_call_key(forcer, function, inputs)
-    if key in forcer.step_cache:
-        return forcer.step_cache[key]
-    outputs = list(function.signature.outputs.keys())
-    call_id = _step_id(forcer, function.name)
     from swl.dag.tooldefs import _workflow_definition
-    call = StepCall(
-        id=call_id,
-        path=function.path,
-        bindings=inputs,
-        outputs=outputs,
+    return _emit_step_call(
+        forcer,
+        function,
+        bound,
+        satisfied,
         run={},
         task=_workflow_definition(forcer, function),
-        deps=sorted(_step_dependencies(forcer, inputs)),
-        type='workflow',
+        step_type='workflow',
     )
-    forcer.steps.append(call)
-    result = Record({name: Field(call, name) for name in outputs})
-    forcer.step_cache[key] = result
-    return result
 
 
 def _emit_mapped_step(forcer, fn, source, key=None):
@@ -80,6 +84,16 @@ def _emit_mapped_step(forcer, fn, source, key=None):
     return step
 
 
+def _map_ports(logical_source, input_names):
+    if not isinstance(logical_source, TableSource):
+        return list(input_names), []
+    table_cols = set(logical_source.columns.keys())
+    scatter = [name for name in input_names if name in table_cols]
+    if scatter:
+        return scatter, [name for name in input_names if name not in table_cols]
+    return list(input_names), []
+
+
 def _mapped_step_bindings(forcer, fn, source, key=None):
     logical_source = _logical_table_source(forcer, source)
     info = {'source': _binding_to_public_dict(logical_source)}
@@ -88,20 +102,7 @@ def _mapped_step_bindings(forcer, fn, source, key=None):
     from swl.dag.tooldefs import _forced_signature
     signature = _forced_signature(forcer, fn)
     if signature is not None and signature.inputs:
-        input_names = sorted(signature.inputs.keys())
-        if isinstance(logical_source, TableSource):
-            table_cols = set(logical_source.columns.keys())
-            scatter_from_cols = [n for n in input_names if n in table_cols]
-            broadcast = [n for n in input_names if n not in table_cols]
-            if scatter_from_cols:
-                info['scatter'] = scatter_from_cols
-                info['broadcast'] = broadcast
-            else:
-                info['scatter'] = list(input_names)
-                info['broadcast'] = []
-        else:
-            info['scatter'] = list(input_names)
-            info['broadcast'] = []
+        info['scatter'], info['broadcast'] = _map_ports(logical_source, sorted(signature.inputs.keys()))
     return {}, info
 
 
@@ -121,8 +122,7 @@ def _normalize_task_run(forcer, function, bound):
     result = {}
     for name in names:
         spec = function.signature.run[name]
-        projected = _project_field(forcer, bound, name)
-        if projected is _SENTINEL:
+        if _project_field(forcer, bound, name) is _SENTINEL:
             if getattr(spec, 'parsed_default', None) is None:
                 raise ValueError(
                     f'Required run parameter "{name}" for task {function.name} '
