@@ -1,5 +1,6 @@
 import math
 import re
+from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Set
 
@@ -24,63 +25,55 @@ class TypeKind(Enum):
     ARRAY_FLOAT = '[float]'
 
 
+TYPE_MAP = {kind.value: kind for kind in TypeKind}
+
+
+OPTIONAL_TYPES = {
+    TypeKind.FILE_OPT,
+    TypeKind.STR_OPT,
+    TypeKind.INT_OPT,
+    TypeKind.FLOAT_OPT,
+}
+
+
+ARRAY_TYPES = {
+    TypeKind.ARRAY_FILE,
+    TypeKind.ARRAY_STR,
+    TypeKind.ARRAY_INT,
+    TypeKind.ARRAY_FLOAT,
+}
+
+
+BASE_TYPE_MAP = {
+    TypeKind.FILE_OPT: TypeKind.FILE,
+    TypeKind.STR_OPT: TypeKind.STR,
+    TypeKind.INT_OPT: TypeKind.INT,
+    TypeKind.FLOAT_OPT: TypeKind.FLOAT,
+    TypeKind.ARRAY_FILE: TypeKind.FILE,
+    TypeKind.ARRAY_STR: TypeKind.STR,
+    TypeKind.ARRAY_INT: TypeKind.INT,
+    TypeKind.ARRAY_FLOAT: TypeKind.FLOAT,
+}
+
+
 def parse_type(type_str: str) -> TypeKind:
     '''Parse a type string into a TypeKind.'''
     type_str = type_str.strip()
-
-    type_map = {
-        'file': TypeKind.FILE,
-        'str': TypeKind.STR,
-        'int': TypeKind.INT,
-        'float': TypeKind.FLOAT,
-        'memory': TypeKind.MEMORY,
-        'time': TypeKind.TIME,
-        'file?': TypeKind.FILE_OPT,
-        'str?': TypeKind.STR_OPT,
-        'int?': TypeKind.INT_OPT,
-        'float?': TypeKind.FLOAT_OPT,
-        '[file]': TypeKind.ARRAY_FILE,
-        '[str]': TypeKind.ARRAY_STR,
-        '[int]': TypeKind.ARRAY_INT,
-        '[float]': TypeKind.ARRAY_FLOAT,
-    }
-
-    if type_str not in type_map:
+    if type_str not in TYPE_MAP:
         raise ValueError(f'Unknown type: {type_str}')
-
-    return type_map[type_str]
+    return TYPE_MAP[type_str]
 
 
 def is_optional(typ: TypeKind) -> bool:
-    return typ in (
-        TypeKind.FILE_OPT,
-        TypeKind.STR_OPT,
-        TypeKind.INT_OPT,
-        TypeKind.FLOAT_OPT,
-    )
+    return typ in OPTIONAL_TYPES
 
 
 def is_array(typ: TypeKind) -> bool:
-    return typ in (
-        TypeKind.ARRAY_FILE,
-        TypeKind.ARRAY_STR,
-        TypeKind.ARRAY_INT,
-        TypeKind.ARRAY_FLOAT,
-    )
+    return typ in ARRAY_TYPES
 
 
 def base_type(typ: TypeKind) -> TypeKind:
-    base_map = {
-        TypeKind.FILE_OPT: TypeKind.FILE,
-        TypeKind.STR_OPT: TypeKind.STR,
-        TypeKind.INT_OPT: TypeKind.INT,
-        TypeKind.FLOAT_OPT: TypeKind.FLOAT,
-        TypeKind.ARRAY_FILE: TypeKind.FILE,
-        TypeKind.ARRAY_STR: TypeKind.STR,
-        TypeKind.ARRAY_INT: TypeKind.INT,
-        TypeKind.ARRAY_FLOAT: TypeKind.FLOAT,
-    }
-    return base_map.get(typ, typ)
+    return BASE_TYPE_MAP.get(typ, typ)
 
 
 COMPATIBLE_PAIRS = {
@@ -110,24 +103,28 @@ def types_compatible(output_type: TypeKind, input_type: TypeKind) -> bool:
     return False
 
 
+@dataclass
 class Param:
     '''Semantic task parameter.'''
 
-    def __init__(self, name: str, typ: TypeKind | None = None, default: str | None = None, desc: str | None = None, parsed_default=None):
-        self.name = name
-        self.type = typ
-        self.default = default
-        self.desc = desc
-        self.parsed_default = parsed_default
+    name: str
+    type: TypeKind | None = None
+    default: str | None = None
+    desc: str | None = None
+    parsed_default: object = None
 
 
+@dataclass
 class TaskSignature:
     '''Type signature for a task.'''
 
-    def __init__(self, inputs: Dict[str, Param], outputs: Dict[str, Param], run: Dict[str, Param] = None):
-        self.inputs = inputs
-        self.outputs = outputs
-        self.run = run or {}
+    inputs: Dict[str, Param]
+    outputs: Dict[str, Param]
+    run: Dict[str, Param] | None = None
+
+    def __post_init__(self):
+        if self.run is None:
+            self.run = {}
 
     def input_names(self) -> Set[str]:
         return set(self.inputs.keys())
@@ -206,13 +203,12 @@ def _add_param(params: Dict[str, Param], param: Param, kind: str):
 
 
 def _normalize_run_param(name: str, typ: TypeKind, default):
-    type_map = {
+    entry = {
         'memory': (TypeKind.MEMORY, 'memory', _parse_memory_literal),
         'time': (TypeKind.TIME, 'time', _parse_time_literal),
         'cpu': (TypeKind.INT, 'int', _parse_cpu_literal),
         'image': (TypeKind.STR, 'str', None),
-    }
-    entry = type_map.get(name)
+    }.get(name)
     if entry is None:
         return typ, None
     expected_kind, expected_label, parser = entry
