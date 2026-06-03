@@ -97,7 +97,7 @@ def _materialize_partial_map_workflow(forcer, value, signature):
 
 def _materialize_workflow_dag(forcer, function):
     from swl.dag import Forcer
-    sub_forcer = Forcer(files=forcer.lowerer.checker.files)
+    sub_forcer = Forcer(files=forcer.lowerer.checker.loader)
     return _materialize_workflow_dag_impl(sub_forcer, function)
 
 
@@ -124,19 +124,23 @@ def _materialize_workflow_dag_impl(forcer, function):
 def _tool_definition(forcer, path):
     if path in forcer.tool_defs:
         return forcer.tool_defs[path]
-    from swl.semantic.task.type import signature_from_task
-    from swl.semantic.wf.bashvars import _validate_bash_variables
-    from swl.semantic.wf.imports import read_file
-    from swl.syntax.task import bash as task_bash
-    from swl.syntax.task.parser import Parser as TaskParser
-    src = read_file(forcer.lowerer.checker, path)
-    task = TaskParser().parse(src)
-    signature = signature_from_task(task)
-    parsed_body = task_bash.Parser().parse(task.body)
-    known_vars = set(signature.inputs.keys()) | set(signature.run.keys())
-    var_errors = _validate_bash_variables(parsed_body, known_vars, f'task at "{path}"')
-    if var_errors:
-        raise ValueError('\n'.join(var_errors))
+    cached = forcer.lowerer.checker.loader.get_parsed_task(path)
+    if cached is not None:
+        task, signature, parsed_body = cached
+    else:
+        from swl.semantic.task.type import signature_from_task
+        from swl.semantic.wf.bashvars import _validate_bash_variables
+        from swl.semantic.wf.imports import read_file
+        from swl.syntax.task import bash as task_bash
+        from swl.syntax.task.parser import Parser as TaskParser
+        src = read_file(forcer.lowerer.checker, path)
+        task = TaskParser().parse(src)
+        signature = signature_from_task(task)
+        parsed_body = task_bash.Parser().parse(task.body)
+        known_vars = set(signature.inputs.keys()) | set(signature.run.keys())
+        var_errors = _validate_bash_variables(parsed_body, known_vars, f'task at "{path}"')
+        if var_errors:
+            raise ValueError('\n'.join(var_errors))
     definition = {
         'doc': task.annotation.doc,
         'body': task.body,

@@ -19,10 +19,7 @@ class Import:
 
 
 def read_file(checker, path: str) -> str:
-    if path in checker.files:
-        return checker.files[path]
-    with open(path, 'r') as f:
-        return f.read()
+    return checker.loader.read_file(path)
 
 
 def load_imports(checker, tree, base_dir: str):
@@ -50,6 +47,7 @@ def load_import(checker, name: str, path: str) -> Import:
         var_errors = _validate_bash_variables(parsed_body, known_vars, f'task "{name}" ({path})')
         if var_errors:
             raise ValueError('\n'.join(var_errors))
+        checker.loader.cache_task(path, task, signature, parsed_body)
         return Import(name, path, signature, 'task', task=task, parsed_body=parsed_body)
     if path.endswith('.swl'):
         check = checker.load(path)

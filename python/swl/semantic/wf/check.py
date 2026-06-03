@@ -1,5 +1,6 @@
 import os
 
+from swl.loader import Loader
 from swl.semantic.task.type import TypeChecker
 from swl.semantic.wf.imports import load_import, read_file, load_imports
 from swl.semantic.wf.infer import infer_inputs
@@ -23,8 +24,12 @@ class WorkflowCheck:
 
 class Checker:
     def __init__(self, files=None):
-        self._loading = []
-        self.files = files or {}
+        if isinstance(files, Loader):
+            self.loader = files
+        else:
+            self.loader = Loader(files or {})
+        self.files = self.loader.files
+        self._loading = self.loader._loading
         self._apply_satisfied = {}
 
     def _load_import(self, name: str, path: str):
@@ -32,6 +37,9 @@ class Checker:
 
     def load(self, path: str) -> WorkflowCheck:
         full_path = os.path.abspath(path)
+        cached = self.loader.get_checked_workflow(full_path)
+        if cached is not None:
+            return cached
         if full_path in self._loading:
             raise ValueError(f'Circular workflow import: {full_path}')
         self._loading.append(full_path)
@@ -50,7 +58,9 @@ class Checker:
             errors.extend(infer_errors)
             if signature is None:
                 errors.append('Workflow must evaluate to a function')
-            return WorkflowCheck(tree, imports, errors, inferred_inputs, signature, is_batch, workflow_type, root_input_type, root_output_type)
+            result = WorkflowCheck(tree, imports, errors, inferred_inputs, signature, is_batch, workflow_type, root_input_type, root_output_type)
+            self.loader.cache_workflow(full_path, result)
+            return result
         finally:
             self._loading.pop()
 

@@ -578,6 +578,8 @@ This avoids implicit coordination across modules.
 
 ## Phase 7 — Introduce a proper loader/cache service
 
+### Status: ✅ `python/swl/loader.py` created; `Checker` uses `Loader` for file reading, circular import detection, and WorkflowCheck caching; `_tool_definition()` reuses cached parsed tasks; sub-forcers share the Loader instead of just the `files` dict
+
 Currently import/file loading and definition caching are spread across checker, lowerer, and forcer.
 
 ### Proposed service
@@ -593,16 +595,34 @@ Responsibilities:
 - cache lowered IR
 - provide source text and provenance consistently
 
+### What was done
+
+- Created `python/swl/loader.py` with a `Loader` class providing:
+  - `files` — file content cache (path → source text)
+  - `_parsed_tasks` — `.sh` task cache (path → (task_ast, signature, parsed_body)) — eliminates re-parsing in `_tool_definition()`
+  - `_checked_workflows` — `.swl` workflow check cache (path → WorkflowCheck) — eliminates `checker.load()` being called twice for imported workflows
+  - `_loading` — circular import stack (shared across all Checkers using the same Loader)
+  - `read_file()` — reads with caching
+- Updated `Checker` to use `Loader` — delegates file reading, shares `_loading` list, caches WorkflowCheck results
+- Updated `imports.py:read_file()` to delegate to `loader.read_file()` (which caches result)
+- Updated `imports.py:load_import()` to cache parsed `.sh` tasks via `loader.cache_task()`
+- Updated `_tool_definition()` to check Loader's parsed task cache before re-parsing — eliminates redundant `.sh` re-parsing in the forcer
+- Updated `_materialize_workflow_dag()` to share the full `Loader` across sub-forcers instead of just the `files` dict — sub-forcers now share file cache AND parsed task cache AND checked workflow cache
+
+### Remaining redundancies
+
+- `Lowerer.workflow_cache` and `Lowerer.function_cache` still live on Lowerer (could be moved to Loader but are already effective at preventing re-lowering)
+- `Forcer.tool_defs`, `step_cache`, `apply_cache` still live on Forcer (correct — these are forcing-specific, not loading-specific)
+- `parse_and_lower()` utility creates standalone Checker/Lowerer that don't share a Loader (acceptable for a standalone entry point)
+
 ### Why this matters
 
 Right now:
 
-- checker reads files directly
-- forcer reparses tasks
-- lowerer caches workflow bodies separately
-- multiple stages know too much about path resolution
-
-Centralizing this would remove redundant parsing and reduce inconsistencies.
+- ~~checker reads files directly~~ ✅ delegated to Loader
+- ~~forcer reparses tasks~~ ✅ reuses Loader's parsed task cache
+- ~~lowerer caches workflow bodies separately~~ (still separate but effective)
+- ~~multiple stages know too much about path resolution~~ ✅ centralized in Loader
 
 ---
 
@@ -639,7 +659,7 @@ Export only stable public entry points.
 5. ~~**Centralize type utilities**~~
 6. ~~**Simplify transpilers**~~
 7. ~~**Rationalize parser/lowering**~~
-8. **Introduce loader/cache service**
+8. ~~**Introduce loader/cache service**~~
 9. **Clean CLI/public API**
 
 This order matters because stricter contracts should come before module splitting in the transpilers.
