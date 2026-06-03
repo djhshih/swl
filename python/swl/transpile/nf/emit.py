@@ -1,6 +1,7 @@
 import json
 
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.transpile.common import emit_name, run_value, source_kind, step_name, workflow_name, word_interp
 from swl.types import to_nf_qualifier
 
 
@@ -39,16 +40,11 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
 
 
 def _process_name(step_id):
-    name = step_id.replace('-', '_').lstrip('_')
-    if not name:
-        name = 'PROCESS'
-    if name[0].isdigit():
-        name = '_' + name
-    return name.upper()
+    return step_name(step_id, 'PROCESS', upper=True)
 
 
 def _nf_emit_name(name):
-    return name.replace('-', '_')
+    return emit_name(name)
 
 
 def _task_to_process(step):
@@ -119,43 +115,24 @@ def _task_to_process(step):
 
 def _emit_directives(step):
     directives = []
-    task = step.task or {}
-    run = task.get('run', {})
-
-    for name, spec in run.items():
-        if not isinstance(spec, dict):
-            continue
-        value = spec.get('value')
-        if value is None:
-            continue
-
-        if name == 'cpu':
-            directives.append(f'    cpus {value}')
-        elif name == 'memory':
-            directives.append(f"    memory '{value} MB'")
-        elif name == 'time':
-            directives.append(f"    time '{value}m'")
-        elif name == 'image':
-            directives.append(f"    container '{value}'")
-
+    run = (step.task or {}).get('run', {})
+    cpu = run_value(run, 'cpu')
+    memory = run_value(run, 'memory')
+    time = run_value(run, 'time')
+    image = run_value(run, 'image')
+    if cpu is not None:
+        directives.append(f'    cpus {cpu}')
+    if memory is not None:
+        directives.append(f"    memory '{memory} MB'")
+    if time is not None:
+        directives.append(f"    time '{time}m'")
+    if image is not None:
+        directives.append(f"    container '{image}'")
     return '\n'.join(directives)
 
 
 def _interp_to_nf(value):
-    if value is None:
-        return None
-    if value.get('kind') == 'word':
-        parts = value.get('parts', [])
-        result = ''
-        for part in parts:
-            if part.get('kind') == 'literal':
-                result += part['text']
-            elif part.get('kind') == 'var':
-                result += f"${{{part['name']}}}"
-            elif part.get('kind') == 'expr':
-                result += f"${{{part['text']}}}"
-        return result
-    return None
+    return word_interp(value, lambda text: text, lambda name: f"${{{name}}}", lambda text: f"${{{text}}}")
 
 
 def _channel_name(name):
@@ -311,7 +288,7 @@ def _mapped_by_step_to_call(step, channels, processes):
     group_key = map_info.get('group_by')
     pname = _process_name(step.id)
 
-    source_type = source.get('source') if isinstance(source, dict) else None
+    source_type = source_kind(source)
     src_ch = None
     if source_type == 'input':
         src_ch = channels.get(source.get('name')) or _channel_name(source['name'])
@@ -357,12 +334,7 @@ def _subworkflow_to_nf(step, parent_id):
 
 
 def _wf_name(workflow_id):
-    name = workflow_id.replace('-', '_').lstrip('_')
-    if not name:
-        name = 'main'
-    if name[0].isdigit():
-        name = '_' + name
-    return name.upper()
+    return workflow_name(workflow_id, 'main', upper=True)
 
 
 def _validate_supported(dag):

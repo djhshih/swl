@@ -2,6 +2,7 @@ import json
 import os
 
 from swl.dag.node import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
+from swl.transpile.common import field_chain_parts, field_path_after_first, run_value, source_input_name, source_kind, table_columns, word_interp
 from swl.types import to_array_type, to_cwl_type
 
 
@@ -194,16 +195,16 @@ def _step_to_cwl(workflow_id, step, tool_id, record_map=None):
         scatter_ports = step.map.get('scatter') or sorted((getattr(step, 'input_schema', None) or {}).keys())
         if scatter_ports:
             source = step.map.get('source', {})
-            if source.get('source') == 'input' and 'name' in source:
+            if source_input_name(source) is not None:
                 for port in scatter_ports:
                     if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
                         data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
-            elif source.get('source') == 'table':
-                columns = source.get('columns', {})
+            elif source_kind(source) == 'table':
+                columns = table_columns(source)
                 for port in scatter_ports:
                     column = columns.get(port)
                     source_ref = f'#main/{port}'
-                    if isinstance(column, dict) and column.get('source') == 'input' and 'name' in column:
+                    if isinstance(column, dict) and source_kind(column) == 'input' and 'name' in column:
                         source_ref = f"#main/{column['name']}"
                     if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
                         data['in'].append({'id': f'#main/{step.id}/{port}', 'source': source_ref})
@@ -222,7 +223,7 @@ def _step_input_to_cwl(task_id, name, value):
         'id': f'#main/{task_id}/{name}',
         'source': _binding_source(value),
     }
-    field_path = _field_path_after_first(value)
+    field_path = field_path_after_first(value)
     if field_path is not None:
         result['valueFrom'] = f"$({field_path})"
     return result
@@ -249,41 +250,27 @@ def _tool_output_to_cwl(tool_id, name, spec):
 
 def _resource_requirement(run):
     req = {'class': 'ResourceRequirement'}
-    if 'cpu' in run:
-        req['coresMin'] = run['cpu'].get('value')
-    if 'memory' in run:
-        req['ramMin'] = run['memory'].get('value')
+    cpu = run_value(run, 'cpu')
+    memory = run_value(run, 'memory')
+    if cpu is not None:
+        req['coresMin'] = cpu
+    if memory is not None:
+        req['ramMin'] = memory
     if len(req) == 1:
         return None
     return req
 
 
 def _hints_from_run(run):
-    hints = []
-    if 'time' in run:
-        hints.append({'class': 'TimeLimit', 'timeLimit': run['time'].get('value')})
-    return hints
+    time = run_value(run, 'time')
+    return [{'class': 'TimeLimit', 'timeLimit': time}] if time is not None else []
 
 
 def _docker_requirement(run):
-    image = run.get('image', {}).get('value')
+    image = run_value(run, 'image')
     if image is None:
         return None
     return {'class': 'DockerRequirement', 'dockerPull': image}
-
-
-def _field_path_after_first(value):
-    if not isinstance(value, Field):
-        return None
-    chain = []
-    v = value
-    while isinstance(v, Field):
-        chain.append(v)
-        v = v.source
-    if len(chain) <= 1:
-        return None
-    chain.reverse()
-    return '.'.join(f.name for f in chain[1:])
 
 
 def _binding_source(value):
@@ -300,24 +287,12 @@ def _binding_source(value):
         if isinstance(src, StepCall):
             return f'#main/{src.id}/{value.name}'
         if isinstance(src, Field):
-            root, root_name, _ = _field_chain_parts(value)
+            root, root_name, _ = field_chain_parts(value)
             if isinstance(root, Input):
                 return f'#main/{root.name}'
             if isinstance(root, StepCall):
                 return f'#main/{root.id}/{root_name}'
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
-
-
-def _field_chain_parts(value):
-    chain = []
-    v = value
-    while isinstance(v, Field):
-        chain.append(v)
-        v = v.source
-    if not chain:
-        return value, None, None
-    chain.reverse()
-    return chain[0].source, chain[0].name, '.'.join(f.name for f in chain[1:])
 
 
 def _validate_supported(dag):
@@ -339,22 +314,10 @@ def _validate_supported(dag):
 def _interp_to_cwl_glob(value):
     if value is None:
         return '*'
-    if value.get('kind') == 'word':
-        parts = []
-        has_expr = False
-        for part in value.get('parts', []):
-            if part.get('kind') == 'literal':
-                parts.append(repr(part.get('text', '')))
-            elif part.get('kind') == 'var':
-                parts.append(f"inputs.{part.get('name')}")
-            elif part.get('kind') == 'expr':
-                parts.append(f"({part.get('text')})")
-                has_expr = True
-            else:
-                raise ValueError(f'Unsupported interpolation for CWL glob: {part!r}')
-        expr = '$(' + ' + '.join(parts) + ')'
-        return expr
-    raise ValueError(f'Unsupported interpolation for CWL glob: {value!r}')
+    rendered = word_interp(value, lambda text: repr(text), lambda name: f"inputs.{name}", lambda text: f"({text})", joiner=' + ')
+    if rendered is None:
+        raise ValueError(f'Unsupported interpolation for CWL glob: {value!r}')
+    return '$(' + rendered + ')'
 
 
 def _has_expr_interpolation(spec):
@@ -378,7 +341,7 @@ def _infer_record_field_type(field_value, dag):
     if isinstance(field_value, StepCall):
         return 'string'
     if isinstance(field_value, Field):
-        root, root_name, _ = _field_chain_parts(field_value)
+        root, root_name, _ = field_chain_parts(field_value)
         if isinstance(root, StepCall) and root.task:
             out_spec = root.task.get('outputs', {}).get(root_name, {})
             if out_spec:

@@ -1,6 +1,7 @@
 import json
 
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.transpile.common import column_input_name, source_input_name, source_kind, step_name, table_columns, workflow_name, word_interp
 from swl.types import to_wdl_type
 
 
@@ -47,30 +48,15 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
 
 
 def _task_name(step_id):
-    name = step_id.replace('-', '_').lstrip('_')
-    if not name:
-        name = 'task'
-    if name[0].isdigit():
-        name = '_' + name
-    return name.lower()
+    return step_name(step_id, 'task')
 
 
 def _wf_name(workflow_id):
-    name = workflow_id.replace('-', '_').lstrip('_')
-    if not name:
-        name = 'main'
-    if name[0].isdigit():
-        name = '_' + name
-    return name.lower()
+    return workflow_name(workflow_id, 'main')
 
 
 def _call_alias(step_id):
-    name = step_id.replace('-', '_').lstrip('_')
-    if not name:
-        name = 'step'
-    if name[0].isdigit():
-        name = '_' + name
-    return name.lower()
+    return step_name(step_id, 'step')
 
 
 def _task_to_wdl(step):
@@ -178,20 +164,7 @@ def _format_memory(value):
 
 
 def _interp_to_wdl(value):
-    if value is None:
-        return None
-    if value.get('kind') == 'word':
-        parts = value.get('parts', [])
-        result = ''
-        for part in parts:
-            if part.get('kind') == 'literal':
-                result += part['text']
-            elif part.get('kind') == 'var':
-                result += f"~{{{part['name']}}}"
-            elif part.get('kind') == 'expr':
-                result += f"~{{{part['text']}}}"
-        return result
-    return None
+    return word_interp(value, lambda text: text, lambda name: f"~{{{name}}}", lambda text: f"~{{{text}}}")
 
 
 def _dag_to_wdl(dag, workflow_id, tasks):
@@ -349,37 +322,27 @@ def _mapped_step_to_wdl(step, tasks):
 
 
 def _get_table_columns(source):
-    if isinstance(source, dict):
-        if source.get('source') == 'table':
-            return set(source.get('columns', {}).keys())
-    return set()
+    return set(table_columns(source).keys())
 
 
 def _column_input_name(source, col_name):
-    if isinstance(source, dict):
-        if source.get('source') == 'input':
-            return source['name']
-        if source.get('source') == 'table':
-            col = source.get('columns', {}).get(col_name, {})
-            if isinstance(col, dict) and col.get('source') == 'input':
-                return col['name']
-    return col_name
+    return column_input_name(source, col_name)
 
 
-def _derive_length_expr(source, bindings, table_columns):
-    if isinstance(source, dict):
-        if source.get('source') == 'input':
-            return f'length({source["name"]})'
-        if source.get('source') == 'table':
-            columns = source.get('columns', {})
-            col_names = list(columns.keys())
-            if col_names:
-                col = columns[col_names[0]]
-                if isinstance(col, Input):
-                    return f'length({col.name})'
-                if isinstance(col, Field) and isinstance(col.source, StepCall):
-                    return f'length({_call_alias(col.source.id)}.{col.name})'
-    for name, binding in bindings.items():
+def _derive_length_expr(source, bindings, table_column_names):
+    input_name = source_input_name(source)
+    if input_name is not None:
+        return f'length({input_name})'
+    if source_kind(source) == 'table':
+        columns = table_columns(source)
+        col_names = list(columns.keys())
+        if col_names:
+            col = columns[col_names[0]]
+            if isinstance(col, Input):
+                return f'length({col.name})'
+            if isinstance(col, Field) and isinstance(col.source, StepCall):
+                return f'length({_call_alias(col.source.id)}.{col.name})'
+    for _, binding in bindings.items():
         if isinstance(binding, Input):
             return f'length({binding.name})'
     return '1'
@@ -400,7 +363,7 @@ def _mapped_by_step_to_wdl(step, tasks):
 
     grouped_var = f'{step.id}_grouped'
 
-    if isinstance(source, dict) and source.get('source') == 'input':
+    if source_kind(source) == 'input':
         non_key_names = [n for n in col_names if n != group_key]
         key_t = to_wdl_type(input_schema.get(group_key, 'str'))
         val_t = _val_type(non_key_names, input_schema) if non_key_names else 'String'
@@ -469,18 +432,7 @@ def _build_zip_chain_from_names(col_names):
 
 
 def _column_expr(col, source):
-    if isinstance(source, dict):
-        if source.get('source') == 'input':
-            return source['name']
-        columns = source.get('columns', {})
-        col_binding = columns.get(col, {})
-        if isinstance(col_binding, dict) and col_binding.get('source') == 'input':
-            return col_binding['name']
-    return col
-
-
-def _key_type(key, schema):
-    return to_wdl_type(schema.get(key, 'str'))
+    return column_input_name(source, col)
 
 
 def _val_type(col_names, schema):
