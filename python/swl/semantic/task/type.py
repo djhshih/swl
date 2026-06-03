@@ -206,67 +206,27 @@ def _add_param(params: Dict[str, Param], param: Param, kind: str):
 
 
 def _normalize_run_param(name: str, typ: TypeKind, default):
-    if name == 'memory':
-        return _normalize_memory_param(typ, default)
-    if name == 'time':
-        return _normalize_time_param(typ, default)
-    if name == 'cpu':
-        return _normalize_cpu_param(typ, default)
-    if name == 'image':
-        return _normalize_image_param(typ, default)
-    return typ, None
-
-
-def _normalize_memory_param(typ: TypeKind, default):
+    type_map = {
+        'memory': (TypeKind.MEMORY, 'memory', _parse_memory_literal),
+        'time': (TypeKind.TIME, 'time', _parse_time_literal),
+        'cpu': (TypeKind.INT, 'int', _parse_cpu_literal),
+        'image': (TypeKind.STR, 'str', None),
+    }
+    entry = type_map.get(name)
+    if entry is None:
+        return typ, None
+    expected_kind, expected_label, parser = entry
     if typ is None:
-        typ = TypeKind.MEMORY
-    elif typ != TypeKind.MEMORY:
-        raise ValueError(f'Run parameter memory must have type memory: {typ.value}')
+        typ = expected_kind
+    elif typ != expected_kind:
+        raise ValueError(f'Run parameter {name} must have type {expected_label}: {typ.value}')
     if default is None:
         return typ, None
     text = _literal_default_text(default)
     if text is None:
-        raise ValueError('Run parameter memory must have a literal default')
-    return typ, _parse_memory_literal(text)
-
-
-def _normalize_time_param(typ: TypeKind, default):
-    if typ is None:
-        typ = TypeKind.TIME
-    elif typ != TypeKind.TIME:
-        raise ValueError(f'Run parameter time must have type time: {typ.value}')
-    if default is None:
-        return typ, None
-    text = _literal_default_text(default)
-    if text is None:
-        raise ValueError('Run parameter time must have a literal default')
-    return typ, _parse_time_literal(text)
-
-
-def _normalize_cpu_param(typ: TypeKind, default):
-    if typ is None:
-        typ = TypeKind.INT
-    elif typ != TypeKind.INT:
-        raise ValueError(f'Run parameter cpu must have type int: {typ.value}')
-    if default is None:
-        return typ, None
-    text = _literal_default_text(default)
-    if text is None:
-        raise ValueError('Run parameter cpu must have a literal default')
-    return typ, _parse_cpu_literal(text)
-
-
-def _normalize_image_param(typ: TypeKind, default):
-    if typ is None:
-        typ = TypeKind.STR
-    elif typ != TypeKind.STR:
-        raise ValueError(f'Run parameter image must have type str: {typ.value}')
-    if default is None:
-        return typ, None
-    text = _literal_default_text(default)
-    if text is None:
-        raise ValueError('Run parameter image must have a literal default')
-    return typ, text
+        raise ValueError(f'Run parameter {name} must have a literal default')
+    value = text if parser is None else parser(text)
+    return typ, value
 
 
 def _literal_default_text(default):

@@ -215,29 +215,25 @@ class DAG:
             if value.bound is not None:
                 yield from DAG._walk_values(value.bound)
 
+    @staticmethod
+    def _check_value(value, label):
+        if isinstance(value, Merge):
+            raise ValueError(f'{label} contains a Merge value')
+        if isinstance(value, ForcedFunction):
+            raise ValueError(f'{label} contains a ForcedFunction')
+        for v in DAG._walk_values(value):
+            if isinstance(v, Merge):
+                raise ValueError(f'{label} contains a Merge value nested inside {type(v).__name__}')
+            if isinstance(v, ForcedFunction):
+                raise ValueError(f'{label} contains a ForcedFunction nested inside {type(v).__name__}')
+
     def _check_no_disallowed_values(self):
         for step in self.steps:
             for name, value in step.bindings.items():
-                if isinstance(value, Merge):
-                    raise ValueError(f'Step {step.id} binding {name!r} contains a Merge value which must be flattened before emission')
-                if isinstance(value, ForcedFunction):
-                    raise ValueError(f'Step {step.id} binding {name!r} contains a ForcedFunction which must be resolved before emission')
-                for v in DAG._walk_values(value):
-                    if isinstance(v, Merge):
-                        raise ValueError(f'Step {step.id} binding {name!r} contains a Merge value nested inside {type(v).__name__}')
-                    if isinstance(v, ForcedFunction):
-                        raise ValueError(f'Step {step.id} binding {name!r} contains a ForcedFunction nested inside {type(v).__name__}')
+                DAG._check_value(value, f'Step {step.id} binding {name!r}')
         for name, output in self.outputs.items():
             value = output.value if isinstance(output, OutputSpec) else output
-            if isinstance(value, Merge):
-                raise ValueError(f'Output {name!r} contains a Merge value')
-            if isinstance(value, ForcedFunction):
-                raise ValueError(f'Output {name!r} contains a ForcedFunction')
-            for v in DAG._walk_values(value):
-                if isinstance(v, Merge):
-                    raise ValueError(f'Output {name!r} contains a Merge value nested inside {type(v).__name__}')
-                if isinstance(v, ForcedFunction):
-                    raise ValueError(f'Output {name!r} contains a ForcedFunction nested inside {type(v).__name__}')
+            DAG._check_value(value, f'Output {name!r}')
 
     def _check_output_types(self):
         for name, output in self.outputs.items():

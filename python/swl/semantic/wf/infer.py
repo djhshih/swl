@@ -628,27 +628,8 @@ def is_function_value(value):
     return isinstance(value, (FunctionValue, ClosureValue))
 
 
-def merge_records(checker, left, right):
-    return merge_arg_values(checker, left, right)
-
-
 def merge_update_values(checker, left, right, issues):
-    if isinstance(left, TableValue) and isinstance(right, TableValue):
-        return merge_tables(checker, left, right, issues)
-    if isinstance(left, TableValue):
-        return merge_table_record(checker, left, right)
-    if isinstance(right, TableValue):
-        return merge_table_record(checker, right, left)
-    return merge_records(checker, left, right)
-
-
-def merge_table_record(checker, table, record):
-    record_fields = field_map(checker, record)
-    if record_fields is None:
-        return UnknownValue()
-    merged = dict(table.columns)
-    merged.update(record_fields)
-    return TableValue(merged, placeholder=table.placeholder)
+    return merge_arg_values(checker, left, right)
 
 
 def merge_tables(checker, left, right, issues):
