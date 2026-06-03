@@ -18,9 +18,7 @@ def _input(forcer, name, spec=None):
 
 
 def _function_signature(forcer, function):
-    if isinstance(function, ir.Function):
-        return function.signature
-    if isinstance(function, ir.Lambda):
+    if isinstance(function, (ir.Function, ir.Lambda)):
         return function.signature
     return None
 
@@ -235,14 +233,18 @@ def _interp_to_dict(value):
     return None
 
 
-def _interp_word_to_text(value):
+def _interp_text(part):
     from swl.syntax.task import interpolation as interp
-    if isinstance(value, interp.Word):
-        return ''.join(_interp_word_to_text(part) for part in value.parts)
-    if isinstance(value, interp.Literal):
-        return value.text
-    if isinstance(value, interp.Var):
-        return '${' + value.name + '}'
-    if isinstance(value, interp.Expr):
-        return '${' + value.text + '}'
+    if isinstance(part, interp.Literal):
+        return part.text
+    if isinstance(part, interp.Var):
+        return '${' + part.name + '}'
+    if isinstance(part, interp.Expr):
+        return '${' + part.text + '}'
+    if isinstance(part, interp.Word):
+        return ''.join(_interp_text(item) for item in part.parts)
     return ''
+
+
+def _interp_word_to_text(value):
+    return _interp_text(value)

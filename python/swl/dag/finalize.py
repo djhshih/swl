@@ -64,27 +64,24 @@ def _merge_input_desc(forcer, current, candidates):
     return ' / '.join(unique)
 
 
-def _flatten_step_bindings(forcer):
-    for step in forcer.steps:
-        flat = {}
-        for name, value in step.bindings.items():
-            flattened = _flatten_merge_value(forcer, value)
-            if isinstance(flattened, Record):
-                flat.update(flattened.fields)
-            else:
-                flat[name] = flattened
-        step.bindings = flat
-
-
-def _flatten_outputs(forcer, outputs):
+def _flatten_named_values(forcer, values):
     flat = {}
-    for name, value in outputs.items():
+    for name, value in values.items():
         flattened = _flatten_merge_value(forcer, value)
         if isinstance(flattened, Record):
             flat.update(flattened.fields)
         else:
             flat[name] = flattened
     return flat
+
+
+def _flatten_step_bindings(forcer):
+    for step in forcer.steps:
+        step.bindings = _flatten_named_values(forcer, step.bindings)
+
+
+def _flatten_outputs(forcer, outputs):
+    return _flatten_named_values(forcer, outputs)
 
 
 def _build_output_specs(forcer, outputs):
@@ -105,20 +102,32 @@ def _build_output_specs(forcer, outputs):
     return specs
 
 
+def _literal_type(value):
+    if isinstance(value, bool):
+        return 'bool'
+    if isinstance(value, int):
+        return 'int'
+    if isinstance(value, float):
+        return 'float'
+    if isinstance(value, str):
+        return 'str'
+    return 'str'
+
+
+def _step_field_type(field):
+    spec = (field.source.task or {}).get('outputs', {}).get(field.name, {})
+    typ = spec.get('type')
+    if getattr(field.source, 'map', None) is not None and typ is not None:
+        return to_array_type(typ)
+    return typ or 'str'
+
+
 def _infer_output_type(forcer, value):
     normalized = _normalize_output_value(value)
     if isinstance(normalized, Input):
         return normalized.type or 'str'
     if isinstance(normalized, Literal):
-        if isinstance(normalized.value, bool):
-            return 'bool'
-        if isinstance(normalized.value, int):
-            return 'int'
-        if isinstance(normalized.value, float):
-            return 'float'
-        if isinstance(normalized.value, str):
-            return 'str'
-        return 'str'
+        return _literal_type(normalized.value)
     if isinstance(normalized, Record):
         return None
     if isinstance(normalized, Field):
@@ -128,21 +137,13 @@ def _infer_output_type(forcer, value):
                 return source_type[1:-1]
             return source_type or 'str'
         if isinstance(normalized.source, StepCall):
-            spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
-            typ = spec.get('type')
-            if getattr(normalized.source, 'map', None) is not None and typ is not None:
-                return to_array_type(typ)
-            return typ or 'str'
+            return _step_field_type(normalized)
         if isinstance(normalized.source, Field):
             current = normalized
             while isinstance(current, Field) and isinstance(current.source, Field):
                 current = current.source
             if isinstance(current, Field) and isinstance(current.source, StepCall):
-                spec = (current.source.task or {}).get('outputs', {}).get(current.name, {})
-                typ = spec.get('type')
-                if getattr(current.source, 'map', None) is not None and typ is not None:
-                    return to_array_type(typ)
-                return typ or 'str'
+                return _step_field_type(current)
             return 'str'
     return 'str'
 

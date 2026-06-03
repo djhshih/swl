@@ -265,29 +265,22 @@ def _available_inputs(forcer, value):
         return _available_inputs(forcer, value.left).union(_available_inputs(forcer, value.right))
     if isinstance(value, StepCall):
         return set(value.outputs)
-    if isinstance(value, Field):
-        return set()
-    if isinstance(value, Literal):
-        return set()
     return set()
 
 
-def _saturated_signature(forcer, function, bound):
+def _is_saturated(forcer, function, bound):
     if _is_opaque_record_carrier(forcer, bound):
         return True
     available = _available_inputs(forcer, bound)
     return all(name in available for name in function.signature.inputs.keys())
+
+
+def _saturated_signature(forcer, function, bound):
+    return _is_saturated(forcer, function, bound)
 
 
 def _saturated_task(forcer, function, bound):
-    if _is_opaque_record_carrier(forcer, bound):
-        return True
-    available = _available_inputs(forcer, bound)
-    if len(available) == 1 and function.signature.inputs:
-        first = next(iter(function.signature.inputs.keys()))
-        if first in available:
-            available = available
-    return all(name in available for name in function.signature.inputs.keys())
+    return _is_saturated(forcer, function, bound)
 
 
 def _forced_apply_key(forcer, value):
@@ -324,9 +317,7 @@ def _is_opaque_record_carrier(forcer, value):
 
 
 def _project_field(forcer, source, name):
-    if isinstance(source, Input):
-        return Field(source, name)
-    if isinstance(source, Field):
+    if isinstance(source, (Input, Field)):
         return Field(source, name)
     if isinstance(source, Record):
         if name in source.fields:
