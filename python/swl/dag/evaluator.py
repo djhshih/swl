@@ -41,96 +41,118 @@ def _canonical_children(node):
 
 
 def force_value(forcer, node, env):
+    value = _force_simple_value(forcer, node, env)
+    if value is not _SENTINEL:
+        return value
+
+    if isinstance(node, ir.Field):
+        return _force_field(forcer, node, env)
+    if isinstance(node, ir.Update):
+        return _force_update(forcer, node, env)
+    if isinstance(node, ir.Apply):
+        return _force_apply(forcer, node, env)
+    if isinstance(node, ir.Map):
+        fn = force_value(forcer, node.function, env)
+        arg = force_value(forcer, node.arg, env)
+        return _force_map(forcer, fn, arg, key=getattr(node, 'key', None))
+    if isinstance(node, ir.Block):
+        return _force_block(forcer, node, env)
+    if isinstance(node, ir.Variable):
+        return _force_variable(forcer, node, env)
+    if isinstance(node, ir.Unknown):
+        raise ValueError(f'Unknown IR node reached forcing (the lowerer should have rejected this): {node!r}')
+    raise ValueError(f'Unsupported IR node during forcing: {type(node).__name__}')
+
+
+
+def _force_simple_value(forcer, node, env):
     if isinstance(node, ir.Literal):
         return Literal(node.value)
-
     if isinstance(node, ir.Input):
-        if node.name not in forcer.inputs:
-            optional = bool(node.type and node.type.endswith('?'))
-            forcer.inputs[node.name] = Input(node.name, node.type, node.desc, optional)
-        return forcer.inputs[node.name]
-
+        return _force_input(forcer, node)
     if isinstance(node, ir.Name):
         value = env.lookup(node.name)
         if value is not None:
             return value
         raise ValueError(f'Undefined variable during forcing: {node.name}')
-
     if isinstance(node, ir.Ref):
         return _force_ref(forcer, node, env)
-
     if isinstance(node, ir.Record):
         return Record({name: force_value(forcer, value, env) for name, value in node.fields.items()})
-
-    if isinstance(node, ir.Field):
-        source = force_value(forcer, node.record, env)
-        projected = _project_field(forcer, source, node.name)
-        if projected is not _SENTINEL:
-            return projected
-        if isinstance(source, StepCall):
-            if node.name not in source.outputs:
-                raise ValueError(f'Missing field on tab: {node.name}')
-            return Field(source, node.name)
-        return Field(source, node.name)
-
-    if isinstance(node, ir.Update):
-        left = force_value(forcer, node.left, env)
-        right = force_value(forcer, node.right, env)
-        if isinstance(left, StepCall):
-            raise ValueError(
-                f'Record update (//) on a task/workflow call result is not supported: '
-                f'left operand is a step call ({left.id})'
-            )
-        if isinstance(right, StepCall):
-            raise ValueError(
-                f'Record update (//) on a task/workflow call result is not supported: '
-                f'right operand is a step call ({right.id})'
-            )
-        if isinstance(left, Input) and isinstance(right, Record):
-            raise ValueError(
-                'Table-record update (tab // rec) is not supported during forcing: '
-                f'a table input ({left.name}) cannot be merged with a record literal. '
-                'Use explicit bindings instead of // on table inputs.'
-            )
-        if isinstance(left, Record) and isinstance(right, Input):
-            raise ValueError(
-                'Record-table update (rec // tab) is not supported during forcing: '
-                f'a table input ({right.name}) cannot be merged with a record literal. '
-                'Use explicit bindings instead of // on table inputs.'
-            )
-        return _merge_values(forcer, left, right)
-
-    if isinstance(node, ir.Function):
+    if isinstance(node, (ir.Function, ir.Lambda)):
         return ForcedFunction(node, None, node.signature)
+    return _SENTINEL
 
-    if isinstance(node, ir.Lambda):
-        return ForcedFunction(node, None, node.signature)
 
-    if isinstance(node, ir.Apply):
-        return _force_apply(forcer, node, env)
 
-    if isinstance(node, ir.Map):
-        fn = force_value(forcer, node.function, env)
-        arg = force_value(forcer, node.arg, env)
-        return _force_map(forcer, fn, arg, key=getattr(node, 'key', None))
+def _force_input(forcer, node):
+    if node.name not in forcer.inputs:
+        optional = bool(node.type and node.type.endswith('?'))
+        forcer.inputs[node.name] = Input(node.name, node.type, node.desc, optional)
+    return forcer.inputs[node.name]
 
-    if isinstance(node, ir.Block):
-        local = ForceEnv(env)
-        _register_block(forcer, node.bindings)
-        for bind in node.bindings:
-            local.bind(bind.name, ir.Ref(bind.id, bind.name))
-        return force_value(forcer, node.result, local)
 
-    if isinstance(node, ir.Variable):
-        forcer.variables[node.id] = node
-        value = force_value(forcer, node.value, env)
-        forcer.forced_variables[node.id] = value
-        return value
 
-    if isinstance(node, ir.Unknown):
-        raise ValueError(f'Unknown IR node reached forcing (the lowerer should have rejected this): {node!r}')
+def _force_field(forcer, node, env):
+    source = force_value(forcer, node.record, env)
+    projected = _project_field(forcer, source, node.name)
+    if projected is not _SENTINEL:
+        return projected
+    if isinstance(source, StepCall):
+        if node.name not in source.outputs:
+            raise ValueError(f'Missing field on tab: {node.name}')
+    return Field(source, node.name)
 
-    raise ValueError(f'Unsupported IR node during forcing: {type(node).__name__}')
+
+
+def _force_update(forcer, node, env):
+    left = force_value(forcer, node.left, env)
+    right = force_value(forcer, node.right, env)
+    _validate_update_operands(left, right)
+    return _merge_values(forcer, left, right)
+
+
+
+def _validate_update_operands(left, right):
+    if isinstance(left, StepCall):
+        raise ValueError(
+            f'Record update (//) on a task/workflow call result is not supported: '
+            f'left operand is a step call ({left.id})'
+        )
+    if isinstance(right, StepCall):
+        raise ValueError(
+            f'Record update (//) on a task/workflow call result is not supported: '
+            f'right operand is a step call ({right.id})'
+        )
+    if isinstance(left, Input) and isinstance(right, Record):
+        raise ValueError(
+            'Table-record update (tab // rec) is not supported during forcing: '
+            f'a table input ({left.name}) cannot be merged with a record literal. '
+            'Use explicit bindings instead of // on table inputs.'
+        )
+    if isinstance(left, Record) and isinstance(right, Input):
+        raise ValueError(
+            'Record-table update (rec // tab) is not supported during forcing: '
+            f'a table input ({right.name}) cannot be merged with a record literal. '
+            'Use explicit bindings instead of // on table inputs.'
+        )
+
+
+
+def _force_block(forcer, node, env):
+    local = ForceEnv(env)
+    _register_block(forcer, node.bindings)
+    for bind in node.bindings:
+        local.bind(bind.name, ir.Ref(bind.id, bind.name))
+    return force_value(forcer, node.result, local)
+
+
+
+def _force_variable(forcer, node, env):
+    forcer.variables[node.id] = node
+    value = force_value(forcer, node.value, env)
+    forcer.forced_variables[node.id] = value
+    return value
 
 
 def _force_ref(forcer, ref, env):
@@ -143,7 +165,6 @@ def _force_ref(forcer, ref, env):
 
 
 def _force_apply(forcer, node, env):
-    from swl.dag.emit import _emit_mapped_step
     fn = force_value(forcer, node.function, env)
     arg = force_value(forcer, node.arg, env)
     key = _apply_key(forcer, node.function, fn, arg)
