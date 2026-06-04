@@ -2,9 +2,9 @@
 
 ## Overview
 
-The Nextflow transpiler (`python/swl/transpile/nf/`) converts compiled SWL DAGs into Nextflow DSL2 `process` + `workflow` blocks. It follows the same architecture as the CWL, WDL, and Snakemake transpilers. The transpiler is ~344 lines of Python (`emit.py`).
+The Nextflow transpiler (`python/swl/transpile/nf/`) converts compiled SWL DAGs into Nextflow DSL2 `process` + `workflow` blocks. It follows the same architecture as the CWL, WDL, and Snakemake transpilers. The transpiler is ~378 lines of Python (`emit.py`).
 
-**Status:** Implemented. Covers simple processes, pipelines, named ports, resources, output path templates, mapped sub-workflows (scatter), `map_by` (grouped scatter), and sub-workflow inlining. Shell variable interpolation (`${var}`) passes through verbatim to Nextflow's template engine without remapping.
+**Status:** Implemented. Covers simple processes, pipelines, named ports, resources, output path templates, shell variable interpolation with scope resolution (inputs → `${var}`, run params → `${task.cpus}`/`${task.memory}`/`${task.time}`), mapped sub-workflows (scatter), `map_by` (grouped scatter), and sub-workflow inlining.
 
 ---
 
@@ -22,6 +22,12 @@ transpile/nf/
 
 - `transpile_dag_file(path)` — read DAG JSON from disk, transpile
 - `transpile_dag_dict(data, workflow_id, _top_level)` — main transpilation from parsed DAG data
+
+### Design
+
+- **Variable reference forms**: Both `$var` (unbraced) and `${var}` (braced) are handled identically via `interp_script()`'s regex — they are equivalent bash syntax for simple variable names. `${expr}` (non-word content inside braces) is treated as an expression.
+- **Scope resolution**: Input vars keep `${var}` form (Nextflow's `script:` template engine resolves from `input:` scope). Run vars are remapped: `cpu` → `${task.cpus}`, `memory` → `${task.memory}`, `time` → `${task.time}` via `_NF_RUN_MAP`. Shell builtins and unknown vars pass through verbatim.
+- **Shell built-in allowlist**: `_BUILTIN_VARS` in `bash.py` prevents shell builtins from being incorrectly resolved as SWL variables.
 
 ### Key internal functions
 
@@ -46,7 +52,9 @@ transpile/nf/
 
 | SWL Concept | Nextflow Output | Details |
 |---|---|---|
-| **Task step** | `process { }` with `script:` | Script body is embedded literally |
+| **Task step** | `process { }` with `script:` | Script body interpolated via `interp_script()` |
+| **Shell variable interpolation (`${var}`)** | `${var}` / `${task.*}` in `script:` | Input vars → `${var}` (Nextflow resolves from `input:`), run params → `${task.cpus}` / `${task.memory}` / `${task.time}` |
+| **Shell expression interpolation (`${expr}`)** | `${...}` with resolved run vars | `${memory / cpu}` → `${task.memory / task.cpus}`. Input vars pass through verbatim |
 | **Named input ports** | `input:` with `path`/`val` qualifiers | Files → `path name`, strings → `val name`. Mapped steps use `tuple(...)` input |
 | **Named output ports** | `output:` with `emit:` name | Output paths use SWL `default` pattern rendered as `"${var}"` template |
 | **`run.cpu`** | `cpus <value>` directive | |
@@ -59,6 +67,7 @@ transpile/nf/
 | **Step output binding** | `PROCESS.out.emit_name` | References named output port |
 | **Field projection** | `.map{ it.field }` | Project field from tuple channel |
 | **`word` interpolation in output defaults** | Nextflow string template `"${var}"` | `word_interp()` from `common.py` with `var_fn=lambda n: f"${{{n}}}"` |
+| **Shell variable interpolation** | `interp_script()` via `_interpolate_shell` | Input vars → `${var}`, run vars → `${task.cpus}`/`${task.memory}`/`${task.time}`. Expressions resolve inner run vars |
 | **Workflow output** | `<name>_out = <channel>` + `emit:` | Named emit declaration in workflow block |
 | **Sub-workflow (no map)** | Inline `workflow { }` block | Recursively transpiled; appears as separate workflow block in output |
 
@@ -83,8 +92,6 @@ transpile/nf/
 
 | SWL Concept | Issue |
 |---|---|
-| **Shell variable interpolation (`${var}`)** | `${var}` passes through verbatim to Nextflow `script:` block. Nextflow's template engine treats `${var}` as its own expression, so `${cpu}` would fail at runtime (`cpu` is not a Nextflow variable). Should convert to `{input.var}` / `{output.var}` / `${task.cpus}` / `${task.memory}`, similar to the SMK transpiler's `_interpolate_shell()` |
-| **`${memory / cpu}` expression** | Passes through verbatim; same interpolation issue as simple `${var}` |
 | **Merge binding** | Not rejected in validation but not handled in `_binding_to_channel`. However, Merge bindings are expected to be flattened before DAG generation |
 
 ### Nextflow-specific details
@@ -94,7 +101,7 @@ transpile/nf/
 - **`map_by`**: Uses `groupKey(value)` + `.groupTuple()` for key-based grouping (Nextflow 22.10+). The grouping is over the source channel elements.
 - **Sub-workflows**: Emitted as standalone `workflow { }` blocks in the same output file, with separate channel declarations.
 - **Output wiring**: Mapped step outputs are collected via `.toList()` before emission. Non-mapped step outputs are wired directly.
-- **Shell interpolation**: The script body is NOT interpolated by the transpiler. `${var}` references pass through literally. In Nextflow DSL2, the `script:` block treats `${var}` as a template expression, so variables in the shell script must match Nextflow process variables (input names, output names, or `${task.*}` for directives).
+- **Shell interpolation**: The script body is interpolated by `_interpolate_shell()` via `interp_script()` from `common.py`. Both `$var` and `${var}` are recognized. Input variables stay as `${var}` (Nextflow resolves from `input:`). Run params (`cpu`, `memory`, `time`) are remapped to `${task.cpus}`, `${task.memory}`, `${task.time}`. Inner variables in `${expr}` expressions are resolved per scope. Shell builtins (`$HOME`) pass through verbatim.
 
 ---
 
@@ -115,8 +122,8 @@ transpile/nf/
 | Mapped step (scatter) | ⚠️ Weak support | map, panel |
 | `map_by` (grouped scatter) | ⚠️ Weak support | map_by |
 | `[file]` array input type | ❌ Falls to `val` | — |
-| Shell variable interpolation (`${var}`) | ❌ Passes through verbatim | — |
-| `memory/cpu` expression in shell | ❌ Passes through verbatim | — |
+| Shell variable interpolation (`${var}`, `$var`) | ✅ Well supported | function (bwa mem line) |
+| `memory/cpu` expression in shell | ✅ Supported | function (`${task.memory / task.cpus}`) |
 | Literal workflow outputs | ❌ Rejected | — |
 | Record bindings | ❌ Rejected | — |
 
@@ -131,18 +138,13 @@ The test suite (`bash test.sh`):
 
 ## Known Limitations
 
-1. **Shell variable interpolation**: Nextflow's `script:` block uses `${var}` for its own template expressions. SWL shell scripts with `${cpu}` or `${ref}` pass through verbatim, but Nextflow will try to resolve these as template variables. Since `cpu` is only defined as a `cpus <value>` directive (accessed via `${task.cpus}`), and `ref` is an input (accessed via `${ref}` in the template scope), unqualified `${cpu}` would fail at runtime. A future fix should convert:
-   - `${cpu}` → `${task.cpus}`
-   - `$var` / `${var}` for inputs → `${var}` (stays same, Nextflow template resolves from input scope)
-   - `${memory / cpu}` → `${task.memory / task.cpus}`
+1. **`[file]` type qualifier**: Array-of-file types get the default `val` qualifier because `to_nf_qualifier()` in `types.py` only handles `file`, `str`, `int`, `float`. Should emit `path` (or `path` with multiplicity) for `[file]` types.
 
-2. **`[file]` type qualifier**: Array-of-file types get the default `val` qualifier because `to_nf_qualifier()` in `types.py` only handles `file`, `str`, `int`, `float`. Should emit `path` (or `path` with multiplicity) for `[file]` types.
+2. **Mapped sub-workflow output collection**: `.toList()` on mapped step outputs collects ALL results into memory. For large scatter jobs this may cause OOM. A streaming approach (e.g., channel of channels) would be more scalable but is not implemented.
 
-3. **Mapped sub-workflow output collection**: `.toList()` on mapped step outputs collects ALL results into memory. For large scatter jobs this may cause OOM. A streaming approach (e.g., channel of channels) would be more scalable but is not implemented.
+3. **Sub-workflow module isolation**: Sub-workflows are inlined as separate `workflow { }` blocks with duplicated channel declarations. They are not extracted into standalone module files with `include` statements. This works for single-file outputs but doesn't scale to multi-module projects.
 
-4. **Sub-workflow module isolation**: Sub-workflows are inlined as separate `workflow { }` blocks with duplicated channel declarations. They are not extracted into standalone module files with `include` statements. This works for single-file outputs but doesn't scale to multi-module projects.
-
-5. **Channel join ordering**: `.join()` depends on matching tuple ordering across channels. When inputs come from independent sources (e.g., separate `Channel.fromPath()` globs), element ordering must match. The transpiler does not insert `.sort()` calls to ensure consistent ordering.
+4. **Channel join ordering**: `.join()` depends on matching tuple ordering across channels. When inputs come from independent sources (e.g., separate `Channel.fromPath()` globs), element ordering must match. The transpiler does not insert `.sort()` calls to ensure consistent ordering.
 
 ---
 
@@ -176,7 +178,7 @@ process ALIGN {
 
     script:
     """
-    bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam
+    bwa mem -t ${task.cpus} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam
     """
 }
 

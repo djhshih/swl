@@ -2,9 +2,9 @@
 
 ## Overview
 
-The CWL transpiler (`python/swl/transpile/cwl/`) converts compiled SWL DAGs into packed CWL v1.0 documents (`cwlVersion: v1.0`) with a `$graph` containing one `Workflow` node and one `CommandLineTool`/`ExpressionTool`/`Workflow` per distinct step. It follows the same architecture as the Snakemake, Nextflow, and WDL transpilers. The transpiler is ~572 lines of Python (`emit.py`).
+The CWL transpiler (`python/swl/transpile/cwl/`) converts compiled SWL DAGs into packed CWL v1.0 documents (`cwlVersion: v1.0`) with a `$graph` containing one `Workflow` node and one `CommandLineTool`/`ExpressionTool`/`Workflow` per distinct step. It follows the same architecture as the Snakemake, Nextflow, and WDL transpilers. The transpiler is ~641 lines of Python (`emit.py`).
 
-**Status:** Implemented. Covers simple tasks, pipelines, named ports, resources (cpu/memory/time/image), output path templates, scattered mapped steps, `map_by` (grouped scatter) via ExpressionTool grouping + wrapper CommandLineTool, record bindings via ExpressionTool, nested field projections via `valueFrom`, `expr` interpolation via `InlineJavascriptRequirement`, optional types (`['null', Type]`), sub-workflow inlining, and array types (`[file]`, `[str]`, `[int]`, `[float]`). Shell script variables (`${cpu}`, `${ref}`) pass through literally without resolution.
+**Status:** Implemented. Covers simple tasks, pipelines, named ports, resources (cpu/memory/time/image), output path templates, scattered mapped steps, `map_by` (grouped scatter) via ExpressionTool grouping + wrapper CommandLineTool, record bindings via ExpressionTool, nested field projections via `valueFrom`, `expr` interpolation via `InlineJavascriptRequirement`, optional types (`['null', Type]`), sub-workflow inlining, array types (`[file]`, `[str]`, `[int]`, `[float]`), and shell variable interpolation via `$(...)` CWL expressions.
 
 ---
 
@@ -23,6 +23,13 @@ transpile/cwl/
 - `transpile_dag_file(path)` — read DAG JSON from disk, transpile to packed CWL
 - `transpile_dag_dict(data, workflow_id='main')` — main transpilation from parsed DAG data
 
+### Design
+
+- **Variable reference forms**: Both `$var` (unbraced) and `${var}` (braced) are handled identically — they are equivalent bash syntax for simple variable names. The `interp_script()` regex matches both forms. `${expr}` (non-word content inside braces) is treated as an expression.
+- **Scope resolution**: Each variable reference is classified via `classify_var()`: known inputs → `inputs.name` (`.path` for files), run params → inlined literals, shell builtins (`$HOME`, `$PATH`) → verbatim pass-through, unknown → verbatim pass-through.
+- **Shell built-in allowlist**: `_BUILTIN_VARS` in `bash.py` prevents shell builtins from being incorrectly resolved as SWL variables.
+- **`InlineJavascriptRequirement`**: Automatically added when the body contains any `$` reference, since the `entry` uses `$(...)` JS expression syntax.
+
 ### Key internal functions
 
 | Function | Purpose |
@@ -40,6 +47,7 @@ transpile/cwl/
 | `_binding_source(value)` | Resolve a DAG binding to a CWL `source` string (Input → `#main/name`, StepCall → `#main/step_id`, Field → `#main/root/name`) |
 | `_interp_to_cwl_glob(value)` | Render a SWL `word` interpolation dict to a CWL expression `$(inputs.var + '.ext')` |
 | `_has_expr_interpolation(spec)` | Check if an output spec contains `expr` interpolation parts; if so, `InlineJavascriptRequirement` is added |
+| `_interpolate_shell(body, step)` | Resolve bash `${var}` / `${expr}` references to a `$(...)` CWL JS expression. Input vars → `inputs.name` / `inputs.name.path`, run params → inlined literals, builtins → verbatim |
 | `_validate_supported(dag)` | Validate map_by preconditions, reject literal workflow outputs, validate output interpolation |
 | `_emit_record_tool(step_id, binding_name, record, dag)` | Generate an `ExpressionTool` + step entry for a Record binding — constructs JSON from field inputs |
 | `_emit_map_by_graph(step, dag)` | Generate ExpressionTool (grouping) + CommandLineTool (wrapper) + two step entries for `map_by` grouped scatter |
@@ -53,7 +61,9 @@ transpile/cwl/
 
 | SWL Concept | CWL v1.0 Output | Details |
 |---|---|---|
-| **Task step** | `CommandLineTool` with `InitialWorkDirRequirement` | Script body materialized as `script.sh` |
+| **Task step** | `CommandLineTool` with `InitialWorkDirRequirement` | Script body materialized as `script.sh` via `$(...)` JS expression |
+| **Shell variable interpolation (`${var}`)** | `$(...)` CWL expression in `entry` | Input vars → `inputs.name` / `inputs.name.path`, run params → inlined literals, shell builtins → verbatim. `InlineJavascriptRequirement` added automatically |
+| **Shell expression interpolation (`${expr}`)** | `$(...)` with resolved inner vars | `${memory / cpu}` → `(8192 / 2)`. Inner variable names resolved per scope |
 | **Named input ports** | Tool `inputs[]` with `type` | `file` → `File`, `str` → `string`, `int` → `int`, `float` → `float` |
 | **Named output ports** | Tool `outputs[]` with `outputBinding.glob` | Output paths use `$(inputs.var + '.ext')` CWL expression |
 | **`run.cpu`** | `ResourceRequirement.coresMin` | |
@@ -81,9 +91,7 @@ transpile/cwl/
 
 | SWL Concept | Status | Issue |
 |---|---|---|
-| **Shell variable interpolation (`${var}`)** | Passes through literally | `${cpu}`, `${ref}` in the `InitialWorkDirRequirement` entry are undefined bash variables. CWL provides no template mechanism for materialized script files. The transpiler does not resolve `${cpu}` → staged file path or resource value |
-| **`$memory / cpu` expression** | Passes through literally | Same issue — `${memory / cpu}` is undefined bash |
-| **Expression variable scope** | No `inputs.` prefix for `expr` parts | `${outbase / 2}` becomes `$((outbase / 2) + '.bam')` — `outbase` is not `inputs.outbase` in the JS scope. User must use `inputs.outbase` in expression text |
+| **Expression variable scope (output defaults)** | No `inputs.` prefix for `expr` parts | `${outbase / 2}.bam` in an output default becomes `$((outbase / 2) + '.bam')` — `outbase` is not prefixed with `inputs.` inside the expression. Body interpolation (via `_interpolate_shell`) does prefix correctly |
 
 ### Not Supported (explicitly rejected)
 
@@ -128,8 +136,10 @@ transpile/cwl/
 | `expr` interpolation in outputs | ✅ Supported | expr_interpolation_passthrough test |
 | Mapped step (scatter) | ✅ Well supported | batch (task, workflow, lambda) |
 | `map_by` (grouped scatter) | ✅ Well supported | map_by_transpile_emits, map_by_from_compiled_dag |
-| Shell variable interpolation (`${var}`) | ❌ Passes through verbatim | — |
-| `$var` / `${memory / cpu}` resolution | ❌ Undefined at runtime | — |
+| Shell variable interpolation (`${var}`) | ✅ Well supported | shell_interpolation_* tests |
+| Shell expression interpolation (`${memory / cpu}`) | ✅ Well supported | shell_interpolation_expression |
+| Shell built-in pass-through (`$HOME`) | ✅ Well supported | shell_interpolation_passes_through_builtins |
+| Body without `$` (no-op passthrough) | ✅ Supported | shell_interpolation_skips_body_without_dollar, no_dollar_does_not_add_inlinejs |
 | Merge bindings | ❌ Rejected | rejects_merged_task_input_binding |
 | Literal workflow outputs | ❌ Rejected | (via _validate_supported) |
 
@@ -140,25 +150,19 @@ The test suite (`bash test.sh`):
 - Compares `pipe.cwl` and `explicit.cwl` against `function.cwl` for equivalence of golden output
 - `panel.cwl` and `map.cwl` are generated but have no golden comparison
 - `map_by.cwl` generation is commented out (TODO) but `map_by` is tested via unit tests
-- Unit tests: 18 test cases in `tests/unit/swl/transpile/cwl/test_emit.py`
+- Unit tests: 26 test cases in `tests/unit/swl/transpile/cwl/test_emit.py`
 
 ---
 
 ## Known Limitations
 
-1. **Shell variable interpolation**: The script body in `InitialWorkDirRequirement` is materialized as-is. `${cpu}`, `${ref}` and similar bash-style substitutions pass through literally but are never defined as bash variables by CWL. At runtime `bwa mem -t ${cpu} ${ref} ...` would expand `$cpu` and `$ref` to empty strings. A fix would need to prepend variable assignments using CWL expression syntax or environment variable declarations:
-   ```bash
-   cpu="$(echo $(inputs.cpu))"  # Not valid — ResourceRequirement values aren't in CWL expression scope
-   ```
-   Unlike WDL (`~{var}`) or SMK (`{input.var}`), CWL has no template mechanism for InitialWorkDir script entries.
+1. **Expression interpolation variable scope (output defaults)**: `${outbase / 2}` in an output default becomes `$((outbase / 2) + '.bam')`. The expression text passes through without `inputs.` prefixing. Users must write `${inputs.outbase / 2}` for expression outputs to reference CWL input variables correctly. Body interpolation (via `_interpolate_shell`) does correctly prefix variables.
 
-2. **Expression interpolation variable scope**: `${outbase / 2}` in an output default becomes `$((outbase / 2) + '.bam')`. The expression text passes through without `inputs.` prefixing. Users must write `${inputs.outbase / 2}` for expression outputs to reference CWL input variables correctly.
+2. **Merge bindings not supported**: Merge bindings (from `//` operators at the DAG level) are rejected. These should be flattened at compile time before DAG generation.
 
-3. **Merge bindings not supported**: Merge bindings (from `//` operators at the DAG level) are rejected. These should be flattened at compile time before DAG generation.
+3. **Literal workflow outputs not supported**: Workflow-level outputs that are literal values (not step outputs) are explicitly rejected.
 
-4. **Literal workflow outputs not supported**: Workflow-level outputs that are literal values (not step outputs) are explicitly rejected.
-
-5. **`map_by` wrapper Python dependency**: The generated wrapper CommandLineTool for `map_by` uses Python 3 with `subprocess` and `json` modules. This introduces a runtime dependency on `python3` that may not be available in all CWL execution environments (e.g., restricted containers).
+4. **`map_by` wrapper Python dependency**: The generated wrapper CommandLineTool for `map_by` uses Python 3 with `subprocess` and `json` modules. This introduces a runtime dependency on `python3` that may not be available in all CWL execution environments (e.g., restricted containers).
 
 ---
 
@@ -194,7 +198,8 @@ Output (`function.cwl`):
       "requirements": [
         {"class": "InitialWorkDirRequirement",
          "listing": [{"entryname": "script.sh",
-                      "entry": "bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.bam"}]},
+                      "entry": "$(\"bwa mem -t \" + 2 + \" \" + inputs.ref.path + \" \" + inputs.fastq1.path + \" \" + inputs.fastq2.path + \" | samtools view -b - > \" + inputs.outbase + \".bam\")"}]},
+        {"class": "InlineJavascriptRequirement"},
         {"class": "ResourceRequirement", "coresMin": 2},
         {"class": "DockerRequirement", "dockerPull": "djhshih/seqkit:0.1"}
       ],

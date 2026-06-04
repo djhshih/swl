@@ -2,9 +2,9 @@
 
 ## Overview
 
-The WDL transpiler (`python/swl/transpile/wdl/`) converts compiled SWL DAGs into WDL 1.1 `task` + `workflow` blocks. It follows the same architecture as the CWL, Nextflow, and Snakemake transpilers. The transpiler is ~520 lines of Python (`emit.py`).
+The WDL transpiler (`python/swl/transpile/wdl/`) converts compiled SWL DAGs into WDL 1.1 `task` + `workflow` blocks. It follows the same architecture as the CWL, Nextflow, and Snakemake transpilers. The transpiler is ~526 lines of Python (`emit.py`).
 
-**Status:** Implemented. Covers simple tasks, pipelines, named ports, requirements (cpu/memory/time/image), output path templates, shell variable interpolation (`${var}` → `~{var}`), scatter for mapped steps, `collect_by_key` for `map_by`, struct definitions for Record bindings, and inline sub-workflow blocks. `$var` (unbraced) interpolation and `${memory / cpu}` expression resolution are not fully handled.
+**Status:** Implemented. Covers simple tasks, pipelines, named ports, requirements (cpu/memory/time/image), output path templates, shell variable interpolation (`${var}` → `~{var}`, `$var` → `~{var}`) with run vars added as optional task inputs, scatter for mapped steps, `collect_by_key` for `map_by`, struct definitions for Record bindings, and inline sub-workflow blocks.
 
 ---
 
@@ -23,12 +23,19 @@ transpile/wdl/
 - `transpile_dag_file(path)` — read DAG JSON from disk, transpile
 - `transpile_dag_dict(data, workflow_id, _top_level)` — main transpilation from parsed DAG data
 
+### Design
+
+- **Variable reference forms**: Both `$var` (unbraced) and `${var}` (braced) are handled identically via `interp_script()`'s regex — they are equivalent bash syntax for simple variable names. `${expr}` (non-word content inside braces) is treated as an expression.
+- **Scope resolution**: `known_vars = input_names | run_var_names`. Known vars → `~{var}`. Run vars (`cpu`, `memory`, `time`) with values are added as WDL task inputs with defaults, so `~{memory / cpu}` evaluates correctly. Shell builtins and unknown vars pass through verbatim.
+- **Shell built-in allowlist**: `_BUILTIN_VARS` in `bash.py` prevents shell builtins from being incorrectly resolved.
+- **Run vars as inputs**: `cpu`, `memory`, `time` from `run {}` are promoted to task `input {}` with default values. This gives them `~{...}` resolution scope in `command <<< >>>` blocks.
+
 ### Key internal functions
 
 | Function | Purpose |
 |----------|---------|
 | `_task_to_wdl(step)` | Convert a task StepCall to a WDL `task { }` block with `input {}`, `command <<< >>>`, `output {}`, `requirements {}` |
-| `_interpolate_bash_vars(line)` | Convert `${var}` bash references to `~{var}` WDL interpolation in command blocks |
+| `_interpolate_bash_vars(body, known_vars)` | Convert `${var}` / `${expr}` bash references to `~{var}` / `~{expr}` WDL interpolation in command blocks. Uses `interp_script()` from `common.py`. Run vars (`cpu`, `memory`, `time`) are added as task inputs with defaults so they resolve in `~{...}` scope |
 | `_interp_to_wdl(value)` | Render a SWL `word` interpolation dict into a WDL string template `"~{var}"` |
 | `_emit_requirements(step)` | Map SWL `run` (cpu, memory, time, image) to WDL `requirements {}` |
 | `_dag_to_wdl(dag, workflow_id, tasks)` | Generate the `workflow { }` block with `input {}`, `call` statements, and `output {}` |
@@ -54,7 +61,8 @@ transpile/wdl/
 | **`run.memory`** | `requirements { memory: "<value> MB" }` | Value converted to MB |
 | **`run.time`** | `requirements { time_minutes: <value> }` | |
 | **`run.image`** | `requirements { container: "<value>" }` | |
-| **Shell `${var}` interpolation** | `~{var}` in `command <<< >>>` | Brace-delimited bash vars (`${cpu}`) converted to WDL `~{cpu}`. WDL resolves from task input scope |
+| **Shell `${var}` interpolation** | `~{var}` in `command <<< >>>` | Bash `${var}` → WDL `~{var}` via `interp_script()`. Run vars (`cpu`, `memory`, `time`) added as task inputs with defaults, so `~{cpu}` and `~{memory}` resolve correctly |
+| **Shell `${expr}` interpolation** | `~{expr}` in `command <<< >>>` | `${memory / cpu}` → `~{memory / cpu}` — both `memory` and `cpu` are in scope as task inputs, so the expression evaluates correctly in WDL |
 | **`word` interpolation in output defaults** | WDL string template `"~{var}"` | `word_interp()` from `common.py` with `var_fn=lambda n: f"~{{{n}}}"` |
 | **Workflow inputs** | `workflow { input { ... } }` | Same type mapping as task inputs |
 | **Input binding (workflow input)** | `<name>` | Direct reference to workflow input |
@@ -71,9 +79,6 @@ transpile/wdl/
 
 | SWL Concept | Status | Issue |
 |---|---|---|
-| **`$var` (unbraced) in shell** | Not interpolated | The `_interpolate_bash_vars` function only converts `${var}` (with braces), not `$var` (without braces). `$cpu` passes through literally |
-| **`${memory / cpu}` expression** | Passes through to `~{memory / cpu}` | The brace matcher converts `${memory / cpu}` → `~{memory / cpu}`, but `memory` and `cpu` are not WDL task input variables (they're in `requirements {}`). Would cause WDL evaluation error |
-| **`run.cpu`/`memory` access in command** | Not accessible as `~{cpu}` | WDL requirements values (`cpu`, `memory`) are not automatically in scope for `command` blocks. `~{cpu}` would fail — needs `~{...}` to reference task inputs, not requirements |
 | **Mapped sub-workflow scatter inputs** | All ports scatter-indexed | When a mapped sub-workflow has many scatter ports, all are indexed with `[i]` in the scatter body. Broadcast inputs are not distinguished from scatter inputs |
 | **`map_by` deeply nested Pair types** | Correct but verbose | Tables with many columns produce deeply nested `Pair[..., Pair[...]]` types (e.g., 10 levels for 10 columns), making the WDL output hard to read |
 
@@ -86,7 +91,7 @@ transpile/wdl/
 
 ### WDL-specific details
 
-- **Shell interpolation**: The `_interpolate_bash_vars` function uses a brace-matching state machine to convert `${var}` → `~{var}`. It handles nested braces (e.g., `${foo_{$bar}}`). Only brace-delimited `${var}` is converted — `$var` (unbraced) passes through literally, which is fine for WDL because `$var` in `command <<< >>>` is treated as a shell variable, not WDL interpolation.
+- **Shell interpolation**: `_interpolate_bash_vars(body, known_vars)` uses `interp_script()` from `common.py` to convert `${var}` and `$var` → `~{var}`, and `${expr}` → `~{expr}`. Run vars (`cpu`, `memory`, `time`) with values are added as WDL task inputs with defaults, so `~{cpu}`, `~{memory}`, and `~{memory / cpu}` resolve correctly in WDL command blocks.
 - **Output path templates**: SWL `word` interpolation defaults are rendered to WDL string expressions `"~{var}.ext"` using `_interp_to_wdl()`. The `File` declaration includes the template as the default value.
 - **`requirements {}` vs `runtime {}`**: All resource specifications (`cpu`, `memory`, `time`, `image`) go into `requirements {}` (WDL 1.1 canonical). The `runtime {}` section is not emitted.
 - **Sub-workflow call aliasing**: Sub-workflows are called with an `as` alias matching the step ID to avoid name collisions with the generated workflow name.
@@ -106,6 +111,8 @@ transpile/wdl/
 | Workflow input/output | ✅ Well supported | All |
 | Output path templates (`"~{var}"`) | ✅ Well supported | function, pipe, explicit |
 | Shell `${var}` interpolation | ✅ Well supported | All |
+| Shell `${expr}` interpolation (`${memory / cpu}`) | ✅ Supported | sort (via `~{memory / cpu}`) |
+| Run vars (`cpu`/`memory`/`time`) added as task inputs | ✅ Supported | All (run vars in `input {}`) |
 | Literal input bindings | ✅ Well supported | partial |
 | Field projections | ✅ Well supported | All |
 | `[file]` / `[str]` / `[int]` / `[float]` types | ✅ Well supported | All |
@@ -113,8 +120,6 @@ transpile/wdl/
 | Record bindings / struct | ✅ Supported | — |
 | Mapped step (scatter) | ⚠️ Weak support | map, panel |
 | `map_by` (collect_by_key) | ⚠️ Weak support | map_by |
-| `$var` (unbraced) interpolation | ❌ Not converted | — |
-| `$memory / cpu` expression in command | ❌ Not in WDL scope | — |
 | Merge bindings | ❌ Rejected | — |
 | Literal workflow outputs | ❌ Rejected | — |
 
@@ -129,15 +134,11 @@ The test suite (`bash test.sh`):
 
 ## Known Limitations
 
-1. **`$var` (unbraced) interpolation**: The `_interpolate_bash_vars` function only converts `${var}` (with braces) to `~{var}`. Unbraced `$var` references in command blocks pass through literally, which WDL's `command <<< >>>` passes to the shell as-is. This is correct for shell variables (`$PATH`, `$?`), but SWL variables like `$cpu` or `$ref` would not be interpolated by WDL.
+1. **Mapped sub-workflow broadcast vs scatter**: When a mapped sub-workflow has scatter ports, all workflow inputs matching scatter port names are indexed with `[i]`. Inputs that should be broadcast (shared across all iterations) are incorrectly indexed as well. This only works correctly when all inputs are scatter ports.
 
-2. **`~{memory / cpu}` expression**: `${memory / cpu}` is converted to `~{memory / cpu}` by the brace matcher. However, `memory` and `cpu` are defined in `requirements {}`, not as WDL task inputs. WDL `command <<< >>>` blocks only see task `input {}` variables in scope. The expression `~{memory / cpu}` would cause a WDL evaluation error. A fix would need to either add these as optional inputs or use WDL's `runtime` accessor if available.
+2. **`map_by` deeply nested types**: Tables with many columns produce deeply nested `Pair[...]` types for `collect_by_key`. While functionally correct, the generated WDL is verbose and hard to debug. The `_col_access_path` function generates long `.right.right.left` accessor chains.
 
-3. **Mapped sub-workflow broadcast vs scatter**: When a mapped sub-workflow has scatter ports, all workflow inputs matching scatter port names are indexed with `[i]`. Inputs that should be broadcast (shared across all iterations) are incorrectly indexed as well. This only works correctly when all inputs are scatter ports.
-
-4. **`map_by` deeply nested types**: Tables with many columns produce deeply nested `Pair[...]` types for `collect_by_key`. While functionally correct, the generated WDL is verbose and hard to debug. The `_col_access_path` function generates long `.right.right.left` accessor chains.
-
-5. **Sub-workflow module isolation**: Sub-workflows are inlined as separate `workflow { }` blocks with duplicated input declarations. WDL 1.1 allows multiple workflow blocks (only the first is the entry point), but some engines may warn or behave unexpectedly with multi-workflow files.
+3. **Sub-workflow module isolation**: Sub-workflows are inlined as separate `workflow { }` blocks with duplicated input declarations. WDL 1.1 allows multiple workflow blocks (only the first is the entry point), but some engines may warn or behave unexpectedly with multi-workflow files.
 
 ---
 

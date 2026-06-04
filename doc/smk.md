@@ -2,9 +2,9 @@
 
 ## Overview
 
-The Snakemake transpiler (`python/swl/transpile/smk/`) converts compiled SWL DAGs into Snakemake `Snakefile`-format output. It follows the same architecture as the CWL, WDL, and Nextflow transpilers. The transpiler is ~507 lines of Python (`emit.py`).
+The Snakemake transpiler (`python/swl/transpile/smk/`) converts compiled SWL DAGs into Snakemake `Snakefile`-format output. It follows the same architecture as the CWL, WDL, and Nextflow transpilers. The transpiler is ~547 lines of Python (`emit.py`).
 
-**Status:** Implemented. Covers simple task rules, pipelines, named ports, resources, config-based inputs, SWL output defaults, sub-workflow output defaults, shell expression interpolation, and mapped sub-workflows. `map_by` has a stub implementation.
+**Status:** Implemented. Covers simple task rules, pipelines, named ports, resources, config-based inputs, SWL output defaults, sub-workflow output defaults, shell variable and expression interpolation (via `interp_script()` with scope resolution to `{input.}`, `{output.}`, `{params.}`), and mapped sub-workflows. `map_by` has a stub implementation.
 
 ---
 
@@ -22,6 +22,12 @@ transpile/smk/
 
 - `transpile_dag_file(path)` — read DAG JSON from disk, transpile
 - `transpile_dag_dict(data, workflow_id, _top_level, wrap_map)` — main transpilation from parsed DAG data
+
+### Design
+
+- **Variable reference forms**: Both `$var` (unbraced) and `${var}` (braced) are handled identically via `interp_script()`'s regex — they are equivalent bash syntax for simple variable names. `${expr}` (non-word content inside braces) is treated as an expression.
+- **Scope resolution**: Variables classified by name: input ports → `{input.var}`, output ports → `{output.var}`, params/run → `{params.var}`. Expressions with operators (e.g. `${memory / cpu}`) → `$(( {params.memory} / {params.cpu} ))`. Shell builtins and unknown vars pass through verbatim.
+- **Shell built-in allowlist**: `_BUILTIN_VARS` in `bash.py` prevents shell builtins from being incorrectly resolved as SWL variables.
 
 ### Key internal functions
 
@@ -86,7 +92,7 @@ transpile/smk/
 
 - **Config-based inputs**: File-typed inputs use `config["port_name"]` in the `input:` section. String/int/float-typed inputs use `config["port_name"]` in the `params:` section. Shell references use `{input.port}` for files and `{params.port}` for strings.
 - **Output path resolution**: Task rule outputs use the SWL task's `out` block `default` pattern rendered through `_interp_to_smk()`. For mapped sub-workflows, sweep variables (`OUTBASE = config["outbase"]`) are generated from wildcards found in the output patterns by traversing the sub-workflow DAG to find inner task steps' output defaults. Non-mapped sub-workflows also traverse the inner DAG via `_inner_output_default()`.
-- **Shell interpolation**: Regex `(?<!\$)\$\{(.+?)\}|(?<!\$)\$(\w+)` matches `${var}`, `${expr}`, and `$var` but not `$${escaped}`. Simple vars are replaced with `{input.var}`, `{output.var}`, or `{params.var}`. Expressions with operators (e.g. `${memory / cpu}`) become `$(( {params.memory} / {params.cpu} ))` using bash arithmetic.
+- **Shell interpolation**: `_interpolate_shell(body, step)` uses `interp_script()` from `common.py` with scope-specific callbacks. Regex `(?<!\$)\$\{(.+?)\}|(?<!\$)\$(\w+)` matches `${var}`, `${expr}`, and `$var` but not `$${escaped}`. Simple vars are replaced with `{input.var}`, `{output.var}`, or `{params.var}` based on `classify_var`-style lookup. Expressions with operators (e.g. `${memory / cpu}`) become `$(( {params.memory} / {params.cpu} ))` using bash arithmetic.
 - **Scatter via config lists**: For mapped sub-workflows, the sweep variable is defined as `VAR = config["var"]` and the `rule all:` target uses `expand("pattern", var=VAR)`. The user provides a list of identifiers in config (e.g., `config["outbase"] = ["sample1", "sample2"]`).
 
 ---
@@ -101,7 +107,9 @@ transpile/smk/
 | Resources (cpu/memory/time/image) | ✅ Well supported | All |
 | Config-based inputs (file→`input:`, string→`params:`) | ✅ Well supported | All |
 | SWL output default patterns | ✅ Well supported | function, pipe, explicit |
-| String interpolation (`$var`, `${var}`, `${expr}`) | ✅ Well supported | function, pipe, explicit |
+| String interpolation (`$var`, `${var}`) | ✅ Well supported | function, pipe, explicit |
+| Expression interpolation (`${memory / cpu}`) | ✅ Supported | function (`$(( {params.memory} / {params.cpu} ))`) |
+| Built-in pass-through (`$HOME`) | ✅ Supported | (via `_BUILTIN_VARS` allowlist) |
 | Sub-workflow output defaults (mapped & non-mapped) | ✅ Well supported | partial, import_partial, map, panel |
 | Mapped sub-workflow (scatter) | ⚠️ Weak support | map, panel |
 | Top-level map step | ⚠️ Weak support | panel (merge input) |
