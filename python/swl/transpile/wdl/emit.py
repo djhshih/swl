@@ -1,8 +1,19 @@
 import json
 
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
-from swl.transpile.common import column_input_name, source_input_name, source_kind, step_name, table_columns, workflow_name, word_interp
+from swl.transpile.common import (
+    column_input_name,
+    interp_script,
+    source_input_name,
+    source_kind,
+    step_name,
+    table_columns,
+    workflow_name,
+    word_interp,
+)
 from swl.types import to_wdl_type
+
+_RUN_VAR_TYPE = {'cpu': 'Int', 'memory': 'Int', 'time': 'Int'}
 
 
 def transpile_dag_file(path):
@@ -65,17 +76,27 @@ def _task_to_wdl(step):
     lines = [f'task {_task_name(step.id)} {{', '']
 
     inputs = task.get('inputs', {})
-    if inputs:
+    run = task.get('run', {})
+    run_var_names = set()
+    for rv in ('cpu', 'memory', 'time'):
+        if run.get(rv, {}).get('value') is not None:
+            run_var_names.add(rv)
+
+    if inputs or run_var_names:
         lines.append('    input {')
         for name, spec in inputs.items():
             t = to_wdl_type(spec.get('type'))
             lines.append(f'        {t} {name}')
+        for rv in sorted(run_var_names):
+            t = _RUN_VAR_TYPE[rv]
+            val = run[rv]['value']
+            lines.append(f'        {t} {rv} = {val}')
         lines.append('    }')
         lines.append('')
 
     lines.append('    command <<<')
     for line in body.split('\n'):
-        interp_line = _interpolate_bash_vars(line)
+        interp_line = _interpolate_bash_vars(line, set(inputs.keys()) | run_var_names)
         lines.append(f'        {interp_line}')
     lines.append('    >>>')
     lines.append('')
@@ -103,31 +124,16 @@ def _task_to_wdl(step):
     return '\n'.join(lines)
 
 
-def _interpolate_bash_vars(line):
-    import re
-    result = []
-    i = 0
-    while i < len(line):
-        if line[i] == '$' and i + 1 < len(line) and line[i + 1] == '{':
-            brace_start = i
-            depth = 0
-            for j in range(i, len(line)):
-                if line[j] == '{':
-                    depth += 1
-                elif line[j] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        var_name = line[brace_start + 2:j]
-                        result.append(f'~{{{var_name}}}')
-                        i = j + 1
-                        break
-            else:
-                result.append(line[i])
-                i += 1
-        else:
-            result.append(line[i])
-            i += 1
-    return ''.join(result)
+def _interpolate_bash_vars(body, known_vars):
+    def var_fn(name):
+        if name in known_vars:
+            return '~{' + name + '}'
+        return None
+
+    def expr_fn(text):
+        return '~{' + text + '}'
+
+    return interp_script(body, var_fn, expr_fn, joiner='')
 
 
 def _emit_requirements(step):

@@ -1,8 +1,9 @@
 import json
 import os
+import re
 
 from swl.dag.node import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
-from swl.transpile.common import field_chain_parts, field_path_after_first, run_value, source_input_name, source_kind, table_columns, word_interp
+from swl.transpile.common import classify_var, field_chain_parts, field_path_after_first, run_value, source_input_name, source_kind, table_columns, word_interp
 from swl.types import to_array_type, to_cwl_type
 
 
@@ -120,13 +121,15 @@ def _tool_to_cwl(step, tool_id):
             graph.append(copied)
         return graph
     run = definition.get('run', {})
+    body = definition.get('body', '')
+    entry = _interpolate_shell(body, step)
     requirements = [
         {
             'class': 'InitialWorkDirRequirement',
             'listing': [
                 {
                     'entryname': 'script.sh',
-                    'entry': definition.get('body', ''),
+                    'entry': entry,
                 }
             ],
         }
@@ -138,7 +141,10 @@ def _tool_to_cwl(step, tool_id):
     if docker is not None:
         requirements.append(docker)
     hints = _hints_from_run(run)
-    if any(_has_expr_interpolation(spec) for spec in definition.get('outputs', {}).values()):
+    needs_js = '$' in body
+    if not needs_js:
+        needs_js = any(_has_expr_interpolation(spec) for spec in definition.get('outputs', {}).values())
+    if needs_js:
         requirements.append({'class': 'InlineJavascriptRequirement'})
     tool = {
         'id': tool_id,
@@ -327,6 +333,69 @@ def _has_expr_interpolation(spec):
     if isinstance(default, dict) and default.get('kind') == 'word':
         return any(part.get('kind') == 'expr' for part in default.get('parts', []))
     return False
+
+
+def _interpolate_shell(body, step):
+    if '$' not in body:
+        return body
+    task = step.task or {}
+    input_names = set(task.get('inputs', {}).keys())
+    input_types = {n: s.get('type') for n, s in task.get('inputs', {}).items()}
+    run = task.get('run', {})
+    run_values = {}
+    for rv in ('cpu', 'memory', 'time'):
+        spec = run.get(rv, {})
+        if isinstance(spec, dict) and spec.get('value') is not None:
+            run_values[rv] = spec['value']
+    run_names = set(run_values.keys())
+    output_names = set(step.outputs)
+
+    def _resolve(name):
+        scope = classify_var(name, input_names, output_names, run_names)
+        if scope == 'input':
+            if input_types.get(name) == 'file':
+                return f'inputs.{name}.path'
+            return f'inputs.{name}'
+        if scope == 'run':
+            val = run_values.get(name)
+            if val is not None:
+                return json.dumps(val)
+        return None
+
+    def _line_to_js(line):
+        if '$' not in line:
+            return json.dumps(line)
+        parts = []
+        last_end = 0
+        for m in re.finditer(r'(?<!\$)\$\{(.+?)\}|(?<!\$)\$(\w+)', line):
+            if m.start() > last_end:
+                parts.append(json.dumps(line[last_end:m.start()]))
+            if m.group(1) is not None:
+                content = m.group(1).strip()
+                if re.fullmatch(r'\w+', content):
+                    r = _resolve(content)
+                    parts.append(json.dumps(m.group(0)) if r is None else r)
+                else:
+                    resolved = content
+                    for var in re.findall(r'[A-Za-z_]\w*', content):
+                        r = _resolve(var)
+                        if r is not None:
+                            resolved = resolved.replace(var, r, 1)
+                    parts.append(f'({resolved})')
+            else:
+                r = _resolve(m.group(2))
+                parts.append(json.dumps(m.group(0)) if r is None else r)
+            last_end = m.end()
+        if last_end < len(line):
+            parts.append(json.dumps(line[last_end:]))
+        if not parts:
+            return json.dumps(line)
+        return ' + '.join(parts)
+
+    js_lines = [_line_to_js(line) for line in body.split('\n')]
+    if len(js_lines) == 1:
+        return '$(' + js_lines[0] + ')'
+    return '$(' + ' + "\\n" + '.join(js_lines) + ')'
 
 
 # record bindings ---------------------------------------------------------

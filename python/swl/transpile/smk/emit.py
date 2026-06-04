@@ -7,6 +7,7 @@ from swl.transpile.common import (
     emit_name,
     field_chain_parts,
     field_path_after_first,
+    interp_script,
     run_value,
     source_input_name,
     source_kind,
@@ -306,27 +307,18 @@ def _interpolate_shell(body, step):
             return '{params.' + var + '}'
         return None
 
-    def replace_var(m):
-        if m.group(1) is not None:
-            content = m.group(1).strip()
-            if re.fullmatch(r'\w+', content):
-                resolved = _resolve_var(content)
-                return resolved if resolved else m.group(0)
-            resolved = content
-            for var in re.findall(r'\w+', content):
-                r = _resolve_var(var)
-                if r:
-                    resolved = resolved.replace(var, r, 1)
-            return '$(( ' + resolved + ' ))'
-        var = m.group(2)
-        resolved = _resolve_var(var)
-        return resolved if resolved else m.group(0)
+    def var_fn(name):
+        return _resolve_var(name)
 
-    pattern = r'(?<!\$)\$\{(.+?)\}|(?<!\$)\$(\w+)'
-    result = []
-    for line in body.split('\n'):
-        result.append(re.sub(pattern, replace_var, line))
-    return '\n'.join(result)
+    def expr_fn(text):
+        resolved = text
+        for var in re.findall(r'\w+', text):
+            r = _resolve_var(var)
+            if r:
+                resolved = resolved.replace(var, r, 1)
+        return '$(( ' + resolved + ' ))'
+
+    return interp_script(body, var_fn, expr_fn, joiner='')
 
 
 def _collect_params(step):

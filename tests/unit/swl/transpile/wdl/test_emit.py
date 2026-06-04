@@ -331,16 +331,17 @@ map call_variant
 
     def test_bash_var_interpolation(self):
         from swl.transpile.wdl.emit import _interpolate_bash_vars
+        known = {'cpu', 'ref'}
         self.assertEqual(
-            _interpolate_bash_vars('bwa mem -t ${cpu} ${ref}'),
+            _interpolate_bash_vars('bwa mem -t ${cpu} ${ref}', known),
             'bwa mem -t ~{cpu} ~{ref}'
         )
         self.assertEqual(
-            _interpolate_bash_vars('echo $HOME'),
+            _interpolate_bash_vars('echo $HOME', known),
             'echo $HOME'
         )
         self.assertEqual(
-            _interpolate_bash_vars('no vars here'),
+            _interpolate_bash_vars('no vars here', known),
             'no vars here'
         )
 

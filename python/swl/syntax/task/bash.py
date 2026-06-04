@@ -1,4 +1,43 @@
+import re
+
 from swl.syntax.task import interpolation
+
+_BUILTIN_VARS = frozenset({
+    'HOME', 'PATH', 'USER', 'SHELL', 'PWD', 'RANDOM',
+    'LINENO', 'SECONDS', 'UID', 'HOSTNAME', 'OSTYPE',
+    'BASH', 'BASH_VERSION', 'BASH_ENV', 'IFS', 'PS1',
+    'PS2', 'PS3', 'PS4', 'OLDPWD', 'SHLVL', 'TERM',
+    'LANG', 'LC_ALL', 'LC_CTYPE', 'DISPLAY', 'TMPDIR',
+    'EDITOR', 'VISUAL', 'PAGER',
+})
+
+
+def _extract_expr_vars(text: str) -> list[str]:
+    names = []
+    for m in re.finditer(r'[A-Za-z_]\w*', text):
+        names.append(m.group(0))
+    return names
+
+
+def iter_var_refs(script):
+    for stmt in script.statements:
+        if isinstance(stmt, Command):
+            for word in stmt.words:
+                for part in _word_parts(word):
+                    yield part
+        elif isinstance(stmt, Assignment):
+            for part in _word_parts(stmt.value):
+                yield part
+
+
+def _word_parts(word):
+    parts = word.parts if isinstance(word, interpolation.Word) else [word]
+    for part in parts:
+        if isinstance(part, interpolation.Var):
+            yield (part.name, False)
+        elif isinstance(part, interpolation.Expr):
+            for name in _extract_expr_vars(part.text):
+                yield (name, True)
 
 
 class Assignment:

@@ -41,6 +41,40 @@ def field_path_after_first(value):
     return tail or None
 
 
+def classify_var(name, input_names, output_names, run_names):
+    from swl.syntax.task.bash import _BUILTIN_VARS
+    if name in _BUILTIN_VARS:
+        return 'shell'
+    if name in run_names:
+        return 'run'
+    if name in input_names:
+        return 'input'
+    if name in output_names:
+        return 'output'
+    return None
+
+
+def interp_script(body, var_fn, expr_fn, joiner=''):
+    import re as _re
+    pattern = r'(?<!\$)\$\{(.+?)\}|(?<!\$)\$(\w+)'
+    result = []
+    for line in body.split('\n'):
+        if '$' not in line:
+            result.append(line)
+            continue
+
+        def replace(m):
+            if m.group(1) is not None:
+                content = m.group(1).strip()
+                if _re.fullmatch(r'\w+', content):
+                    return var_fn(content) or m.group(0)
+                return expr_fn(content) or m.group(0)
+            return var_fn(m.group(2)) or m.group(0)
+
+        result.append(_re.sub(pattern, replace, line))
+    return '\n'.join(result)
+
+
 def word_interp(value, literal_fn, var_fn, expr_fn, joiner=''):
     if value is None:
         return None

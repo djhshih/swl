@@ -1,7 +1,7 @@
 import json
 
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
-from swl.transpile.common import emit_name, run_value, source_kind, step_name, workflow_name, word_interp
+from swl.transpile.common import emit_name, interp_script, run_value, source_kind, step_name, workflow_name, word_interp
 from swl.types import to_nf_qualifier
 
 
@@ -102,9 +102,10 @@ def _task_to_process(step):
         lines.append('')
 
     if body.strip():
+        interp_body = _interpolate_shell(body, step)
         lines.append('    script:')
         lines.append('    """')
-        for line in body.split('\n'):
+        for line in interp_body.split('\n'):
             lines.append(f'    {line}' if line.strip() else '')
         lines.append('    """')
         lines.append('')
@@ -133,6 +134,39 @@ def _emit_directives(step):
 
 def _interp_to_nf(value):
     return word_interp(value, lambda text: text, lambda name: f"${{{name}}}", lambda text: f"${{{text}}}")
+
+
+_NF_RUN_MAP = {'cpu': 'cpus', 'memory': 'memory', 'time': 'time'}
+
+
+def _interpolate_shell(body, step):
+    task = step.task or {}
+    input_names = set(task.get('inputs', {}).keys())
+    run = task.get('run', {})
+    run_names = set()
+    for rv in _NF_RUN_MAP:
+        if run.get(rv, {}).get('value') is not None:
+            run_names.add(rv)
+    nf_run = {k: _NF_RUN_MAP[k] for k in run_names}
+
+    def var_fn(name):
+        if name in input_names:
+            return '${' + name + '}'
+        if name in nf_run:
+            return '${task.' + nf_run[name] + '}'
+        return None
+
+    def expr_fn(text):
+        resolved = text
+        if 'memory' in resolved and 'memory' in nf_run:
+            resolved = resolved.replace('memory', 'task.memory', 1)
+        if 'cpu' in resolved and 'cpu' in nf_run:
+            resolved = resolved.replace('cpu', 'task.cpus', 1)
+        if 'time' in resolved and 'time' in nf_run:
+            resolved = resolved.replace('time', 'task.time', 1)
+        return '${' + resolved + '}'
+
+    return interp_script(body, var_fn, expr_fn, joiner='')
 
 
 def _channel_name(name):

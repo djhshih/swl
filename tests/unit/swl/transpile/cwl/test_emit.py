@@ -468,5 +468,167 @@ map call_variant
         self.assertEqual(x_input['valueFrom'], '$(value)')
 
 
+    # ---- shell interpolation tests ----
+
+    def test_shell_interpolation_resolves_inputs_and_run_params(self):
+        from swl.transpile.cwl.emit import _interpolate_shell
+        from swl.dag.node import StepCall
+
+        step = StepCall(
+            id='align', path='/t.sh', bindings={}, outputs=['bam'],
+            task={
+                'body': 'bwa mem -t ${cpu} ${ref} > ${outbase}.bam',
+                'inputs': {'ref': {'type': 'file'}, 'outbase': {'type': 'str'}},
+                'outputs': {'bam': {'type': 'file'}},
+                'run': {'cpu': {'type': 'int', 'value': 2}},
+            },
+        )
+        entry = _interpolate_shell('bwa mem -t ${cpu} ${ref} > ${outbase}.bam', step)
+        self.assertIn('$(', entry)
+        self.assertIn('"bwa mem -t "', entry)
+        self.assertIn(' + 2 + ', entry)
+        self.assertIn('inputs.ref.path', entry)
+        self.assertIn('inputs.outbase', entry)
+
+    def test_shell_interpolation_expression(self):
+        from swl.transpile.cwl.emit import _interpolate_shell
+        from swl.dag.node import StepCall
+
+        step = StepCall(
+            id='sort', path='/t.sh', bindings={}, outputs=['bam'],
+            task={
+                'body': 'samtools sort -@ ${cpu} -m ${memory / cpu} aligned.bam ${outbase}.bam',
+                'inputs': {'outbase': {'type': 'str'}},
+                'outputs': {'bam': {'type': 'file'}},
+                'run': {'cpu': {'type': 'int', 'value': 2}, 'memory': {'type': 'memory', 'value': 8192}},
+            },
+        )
+        entry = _interpolate_shell(
+            'samtools sort -@ ${cpu} -m ${memory / cpu} aligned.bam ${outbase}.bam', step
+        )
+        self.assertIn('$(', entry)
+        self.assertIn('(8192 / 2)', entry)
+        self.assertIn('inputs.outbase', entry)
+
+    def test_shell_interpolation_passes_through_builtins(self):
+        from swl.transpile.cwl.emit import _interpolate_shell
+        from swl.dag.node import StepCall
+
+        step = StepCall(
+            id='t', path='/t.sh', bindings={}, outputs=[],
+            task={
+                'body': 'echo $HOME',
+                'inputs': {},
+                'outputs': {},
+                'run': {},
+            },
+        )
+        entry = _interpolate_shell('echo $HOME', step)
+        self.assertIn('"$HOME"', entry)
+        self.assertIn('$(', entry)
+
+    def test_shell_interpolation_skips_body_without_dollar(self):
+        from swl.transpile.cwl.emit import _interpolate_shell
+        from swl.dag.node import StepCall
+
+        step = StepCall(
+            id='t', path='/t.sh', bindings={}, outputs=[],
+            task={
+                'body': 'echo hello',
+                'inputs': {},
+                'outputs': {},
+                'run': {},
+            },
+        )
+        entry = _interpolate_shell('echo hello', step)
+        self.assertEqual(entry, 'echo hello')
+
+    def test_shell_interpolation_multi_line(self):
+        from swl.transpile.cwl.emit import _interpolate_shell
+        from swl.dag.node import StepCall
+
+        step = StepCall(
+            id='sort', path='/t.sh', bindings={}, outputs=['bam', 'bai'],
+            task={
+                'body': 'samtools sort -@ ${cpu} -m ${memory / cpu} aligned.bam ${outbase}.bam\nsamtools index ${outbase}.bam ${outbase}.bai',
+                'inputs': {'outbase': {'type': 'str'}},
+                'outputs': {'bam': {'type': 'file'}, 'bai': {'type': 'file'}},
+                'run': {'cpu': {'type': 'int', 'value': 2}, 'memory': {'type': 'memory', 'value': 8192}},
+            },
+        )
+        entry = _interpolate_shell(
+            'samtools sort -@ ${cpu} -m ${memory / cpu} aligned.bam ${outbase}.bam\nsamtools index ${outbase}.bam ${outbase}.bai',
+            step,
+        )
+        self.assertIn('\\n', entry)
+        self.assertIn('$(', entry)
+        self.assertIn('inputs.outbase', entry)
+
+    def test_shell_interpolation_in_transpiled_tool(self):
+        from swl.dag.node import DAG, Field, Input, OutputSpec, StepCall
+
+        ref_input = Input('ref', type='file', desc=None)
+        ref = Field(ref_input, 'ref')
+        task = StepCall(
+            id='align', path='/tmp/align.sh',
+            bindings={'ref': ref, 'outbase': Field(Input('outbase'), 'outbase')},
+            outputs=['bam'],
+            task={
+                'body': 'bwa mem -t ${cpu} ${ref} > ${outbase}.bam',
+                'inputs': {
+                    'ref': {'type': 'file', 'desc': None},
+                    'outbase': {'type': 'str', 'desc': None},
+                },
+                'outputs': {
+                    'bam': {'type': 'file', 'default': None, 'desc': None},
+                },
+                'run': {
+                    'cpu': {'type': 'int', 'value': 2},
+                },
+            },
+        )
+        dag = DAG(
+            inputs={
+                'ref': Input('ref', type='file', desc=None),
+                'outbase': Input('outbase', type='str', desc=None),
+            },
+            steps=[task],
+            outputs={'bam': OutputSpec(type='file', desc=None, value=Field(task, 'bam'))},
+        )
+        cwl = transpile_dag_dict(dag.to_dict())
+        tool = next(item for item in cwl['$graph'] if item.get('id') == '#align')
+        entry = tool['requirements'][0]['listing'][0]['entry']
+        self.assertIsInstance(entry, str)
+        self.assertIn('$(', entry)
+        self.assertIn('inputs.ref.path', entry)
+        self.assertIn('inputs.outbase', entry)
+        req_classes = [r['class'] for r in tool['requirements']]
+        self.assertIn('InlineJavascriptRequirement', req_classes)
+
+    def test_shell_interpolation_no_dollar_does_not_add_inlinejs(self):
+        from swl.dag.node import DAG, Input, OutputSpec, StepCall, Field
+
+        task = StepCall(
+            id='t', path='/t.sh', bindings={}, outputs=['out'],
+            task={
+                'body': 'echo hello',
+                'inputs': {},
+                'outputs': {'out': {'type': 'file', 'default': None}},
+                'run': {},
+            },
+        )
+        dag = DAG(
+            inputs={},
+            steps=[task],
+            outputs={'out': OutputSpec(type='file', desc=None, value=Field(task, 'out'))},
+        )
+        cwl = transpile_dag_dict(dag.to_dict())
+        tool = next(item for item in cwl['$graph'] if item.get('id') == '#t')
+        entry = tool['requirements'][0]['listing'][0]['entry']
+        self.assertEqual(entry, 'echo hello')
+        req_classes = [r['class'] for r in tool['requirements']]
+        self.assertNotIn('InlineJavascriptRequirement', req_classes)
+
+
 if __name__ == '__main__':
     unittest.main()
