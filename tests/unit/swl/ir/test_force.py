@@ -596,8 +596,8 @@ class TestForce(ut.TestCase):
                 Record({'c': Literal(3)}),
             )
         })
-        self.assertEqual(sorted(outputs.keys()), ['a', 'b', 'c'])
-        self.assertIsInstance(outputs['a'], Literal)
+        self.assertEqual(sorted(outputs.keys()), ['result.a', 'result.b', 'result.c'])
+        self.assertIsInstance(outputs['result.a'], Literal)
 
     def test_merge_flattening_collapses_input_record_merge_in_outputs(self):
         forcer = _forcer()
@@ -609,8 +609,8 @@ class TestForce(ut.TestCase):
                 Record({'y': Literal(1)}),
             )
         })
-        self.assertEqual(sorted(outputs.keys()), ['y'])
-        self.assertEqual(outputs['y'].value, 1)
+        self.assertEqual(sorted(outputs.keys()), ['result.y'])
+        self.assertEqual(outputs['result.y'].value, 1)
 
     def test_merge_flattening_step_bindings(self):
         forcer = _forcer()
@@ -694,8 +694,8 @@ class TestForce(ut.TestCase):
                 ),
             ),
         })
-        self.assertEqual(sorted(flat.keys()), ['a', 'b', 'c'])
-        for name in ('a', 'b', 'c'):
+        self.assertEqual(sorted(flat.keys()), ['result.a', 'result.b', 'result.c'])
+        for name in ('result.a', 'result.b', 'result.c'):
             self.assertNotIsInstance(flat[name], (Merge, Record),
                                      f'{name} should be a leaf binding, not Merge/Record')
 
@@ -789,9 +789,9 @@ class TestForce(ut.TestCase):
                 'b': Record({'c': Literal(3)}),
             }),
         })
-        self.assertIn('a', flat)
-        self.assertIn('b', flat)
-        self.assertEqual(flat['a'].value, 1)
+        self.assertIn('nested.a', flat)
+        self.assertIn('nested.b.c', flat)
+        self.assertEqual(flat['nested.a'].value, 1)
 
     # P1c: merge output patterns -------------------------------------------
 
@@ -959,7 +959,7 @@ class TestForce(ut.TestCase):
         dag = _finalize_dag(forcer,
             Record({'nested': Record({'a': Literal(1)})})
         )
-        self.assertIn('a', dag.outputs)
+        self.assertIn('nested.a', dag.outputs)
         self.assertNotIn('nested', dag.outputs)
 
 

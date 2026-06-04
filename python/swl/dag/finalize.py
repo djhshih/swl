@@ -80,8 +80,20 @@ def _flatten_step_bindings(forcer):
         step.bindings = _flatten_named_values(forcer, step.bindings)
 
 
+def _flatten_nested_values(forcer, values, prefix=''):
+    flat = {}
+    for name, value in values.items():
+        key = f'{prefix}{name}' if prefix else name
+        flattened = _flatten_merge_value(forcer, value)
+        if isinstance(flattened, Record):
+            flat.update(_flatten_nested_values(forcer, flattened.fields, prefix=f'{key}.'))
+        else:
+            flat[key] = flattened
+    return flat
+
+
 def _flatten_outputs(forcer, outputs):
-    return _flatten_named_values(forcer, outputs)
+    return _flatten_nested_values(forcer, outputs)
 
 
 def _output_desc(value):
@@ -89,6 +101,10 @@ def _output_desc(value):
     if isinstance(normalized, Field) and isinstance(normalized.source, StepCall):
         spec = (normalized.source.task or {}).get('outputs', {}).get(normalized.name, {})
         return spec.get('desc')
+    if isinstance(normalized, Input):
+        return normalized.desc
+    if isinstance(normalized, Field) and isinstance(normalized.source, Input):
+        return normalized.source.desc
     return None
 
 

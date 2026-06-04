@@ -1,7 +1,7 @@
 import json
 
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
-from swl.transpile.common import emit_name, interp_script, run_value, source_kind, step_name, workflow_name, word_interp
+from swl.transpile.common import emit_name, interp_script, run_value, source_kind, step_name, workflow_name, word_interp, _flatten_output_names
 from swl.types import to_nf_qualifier
 
 
@@ -13,6 +13,7 @@ def transpile_dag_file(path):
 def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     dag = DAG.from_dict(data)
     dag.validate()
+    dag.outputs = _flatten_output_names(dag.outputs)
     _validate_supported(dag)
 
     processes = {}

@@ -15,6 +15,7 @@ from swl.transpile.common import (
     table_columns,
     word_interp,
     workflow_name,
+    _flatten_output_names,
 )
 
 
@@ -26,6 +27,7 @@ def transpile_dag_file(path):
 def transpile_dag_dict(data, workflow_id='main', _top_level=True, wrap_map=None):
     dag = DAG.from_dict(data)
     dag.validate()
+    dag.outputs = _flatten_output_names(dag.outputs)
     _validate_supported(dag)
 
     rule_names = {}

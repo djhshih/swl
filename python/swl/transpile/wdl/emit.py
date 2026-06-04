@@ -10,6 +10,7 @@ from swl.transpile.common import (
     table_columns,
     workflow_name,
     word_interp,
+    _reconstruct_outputs,
 )
 from swl.types import to_wdl_type
 
@@ -24,6 +25,7 @@ def transpile_dag_file(path):
 def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     dag = DAG.from_dict(data)
     dag.validate()
+    dag.outputs = _reconstruct_outputs(dag.outputs)
     for name, output in dag.outputs.items():
         value = output.value if isinstance(output, OutputSpec) else output
         if isinstance(value, Literal):

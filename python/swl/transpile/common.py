@@ -1,4 +1,5 @@
-from swl.dag.node import Field
+from swl.dag.node import Field, OutputSpec, Record
+from swl.dag.binding import binding_to_dict
 
 
 def normalize_identifier(name, default, *, upper=False):
@@ -125,3 +126,40 @@ def column_input_name(source, col_name):
         if isinstance(col, dict) and col.get('source') == 'input':
             return col['name']
     return col_name
+
+
+def _flatten_output_names(outputs):
+    """Replace dots with underscores in output names for flat targets (NF, SMK)."""
+    return {
+        name.replace('.', '_'): spec
+        for name, spec in outputs.items()
+    }
+
+
+def _reconstruct_outputs(outputs):
+    """Convert dotted output keys into nested Record values for targets that support records (WDL, CWL).
+
+    {'a.b': OutputSpec(type='int', ...), 'c': OutputSpec(type='str', ...)}
+    → {'a': OutputSpec(type=None, value=Record({'b': OutputSpec(type='int', ...)})),
+        'c': OutputSpec(type='str', ...)}
+    """
+    dotted = {}
+    flat = {}
+    for name, spec in outputs.items():
+        if '.' in name:
+            root, rest = name.split('.', 1)
+            dotted.setdefault(root, []).append((rest, spec))
+        else:
+            flat[name] = spec
+
+    for root, children in dotted.items():
+        child_outputs = _reconstruct_outputs(dict(children))
+        record_fields = {}
+        for child_name, child_spec in child_outputs.items():
+            record_fields[child_name] = child_spec.value
+        flat[root] = OutputSpec(
+            type=None,
+            value=Record(record_fields),
+        )
+
+    return flat
