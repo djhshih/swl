@@ -8,12 +8,13 @@
 
 The `+` token is now recognized by the lexer but the parser does not yet handle it. The spec does not define `+` semantics. Update the parser when the grammar is extended.
 
----
+## Known remaining gaps
 
-## Resolved
-
-- **Output descriptions populated** — `_build_output_specs` now propagates `desc` from step `task.outputs[name].desc` for `Field(StepCall, name)` outputs.
-- **Output type inference for nested Field chains** — `_infer_output_type` now walks nested `Field` chains to resolve the terminal step output's type.
-- **NF transpiler record-binding error messages** — Improved to include field names and actionable guidance.
-- **Optionality inference paths** — `_prune_unused_inputs` now routes through `_input()` method which checks `endswith('?')`.
-- **WDL transpiler `map_by` support** — Implemented via `collect_by_key()` in prior session.
+| Gap | Status |
+|-----|--------|
+| Output descriptions (`OutputSpec.desc` is always `None`) | Not implemented — force.py always sets `desc=None` |
+| Output type inference for complex bindings (nested fields, records) | Falls back to `None` → transpilers default to `string` |
+| Optionality inference for all Input creation paths | Core paths covered; generated-map inputs may miss optionality |
+| WDL transpiler: no `map_by` (grouped scatter) support | Explicitly rejected |
+| NF transpiler: rejects record bindings | Safety check; records should be flattened before reaching transpilers |
+| `+` operator token not in lexer | Needed if grammar extends to string concatenation / arithmetic |
