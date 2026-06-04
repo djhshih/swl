@@ -45,7 +45,7 @@ transpile/cwl/
 | `_docker_requirement(run)` | Map `run.image` → `dockerPull` |
 | `_hints_from_run(run)` | Map `run.time` → `TimeLimit` hint |
 | `_binding_source(value)` | Resolve a DAG binding to a CWL `source` string (Input → `#main/name`, StepCall → `#main/step_id`, Field → `#main/root/name`) |
-| `_interp_to_cwl_glob(value)` | Render a SWL `word` interpolation dict to a CWL expression `$(inputs.var + '.ext')` |
+| `_interp_to_cwl_glob(value, input_names=())` | Render a SWL `word` interpolation dict to a CWL expression `$(inputs.var + '.ext')`. Resolves inner variable names in `expr` parts using `input_names` |
 | `_has_expr_interpolation(spec)` | Check if an output spec contains `expr` interpolation parts; if so, `InlineJavascriptRequirement` is added |
 | `_interpolate_shell(body, step)` | Resolve bash `${var}` / `${expr}` references to a `$(...)` CWL JS expression. Input vars → `inputs.name` / `inputs.name.path`, run params → inlined literals, builtins → verbatim |
 | `_validate_supported(dag)` | Validate map_by preconditions, reject literal workflow outputs, validate output interpolation |
@@ -76,7 +76,7 @@ transpile/cwl/
 | **Step output binding** | `source: #main/step_id/output_name` | Cross-step reference |
 | **Field projection** | `source: #main/root/name` + `valueFrom: $(field_path)` | CWL `valueFrom` with `$(...)` expression for nested access |
 | **`word` interpolation in output defaults** | `$(inputs.var + '.literal')` | `word_interp()` from `common.py` with `var_fn=lambda n: f"inputs.{n}"` |
-| **`expr` interpolation in output defaults** | `$((expr) + '.literal')` with `InlineJavascriptRequirement` | Expression text passed through with parens; `InlineJavascriptRequirement` added to tool |
+| **`expr` interpolation in output defaults** | `$((inputs.var / 2) + '.literal')` with `InlineJavascriptRequirement` | Expression text resolved with `inputs.` prefix for known input variables; `InlineJavascriptRequirement` added to tool |
 | **Workflow output** | `outputs[]` with `outputSource` | Type inferred from source binding |
 | **Sub-workflow (no map)** | Embedded `Workflow` node in `$graph` | Recursively transpiled; ID prefixed with step name |
 | **Mapped step (scatter)** | `scatter: [ports]` + `scatterMethod: dotproduct` | Workflow inputs for scatter ports promoted to `Array` types |
@@ -91,7 +91,6 @@ transpile/cwl/
 
 | SWL Concept | Status | Issue |
 |---|---|---|
-| **Expression variable scope (output defaults)** | No `inputs.` prefix for `expr` parts | `${outbase / 2}.bam` in an output default becomes `$((outbase / 2) + '.bam')` — `outbase` is not prefixed with `inputs.` inside the expression. Body interpolation (via `_interpolate_shell`) does prefix correctly |
 
 ### Not Supported (explicitly rejected)
 
@@ -156,9 +155,7 @@ The test suite (`bash test.sh`):
 
 ## Known Limitations
 
-1. **Expression interpolation variable scope (output defaults)**: `${outbase / 2}` in an output default becomes `$((outbase / 2) + '.bam')`. The expression text passes through without `inputs.` prefixing. Users must write `${inputs.outbase / 2}` for expression outputs to reference CWL input variables correctly. Body interpolation (via `_interpolate_shell`) does correctly prefix variables.
-
-2. **Merge bindings not supported**: Merge bindings (from `//` operators at the DAG level) are rejected. These should be flattened at compile time before DAG generation.
+1. **Merge bindings not supported**: Merge bindings (from `//` operators at the DAG level) are rejected. These should be flattened at compile time before DAG generation.
 
 3. **Literal workflow outputs not supported**: Workflow-level outputs that are literal values (not step outputs) are explicitly rejected.
 

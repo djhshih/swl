@@ -146,12 +146,13 @@ def _tool_to_cwl(step, tool_id):
         needs_js = any(_has_expr_interpolation(spec) for spec in definition.get('outputs', {}).values())
     if needs_js:
         requirements.append({'class': 'InlineJavascriptRequirement'})
+    input_names = list(definition.get('inputs', {}).keys())
     tool = {
         'id': tool_id,
         'class': 'CommandLineTool',
         'baseCommand': ['bash', 'script.sh'],
         'inputs': [_tool_input_to_cwl(tool_id, name, spec) for name, spec in definition.get('inputs', {}).items()],
-        'outputs': [_tool_output_to_cwl(tool_id, name, spec) for name, spec in definition.get('outputs', {}).items()],
+        'outputs': [_tool_output_to_cwl(tool_id, name, spec, input_names) for name, spec in definition.get('outputs', {}).items()],
         'requirements': requirements,
     }
     if hints:
@@ -243,12 +244,12 @@ def _tool_input_to_cwl(tool_id, name, spec):
     }
 
 
-def _tool_output_to_cwl(tool_id, name, spec):
+def _tool_output_to_cwl(tool_id, name, spec, input_names=()):
     return {
         'id': f'{tool_id}/{name}',
         'type': to_cwl_type(spec.get('type')),
         'outputBinding': {
-            'glob': _interp_to_cwl_glob(spec.get('default')),
+            'glob': _interp_to_cwl_glob(spec.get('default'), input_names),
         },
         **({'doc': spec.get('desc')} if spec.get('desc') else {}),
     }
@@ -312,15 +313,26 @@ def _validate_supported(dag):
     for step in dag.steps:
         for name, spec in step.task.get('outputs', {}).items():
             try:
-                _interp_to_cwl_glob(spec.get('default'))
+                _interp_to_cwl_glob(spec.get('default'), step.task.get('inputs', {}).keys())
             except ValueError as exc:
                 raise ValueError(f'Unsupported step output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
 
 
-def _interp_to_cwl_glob(value):
+def _interp_to_cwl_glob(value, input_names=()):
     if value is None:
         return '*'
-    rendered = word_interp(value, lambda text: repr(text), lambda name: f"inputs.{name}", lambda text: f"({text})", joiner=' + ')
+    input_set = set(input_names) if input_names else set()
+
+    def _resolve_expr(text):
+        if not input_set:
+            return f"({text})"
+        resolved = text
+        for var in re.findall(r'[A-Za-z_]\w*', text):
+            if var in input_set:
+                resolved = resolved.replace(var, f'inputs.{var}', 1)
+        return f"({resolved})"
+
+    rendered = word_interp(value, lambda text: repr(text), lambda name: f"inputs.{name}", _resolve_expr, joiner=' + ')
     if rendered is None:
         raise ValueError(f'Unsupported interpolation for CWL glob: {value!r}')
     return '$(' + rendered + ')'
