@@ -1,7 +1,7 @@
 #@  Stub merge task
 #
 # in
-#   bcf file | input variant calls
+#   bcf [file] | input variant calls
 #   outbase str | output base name
 #
 # out

@@ -29,14 +29,14 @@ def transpile_dag_dict(data, workflow_id='main'):
     for step in dag.steps:
         for name, value in list(step.bindings.items()):
             if isinstance(value, Record):
-                tool, step_entry, source = _emit_record_tool(step.id, name, value, dag)
+                tool, step_entry, source = _emit_record_tool(workflow_id, step.id, name, value, dag)
                 record_tools.append(tool)
                 record_map[(step.id, name)] = (step_entry, source)
 
     for name, output in list(dag.outputs.items()):
         value = output.value if isinstance(output, OutputSpec) else output
         if isinstance(value, Record):
-            tool, step_entry, source = _emit_record_tool('outputs', name, value, dag)
+            tool, step_entry, source = _emit_record_tool(workflow_id, 'outputs', name, value, dag)
             record_tools.append(tool)
             record_output_map[name] = (step_entry, source)
 
@@ -56,9 +56,19 @@ def transpile_dag_dict(data, workflow_id='main'):
         if getattr(step, 'map', None) is None:
             continue
         source = step.map.get('source', {})
-        for name, typ in (getattr(step, 'input_schema', None) or {}).items():
+        schema = (getattr(step, 'input_schema', None) or {})
+        for name, typ in schema.items():
             if name not in workflow_inputs:
                 workflow_inputs[name] = {'type': to_array_type(typ), 'desc': None}
+            elif source_kind(source) == 'table':
+                column = table_columns(source).get(name, {})
+                if isinstance(column, dict) and column.get('source') == 'input' and column.get('name') == name:
+                    workflow_inputs[name] = {'type': to_array_type(typ), 'desc': None}
+        if source_input_name(source) is not None:
+            src_name = source_input_name(source)
+            if src_name in workflow_inputs:
+                for name, typ in schema.items():
+                    workflow_inputs[name] = {'type': to_array_type(typ), 'desc': None}
 
     all_tools = tools[:]
     for mt in map_by_tools.values():
@@ -95,11 +105,11 @@ def transpile_dag_dict(data, workflow_id='main'):
             outputs.append(_workflow_output_to_cwl(workflow_id, name, output))
 
     workflow = {
-        'id': '#main',
+        'id': f'#{workflow_id}',
         'class': 'Workflow',
         'inputs': [_workflow_input_to_cwl(workflow_id, name, spec) for name, spec in workflow_inputs.items()],
         'outputs': outputs,
-        'requirements': [{'class': 'ScatterFeatureRequirement'}, {'class': 'MultipleInputFeatureRequirement'}],
+        'requirements': [{'class': 'ScatterFeatureRequirement'}, {'class': 'MultipleInputFeatureRequirement'}, {'class': 'SubworkflowFeatureRequirement'}, {'class': 'StepInputExpressionRequirement'}],
         'steps': wf_steps,
     }
     return {
@@ -112,15 +122,7 @@ def _tool_to_cwl(step, tool_id):
     definition = step.task or {}
     if definition.get('class') == 'Workflow':
         packed = transpile_dag_dict(definition['dag'], workflow_id=tool_id[1:])
-        graph = []
-        for item in packed.get('$graph', []):
-            copied = dict(item)
-            if copied.get('id') == '#main':
-                copied['id'] = tool_id
-            elif copied.get('id', '').startswith('#main/'):
-                copied['id'] = copied['id'].replace('#main/', f'{tool_id}/', 1)
-            graph.append(copied)
-        return graph
+        return packed.get('$graph', [])
     run = definition.get('run', {})
     body = definition.get('body', '')
     entry = _interpolate_shell(body, step)
@@ -172,7 +174,7 @@ def _workflow_input_to_cwl(workflow_id, name, spec):
 
 
 def _workflow_output_to_cwl(workflow_id, name, output):
-    source = _binding_source(output.value)
+    source = _binding_source(output.value, workflow_id)
     return {
         'id': f'#{workflow_id}/{name}',
         'type': to_cwl_type(output.type),
@@ -188,16 +190,16 @@ def _step_to_cwl(workflow_id, step, tool_id, record_map=None):
         if (step.id, name) in record_map:
             _, source = record_map[(step.id, name)]
             inputs.append({
-                'id': f'#main/{step.id}/{name}',
+                'id': f'#{workflow_id}/{step.id}/{name}',
                 'source': source,
             })
         else:
-            inputs.append(_step_input_to_cwl(step.id, name, value))
+            inputs.append(_step_input_to_cwl(workflow_id, step.id, name, value))
     data = {
-        'id': f'#main/{step.id}',
+        'id': f'#{workflow_id}/{step.id}',
         'run': tool_id,
         'in': inputs,
-        'out': [f'#main/{step.id}/{name}' for name in step.outputs],
+        'out': [f'#{workflow_id}/{step.id}/{name}' for name in step.outputs],
     }
     if getattr(step, 'map', None) is not None:
         scatter_ports = step.map.get('scatter') or sorted((getattr(step, 'input_schema', None) or {}).keys())
@@ -205,31 +207,31 @@ def _step_to_cwl(workflow_id, step, tool_id, record_map=None):
             source = step.map.get('source', {})
             if source_input_name(source) is not None:
                 for port in scatter_ports:
-                    if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
-                        data['in'].append({'id': f'#main/{step.id}/{port}', 'source': f'#main/{port}'})
+                    if not any(item['id'] == f'#{workflow_id}/{step.id}/{port}' for item in data['in']):
+                        data['in'].append({'id': f'#{workflow_id}/{step.id}/{port}', 'source': f'#{workflow_id}/{port}'})
             elif source_kind(source) == 'table':
                 columns = table_columns(source)
                 for port in scatter_ports:
                     column = columns.get(port)
-                    source_ref = f'#main/{port}'
+                    source_ref = f'#{workflow_id}/{port}'
                     if isinstance(column, dict) and source_kind(column) == 'input' and 'name' in column:
-                        source_ref = f"#main/{column['name']}"
-                    if not any(item['id'] == f'#main/{step.id}/{port}' for item in data['in']):
-                        data['in'].append({'id': f'#main/{step.id}/{port}', 'source': source_ref})
-            data['scatter'] = [f'#main/{step.id}/{port}' for port in scatter_ports]
+                        source_ref = f"#{workflow_id}/{column['name']}"
+                    if not any(item['id'] == f'#{workflow_id}/{step.id}/{port}' for item in data['in']):
+                        data['in'].append({'id': f'#{workflow_id}/{step.id}/{port}', 'source': source_ref})
+            data['scatter'] = [f'#{workflow_id}/{step.id}/{port}' for port in scatter_ports]
             data['scatterMethod'] = 'dotproduct'
     return data
 
 
-def _step_input_to_cwl(task_id, name, value):
+def _step_input_to_cwl(workflow_id, task_id, name, value):
     if isinstance(value, Literal):
         return {
-            'id': f'#main/{task_id}/{name}',
+            'id': f'#{workflow_id}/{task_id}/{name}',
             'default': value.value,
         }
     result = {
-        'id': f'#main/{task_id}/{name}',
-        'source': _binding_source(value),
+        'id': f'#{workflow_id}/{task_id}/{name}',
+        'source': _binding_source(value, workflow_id),
     }
     field_path = field_path_after_first(value)
     if field_path is not None:
@@ -281,25 +283,25 @@ def _docker_requirement(run):
     return {'class': 'DockerRequirement', 'dockerPull': image}
 
 
-def _binding_source(value):
+def _binding_source(value, workflow_id='main'):
     if isinstance(value, Input):
-        return f'#main/{value.name}'
+        return f'#{workflow_id}/{value.name}'
     if isinstance(value, Literal):
         return value.value
     if isinstance(value, StepCall):
-        return f'#main/{value.id}'
+        return f'#{workflow_id}/{value.id}'
     if isinstance(value, Field):
         src = value.source
         if isinstance(src, Input):
-            return f'#main/{src.name}/{value.name}'
+            return f'#{workflow_id}/{src.name}/{value.name}'
         if isinstance(src, StepCall):
-            return f'#main/{src.id}/{value.name}'
+            return f'#{workflow_id}/{src.id}/{value.name}'
         if isinstance(src, Field):
             root, root_name, _ = field_chain_parts(value)
             if isinstance(root, Input):
-                return f'#main/{root.name}'
+                return f'#{workflow_id}/{root.name}'
             if isinstance(root, StepCall):
-                return f'#main/{root.id}/{root_name}'
+                return f'#{workflow_id}/{root.id}/{root_name}'
     raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
 
 
@@ -366,8 +368,11 @@ def _interpolate_shell(body, step):
     def _resolve(name):
         scope = classify_var(name, input_names, output_names, run_names)
         if scope == 'input':
-            if input_types.get(name) == 'file':
+            typ = input_types.get(name)
+            if typ == 'file':
                 return f'inputs.{name}.path'
+            if typ == '[file]':
+                return f'inputs.{name}.map(function(f){{return f.path;}}).join(" ")'
             return f'inputs.{name}'
         if scope == 'run':
             val = run_values.get(name)
@@ -432,9 +437,9 @@ def _infer_record_field_type(field_value, dag):
     return 'string'
 
 
-def _emit_record_tool(step_id, binding_name, record, dag):
+def _emit_record_tool(workflow_id, step_id, binding_name, record, dag):
     tool_id = f'#rec_{step_id}_{binding_name}'
-    step_entry_id = f'#main/rec_{step_id}_{binding_name}'
+    step_entry_id = f'#{workflow_id}/rec_{step_id}_{binding_name}'
     field_names = sorted(record.fields.keys())
     tool_inputs = []
     step_inputs = []
@@ -445,7 +450,7 @@ def _emit_record_tool(step_id, binding_name, record, dag):
         if isinstance(fvalue, Literal):
             step_inputs.append({'id': f'{step_entry_id}/{fname}', 'default': fvalue.value})
         elif isinstance(fvalue, (Input, Field, StepCall)):
-            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'source': _binding_source(fvalue)})
+            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'source': _binding_source(fvalue, workflow_id)})
         else:
             step_inputs.append({'id': f'{step_entry_id}/{fname}', 'default': None})
     js_lines = ['var fs = require("fs");']
