@@ -15,7 +15,7 @@ transpile/nf/
 ├── __init__.py     # exports transpile_dag_dict, transpile_dag_file
 ├── __main__.py     # python -m entry point
 ├── cli.py          # CLI wrapper (uses transpile/_cli.py)
-└── emit.py         # ~344 lines, the transpiler
+└── emit.py         # transpiler
 ```
 
 ### Entry points
