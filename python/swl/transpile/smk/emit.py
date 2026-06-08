@@ -3,16 +3,13 @@ import re
 
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.transpile.common import (
-    column_input_name,
     emit_name,
     field_chain_parts,
     field_path_after_first,
     interp_script,
     run_value,
-    source_input_name,
     source_kind,
     step_name,
-    table_columns,
     word_interp,
     workflow_name,
     _flatten_output_names,
@@ -168,14 +165,14 @@ def _task_to_rule(step, dag, wrap_map=None):
     body = task.get('body', '')
     rname = _rule_name(step.id)
     is_mapped = step.map is not None
-    is_map_by = is_mapped and step.map.get('group_by') is not None
-
-    if is_map_by:
-        return _mapped_by_step_to_smk(step, dag, wrap_map)
 
     scatter_ports = set()
     if is_mapped:
-        scatter_ports = set(step.map.get('scatter', []))
+        group_by = step.map.get('group_by')
+        if group_by:
+            scatter_ports = {group_by}
+        else:
+            scatter_ports = set(step.map.get('scatter', []))
 
     lines = [f'rule {rname}:', '']
 
@@ -455,80 +452,6 @@ def _output_to_path(name, value, dag):
             parts.append(_output_to_path(f'{name}_{fname}', fval, dag))
         return ', '.join(parts)
     raise ValueError(f'Unsupported output value for Snakemake: {type(value).__name__}')
-
-
-def _mapped_by_step_to_smk(step, dag, wrap_map=None):
-    map_info = step.map or {}
-    group_key = map_info.get('group_by')
-    source = map_info.get('source', {})
-    input_schema = step.input_schema or {}
-    task = step.task or {}
-    body = task.get('body', '')
-    rname = _rule_name(step.id)
-    grp_name = f'group_{rname}'
-    key_wildcard = f'{_san(rname)}_key'
-    lines = []
-
-    col_names = list(input_schema.keys())
-    if group_key and group_key in col_names:
-        col_names = [group_key] + [n for n in col_names if n != group_key]
-
-    src_name = source_input_name(source)
-    src_cols = table_columns(source)
-
-    lines.append(f'# map_by: group by {group_key}, then apply {rname}')
-    lines.append('')
-
-    lines.append(f'rule {grp_name}:')
-    lines.append('    input:')
-    if src_name:
-        for col in col_names:
-            col_binding = src_cols.get(col, {})
-            col_src_name = col_binding.get('name', col) if isinstance(col_binding, dict) else col
-            sep = '/' if col_src_name else ''
-            pattern = 'inputs/' + col_src_name + sep + '{' + col + '}'
-            lines.append(f'        {_san(col)}={pattern!r},')
-        lines.append('    params:')
-        lines.append(f'        group_key="""{group_key}""",')
-    else:
-        for col in col_names:
-            binding = step.bindings.get(col)
-            path_expr = _binding_to_path(binding, col, True, {col}, wrap_map)
-            lines.append(f'        {_san(col)}={path_expr},')
-    lines.append('    output:')
-    lines.append(f'        groups=directory("results/{rname}/group/{{{key_wildcard}}}"),')
-    lines.append('    run:')
-    lines.append('        import json, os')
-    lines.append(f'        keys = set()')
-    lines.append(f'        # TODO: read column data, group by {group_key}')
-    lines.append(f'        # For each key value, write results to directory')
-    lines.append(f'        os.makedirs(str(wildcards.{key_wildcard}), exist_ok=True)')
-    lines.append('')
-
-    lines.append(f'rule {rname}:')
-    lines.append('    input:')
-    lines.append(f'        groups="results/{rname}/group/{{{key_wildcard}}}",')
-    lines.append('    output:')
-    for out_name in step.outputs:
-        default_spec = task.get('outputs', {}).get(out_name, {}).get('default')
-        if default_spec:
-            rendered = _interp_to_smk(default_spec)
-            if rendered is not None:
-                path_expr = repr(rendered)
-            else:
-                path_expr = repr(f'results/{{{key_wildcard}}}/{out_name}')
-        else:
-            path_expr = repr(f'results/{{{key_wildcard}}}/{out_name}')
-        lines.append(f'        {_san(out_name)}={path_expr},')
-    lines.append('    shell:')
-    if body.strip():
-        interp_body = _interpolate_shell(body, step)
-        lines.append(f'        "{interp_body}"')
-    else:
-        lines.append(f'        "tool {{input.groups}} > {{output}}"')
-    lines.append('')
-
-    return '\n'.join(lines)
 
 
 def _subworkflow_to_smk(step, parent_id):
