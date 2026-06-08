@@ -198,11 +198,12 @@ map call_variant
         with self.assertRaisesRegex(ValueError, 'Workflow must evaluate to a function'):
             force_file(os.path.join(root, 'literal_output.swl'), files)
 
-    def test_imported_workflow_output_transpiles_as_subworkflow(self):
+    def test_imported_workflow_inlines_process(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'import_partial.swl'), files)
         nf = transpile_dag_dict(dag.to_dict())
-        self._assert_nf_contains(nf, 'MAIN_PARTIAL(')
+        self._assert_nf_contains(nf, 'ALIGN(')
+        self.assertNotIn('MAIN_PARTIAL(', nf)
 
     def test_rejects_merged_task_input_binding(self):
         bad = {
@@ -235,17 +236,19 @@ map call_variant
         self.assertIn('tuple', nf)
         self.assertIn('path(fastq1)', nf)
 
-    def test_batch_mapped_workflow_emits_scatter(self):
+    def test_batch_mapped_workflow_inlines_pipeline(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'batch_workflow.swl'), files)
         nf = transpile_dag_dict(dag.to_dict())
-        self._assert_nf_contains(nf, '.join(')
+        self._assert_nf_contains(nf, 'ALIGN(fastq1_ch, fastq2_ch,')
+        self._assert_nf_contains(nf, 'MERGE(ALIGN.out.bam.toList()')
 
-    def test_batch_mapped_simple_lambda_emits_scatter(self):
+    def test_batch_mapped_simple_lambda_emits_no_join(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'batch_lambda.swl'), files)
         nf = transpile_dag_dict(dag.to_dict())
-        self._assert_nf_contains(nf, '.join(')
+        self._assert_nf_contains(nf, 'MERGE(')
+        self.assertNotIn('.join(', nf)
 
     def test_map_by_transpile_emits_groupTuple(self):
         bad = {
@@ -270,11 +273,14 @@ map call_variant
         nf = transpile_dag_dict(bad)
         self._assert_nf_contains(nf, 'groupTuple')
 
-    def test_root_partial_map_transpiles_as_scatter(self):
+    def test_root_partial_map_inlines_pipeline(self):
         files, root = self._files()
         dag = force_file(os.path.join(root, 'map_root.swl'), files)
         nf = transpile_dag_dict(dag.to_dict())
-        self._assert_nf_contains(nf, '.join(')
+        self._assert_nf_contains(nf, 'SORT(ALIGN.out.bam, outbase)')
+        self._assert_nf_contains(nf, 'CALL(SORT.out.bam,')
+        self._assert_nf_contains(nf, 'emit: bam')
+        self.assertNotIn('.join(', nf)
 
     def test_process_name_sanitization(self):
         from swl.transpile.nf.emit import _process_name
@@ -312,7 +318,7 @@ map call_variant
             outputs={'x': OutputSpec(type='file?', desc=None, optional=True, value=Input('x', type='file?', desc=None, optional=True))},
         )
         nf = transpile_dag_dict(dag.to_dict())
-        self._assert_nf_contains(nf, 'x_out = x_ch', 'emit: x_out')
+        self._assert_nf_contains(nf, 'x = x_ch', 'emit: x')
 
 
     # Q5e: record-binding error messages -----------------------------------

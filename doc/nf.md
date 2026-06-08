@@ -2,9 +2,9 @@
 
 ## Overview
 
-The Nextflow transpiler (`python/swl/transpile/nf/`) converts compiled SWL DAGs into Nextflow DSL2 `process` + `workflow` blocks. It follows the same architecture as the CWL, WDL, and Snakemake transpilers. The transpiler is ~378 lines of Python (`emit.py`).
+The Nextflow transpiler (`python/swl/transpile/nf/`) converts compiled SWL DAGs into Nextflow DSL2 `process` + `workflow` blocks. The transpiler is ~519 lines of Python (`emit.py`).
 
-**Status:** Implemented. Covers simple processes, pipelines, named ports, resources, output path templates, shell variable interpolation with scope resolution (inputs → `${var}`, run params → `${task.cpus}`/`${task.memory}`/`${task.time}`), mapped sub-workflows (scatter), `map_by` (grouped scatter), and sub-workflow inlining.
+**Status:** Implemented. Covers simple processes, pipelines, named ports, resources, output path templates, shell variable interpolation with scope resolution (inputs → `${var}`, run params → `${task.cpus}`/`${task.memory}`/`${task.time}`), sub-workflow inlining (mapped and unmapped), per-field channel wiring, `map_by` (grouped scatter), and input-sourced maps.
 
 ---
 
@@ -36,12 +36,16 @@ transpile/nf/
 | `_task_to_process(step)` | Convert a task StepCall to a `process { }` block with `input:`, `output:`, `script:`, and directives |
 | `_emit_directives(step)` | Map SWL `run` (cpu, memory, time, image) to Nextflow `cpus`, `memory`, `time`, `container` |
 | `_interp_to_nf(value)` | Render a SWL `word` interpolation dict into a Nextflow string template `"${var}"` |
+| `_collect_processes(dag, processes)` | Recursively collect process names from all nested DAGs |
+| `_emit_processes(dag, lines, processes)` | Recursively emit process blocks from all nested DAGs |
 | `_dag_to_nf(dag, workflow_id, processes)` | Generate the `workflow { }` block with channel creation, process invocation, and output emission |
+| `_inline_dag_steps(dag, channels, lines, processes)` | Process all steps in a DAG, emitting process calls directly (handles mapped, unmapped, and nested workflow steps) |
+| `_inline_workflow_step(step, channels, lines, processes)` | Inline a non-mapped workflow step's inner DAG into the current workflow |
 | `_binding_to_channel(binding, channels, current_step)` | Convert a DAG binding to a Nextflow channel expression |
 | `_input_channel(name, spec)` | Emit `Channel.fromPath()` / `Channel.value()` from workflow input specs |
-| `_mapped_step_to_call(step, channels, processes)` | Emit channel wiring for a mapped (scatter) step: join all input channels into a single tuple |
+| `_mapped_step_to_call(step, channels, processes)` | Emit channel wiring for a mapped (scatter) task step |
+| `_mapped_workflow_step_to_call(step, channels, processes)` | Emit per-field channels and inline inner processes for a mapped workflow step |
 | `_mapped_by_step_to_call(step, channels, processes)` | Emit `groupTuple()` chain for `map_by` grouped scatter |
-| `_subworkflow_to_nf(step, parent_id)` | Recursively transpile sub-workflow steps (inline `workflow { }` blocks) |
 | `_validate_supported(dag)` | Reject unsupported constructs: literal workflow outputs |
 
 ---
@@ -55,31 +59,32 @@ transpile/nf/
 | **Task step** | `process { }` with `script:` | Script body interpolated via `interp_script()` |
 | **Shell variable interpolation (`${var}`)** | `${var}` / `${task.*}` in `script:` | Input vars → `${var}` (Nextflow resolves from `input:`), run params → `${task.cpus}` / `${task.memory}` / `${task.time}` |
 | **Shell expression interpolation (`${expr}`)** | `${...}` with resolved run vars | `${memory / cpu}` → `${task.memory / task.cpus}`. Input vars pass through verbatim |
-| **Named input ports** | `input:` with `path`/`val` qualifiers | Files → `path name`, strings → `val name`. Mapped steps use `tuple(...)` input |
+| **Named input ports** | `input:` with `path`/`val` qualifiers | Files → `path name`, strings → `val name`. Mapped tasks use `tuple(...)` input |
 | **Named output ports** | `output:` with `emit:` name | Output paths use SWL `default` pattern rendered as `"${var}"` template |
 | **`run.cpu`** | `cpus <value>` directive | |
 | **`run.memory`** | `memory '<value> MB'` directive | Value converted to MB |
 | **`run.time`** | `time '<value>m'` directive | Value converted to minutes |
 | **`run.image`** | `container '<value>'` directive | |
 | **Workflow inputs** | `Channel.fromPath()` / `Channel.value()` | Files → `fromPath(params.name)`, strings → `value(params.name)` |
+| **Input-sourced map inputs** | `Channel.fromList(params.name)` | Array inputs for mapped steps use `fromList` |
 | **Input binding (workflow input)** | `<name>_ch` channel reference | Channels created from workflow inputs |
 | **Input binding (literal)** | `Channel.value(val)` | Inline literal channel |
 | **Step output binding** | `PROCESS.out.emit_name` | References named output port |
 | **Field projection** | `.map{ it.field }` | Project field from tuple channel |
 | **`word` interpolation in output defaults** | Nextflow string template `"${var}"` | `word_interp()` from `common.py` with `var_fn=lambda n: f"${{{n}}}"` |
 | **Shell variable interpolation** | `interp_script()` via `_interpolate_shell` | Input vars → `${var}`, run vars → `${task.cpus}`/`${task.memory}`/`${task.time}`. Expressions resolve inner run vars |
-| **Workflow output** | `<name>_out = <channel>` + `emit:` | Named emit declaration in workflow block |
-| **Sub-workflow (no map)** | Inline `workflow { }` block | Recursively transpiled; appears as separate workflow block in output |
+| **Workflow output** | `<name> = <channel>` + `emit:` | Named emit declaration in workflow block (no `_out` suffix) |
+| **Sub-workflow (no map)** | Inlined in entry workflow | Inner processes emitted at top level, wired directly in entry workflow; no separate `workflow { }` block |
+| **Mapped workflow step** | Per-field channels + inlined pipeline | Struct fields extracted via `.map{ x -> x.field }`, inner processes wired directly as a pipeline; no sub-workflow wrapper |
+| **Mapped task step (table-source)** | `.join()` into tuple + process call | Input channels from table columns joined into a single tuple channel for the mapped process |
+| **`[file]` type qualifier** | `path` qualifier | `to_nf_qualifier()` now handles `[file]` types |
 
 ### Weakly Supported
 
 | SWL Concept | Status | Issue |
 |---|---|---|
-| **Mapped step (scatter)** | Single-tuple input | All input channels are `.join()`ed into one tuple, process declares `tuple path(...)` input. Works but consumes all ports in one dimension |
 | **`map_by` (grouped scatter)** | `groupKey` + `groupTuple` | Uses Nextflow 22.10+ `groupKey` for keyed grouping. No per-group validation |
-| **Mapped sub-workflow outputs** | `.toList()` on output channels | Mapped step outputs use `.toList()` to collect all scatter results into a single channel (may be memory-intensive for many shards) |
-| **`[file]` (array of files)** | Falls back to `val` | `to_nf_qualifier()` lacks `[file]` type → emitted as `val` instead of `path` with multiplicity |
-| **Sub-workflow (mapped)** | Inline workflow block | Mapped sub-workflows emit a separate `workflow { }` block with duplicated input channels; no module encapsulation |
+| **Mapped step output collection** | `.toList()` on output channels | Mapped step outputs use `.toList()` to collect all scatter results into a single channel (may be memory-intensive for many shards) |
 
 ### Not Supported (explicitly rejected)
 
@@ -96,10 +101,10 @@ transpile/nf/
 
 ### Nextflow-specific details
 
-- **Channel wiring**: Workflow input channels are created at the top of the `workflow { }` block. Step inputs are wired by joining channels with `.join()`. If a binding is None (unbound), the input name is assumed to be a workflow-level input channel.
-- **Mapped processes**: Use a single `tuple(...)` input with all ports joined via `.join()`. This avoids managing multiple scatter dimensions.
+- **Channel wiring**: Workflow input channels are created at the top of the `workflow { }` block. Input-sourced map sources use `Channel.fromList(params.x)`. Process calls receive multiple channels directly (no `.join()`) — NF pairs them automatically. `.join()` is only used for combining process output channels with data channels (e.g., `SORT(ALIGN.out.bam, outbase)`).
+- **Sub-workflows**: Both mapped and unmapped sub-workflows are inlined. Their inner processes are emitted at the top level alongside the entry workflow's direct processes. The entry workflow wires all processes directly — no separate `workflow { }` wrapper blocks are emitted.
+- **Mapped workflow steps**: Struct fields are extracted into per-field channels via `.map{ x -> x.field }`. Inner pipeline processes receive these channels directly. Mapped workflow outputs use `.toList()` to gather scatter results.
 - **`map_by`**: Uses `groupKey(value)` + `.groupTuple()` for key-based grouping (Nextflow 22.10+). The grouping is over the source channel elements.
-- **Sub-workflows**: Emitted as standalone `workflow { }` blocks in the same output file, with separate channel declarations.
 - **Output wiring**: Mapped step outputs are collected via `.toList()` before emission. Non-mapped step outputs are wired directly.
 - **Shell interpolation**: The script body is interpolated by `_interpolate_shell()` via `interp_script()` from `common.py`. Both `$var` and `${var}` are recognized. Input variables stay as `${var}` (Nextflow resolves from `input:`). Run params (`cpu`, `memory`, `time`) are remapped to `${task.cpus}`, `${task.memory}`, `${task.time}`. Inner variables in `${expr}` expressions are resolved per scope. Shell builtins (`$HOME`) pass through verbatim.
 
@@ -118,10 +123,11 @@ transpile/nf/
 | Literal input bindings | ✅ Well supported | partial (Literal refs) |
 | Field projections | ✅ Well supported | All (channel wiring) |
 | Workflow `emit:` declarations | ✅ Well supported | All |
-| Sub-workflow (no map) | ✅ Supported | partial, import_partial |
-| Mapped step (scatter) | ⚠️ Weak support | map, panel |
+| Sub-workflow (no map) | ✅ Inlined | partial, import_partial |
+| Mapped workflow step | ✅ Inlined pipeline | map_root, batch_workflow |
+| Mapped task step (scatter) | ✅ Supported | batch, batch_lambda |
 | `map_by` (grouped scatter) | ⚠️ Weak support | map_by |
-| `[file]` array input type | ❌ Falls to `val` | — |
+| `[file]` array input type | ✅ Supported | — |
 | Shell variable interpolation (`${var}`, `$var`) | ✅ Well supported | function (bwa mem line) |
 | `memory/cpu` expression in shell | ✅ Supported | function (`${task.memory / task.cpus}`) |
 | Literal workflow outputs | ❌ Rejected | — |
@@ -138,13 +144,11 @@ The test suite (`bash test.sh`):
 
 ## Known Limitations
 
-1. **`[file]` type qualifier**: Array-of-file types get the default `val` qualifier because `to_nf_qualifier()` in `types.py` only handles `file`, `str`, `int`, `float`. Should emit `path` (or `path` with multiplicity) for `[file]` types.
+1. **Mapped step output collection**: `.toList()` on mapped step outputs collects ALL results into memory. For large scatter jobs this may cause OOM. A streaming approach (e.g., channel of channels) would be more scalable but is not implemented.
 
-2. **Mapped sub-workflow output collection**: `.toList()` on mapped step outputs collects ALL results into memory. For large scatter jobs this may cause OOM. A streaming approach (e.g., channel of channels) would be more scalable but is not implemented.
+2. **Channel join ordering**: `.join()` depends on matching tuple ordering across channels. When inputs come from independent sources (e.g., separate `Channel.fromPath()` globs), element ordering must match. The transpiler does not insert `.sort()` calls to ensure consistent ordering.
 
-3. **Sub-workflow module isolation**: Sub-workflows are inlined as separate `workflow { }` blocks with duplicated channel declarations. They are not extracted into standalone module files with `include` statements. This works for single-file outputs but doesn't scale to multi-module projects.
-
-4. **Channel join ordering**: `.join()` depends on matching tuple ordering across channels. When inputs come from independent sources (e.g., separate `Channel.fromPath()` globs), element ordering must match. The transpiler does not insert `.sort()` calls to ensure consistent ordering.
+3. **Module isolation**: All processes and wiring are emitted into a single file. There is no module extraction with `include` statements. This works for single-file outputs but doesn't scale to multi-module projects.
 
 ---
 
@@ -165,13 +169,13 @@ process ALIGN {
     input:
     path fastq1
     path fastq2
-    val outbase
     path ref
     path ref_amb
     path ref_ann
     path ref_bwt
     path ref_pac
     path ref_sa
+    val outbase
 
     output:
     path "${outbase}.bam", emit: bam
@@ -189,15 +193,47 @@ workflow {
     ref_ch = Channel.fromPath(params.ref, checkIfExists: true)
     ...
 
-    align_ch = fastq1_ch.join(fastq2_ch).join(outbase_ch).join(ref_ch)...
-    ALIGN(align_ch)
-    sort_ch = ALIGN.out.bam.join(outbase_ch)
-    SORT(sort_ch)
+    ALIGN(fastq1_ch, fastq2_ch, ref_ch, ...)
+    SORT(ALIGN.out.bam, outbase_ch)
+    CALL(SORT.out.bam, ref_ch, ref_fai_ch, outbase_ch)
+
+    bam = SORT.out.bam
+    emit: bam
+    bcf = CALL.out.bcf
+    emit: bcf
+}
+```
+
+### Mapped pipeline (`map_root.swl`)
+
+Input DAG: `map call_variant` where `call_variant = align | sort | call`
+
+Output:
+
+```nextflow
+process ALIGN { ... }
+process SORT { ... }
+process CALL { ... }
+
+workflow {
+    xs_ch = Channel.fromList(params.xs)
+
+    fastq1 = xs_ch.map{ x -> file(x.fastq1) }
+    fastq2 = xs_ch.map{ x -> file(x.fastq2) }
+    outbase = xs_ch.map{ x -> x.outbase }
+    ref = xs_ch.map{ x -> file(x.ref) }
+    ref_fai = xs_ch.map{ x -> file(x.ref_fai) }
     ...
 
-    bam_out = SORT.out.bam
-    emit: bam_out
-    bcf_out = CALL.out.bcf
-    emit: bcf_out
+    ALIGN(fastq1, fastq2, ref, ...)
+    SORT(ALIGN.out.bam, outbase)
+    CALL(SORT.out.bam, ref, ref_fai, outbase)
+
+    bam = SORT.out.bam.toList()
+    emit: bam
+    bai = SORT.out.bai.toList()
+    emit: bai
+    bcf = CALL.out.bcf.toList()
+    emit: bcf
 }
 ```
