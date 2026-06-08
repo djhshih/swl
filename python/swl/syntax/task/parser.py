@@ -75,6 +75,7 @@ class Parser:
             raise ValueError(f'Unrecognized section header: {header}')
 
         params = []
+        section_kind = _SECTION_TYPES[header]
         while not self._eof():
             line = self._at().strip()
             if not line:
@@ -92,11 +93,11 @@ class Parser:
                     params[-1].desc = extra
                 self._eat()
                 continue
-            params.append(self._parse_param(self._eat()))
+            params.append(self._parse_param(self._eat(), section_kind))
 
-        return node.Section(_SECTION_TYPES[header], params)
+        return node.Section(section_kind, params)
 
-    def _parse_param(self, line: str) -> node.Param:
+    def _parse_param(self, line: str, section_kind=None) -> node.Param:
         desc = None
         if '|' in line:
             line, desc = line.split('|', 1)
@@ -121,6 +122,12 @@ class Parser:
         names = [x.strip() for x in names_text.split(',') if x.strip()]
         if not names:
             raise ValueError('Parameter line must contain at least one name')
+
+        if param_type is None and section_kind in (node.SectionType.IN, node.SectionType.OUT):
+            raise ValueError(
+                f'in/out parameter must have a type annotation; '
+                f'got {names_text!r} (expected e.g. "str {names_text}" or "file {names_text}")'
+            )
 
         return node.Param(names, param_type, default, desc)
 

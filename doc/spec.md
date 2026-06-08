@@ -216,7 +216,7 @@ Scope rules:
 | `int`   | Integer         |
 | `float` | Floating point  |
 
-### Type Annotations (for documentation)
+### Type Annotations
 
 In task scripts:
 
@@ -229,7 +229,27 @@ In task scripts:
 - `# in`  - input parameter (required)
 - `# out` - output parameter (required)
 - `# run` - runtime resource
-- `?` postfix marks optional input parameter: `file?`
+
+All `in` and `out` parameters **must** have a type annotation. A missing type is a compile-time error.
+
+Valid types:
+- `file`, `str`, `int`, `float`
+- Optional form: append `?` (e.g. `file?`, `str?`)
+- Array form: `[file]`, `[str]`, `[int]`, `[float]` (no optional arrays currently)
+
+`run` parameters may omit the type annotation. When omitted, the type is inferred from the parameter name according to the table below. When present (e.g. `cpu int = 4`), the type must match the expected type for that name.
+
+### Run Parameter Types
+
+| Parameter | Expected type | Default parsing |
+|-----------|---------------|-----------------|
+| `cpu`     | `int`         | Integer literal (e.g. `4`) |
+| `memory`  | `memory`      | Integer with optional unit suffix `K`, `M`, `G`, `T`, `P` (e.g. `8G`). Unitless defaults to megabytes. |
+| `time`    | `time`        | Integer minutes (e.g. `30`) or `D-HH:MM:SS` format (e.g. `2-04:30:00`) |
+| `image`   | `str`         | String literal (e.g. `ubuntu:latest`) |
+
+- Unknown `run` parameter names are silently accepted as untyped (preserved in the task definition for extensibility).
+- The `run` section may contain multiple lines with the same parameter name; later values override earlier ones (last wins).
 
 ---
 
