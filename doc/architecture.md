@@ -368,7 +368,7 @@ The emitted DAG is the compiler artifact consumed by transpilers. Source-level c
 
 **Input:** A normalized `DAG` object.
 
-**Output:** A JSON file written to `dag/<name>.json`.
+**Output:** A JSON file.
 
 **What happens:**
 - `DAG.to_dict()` converts the DAG to a plain dict in the serialized form defined by `dag.md`.

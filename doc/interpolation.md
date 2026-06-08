@@ -65,7 +65,7 @@ Both `Var` and `Expr` parts are checked. Builtins are excluded from validation.
 | `${var}` / `$var` (output port) | `{output.var}` |
 | `${var}` / `$var` (param/run) | `{params.var}` |
 | `${expr}` | `$(( resolved_expr ))` — inner variables resolved per scope |
-| `$HOME`, `$PATH`, etc. | Pass through verbatim |
+| `$var` | Pass through verbatim |
 | Unknown var | Pass through verbatim |
 
 **Scope**: Input names exclude string/int/float types (these go in `params:`). Output names are from `step.outputs`. Run params are `cpu`, `memory`, `time`.
@@ -78,8 +78,7 @@ Both `Var` and `Expr` parts are checked. Builtins are excluded from validation.
 |---|---|
 | `${var}` (known var) | `~{var}` |
 | `${expr}` (known vars inside) | `~{expr}` |
-| `$var` (unbraced) | `{input.cpu}` / `~{cpu}` / `${task.cpus}` / `inputs.cpu` |
-| `$HOME`, `$PATH`, etc. | Pass through verbatim |
+| `$var | Pass through verbatim |
 | Unknown var | Pass through verbatim (`${var}` unchanged) |
 
 **Scope**: `known_vars = set(input_names) | run_var_names`. Run vars (`cpu`, `memory`, `time`) with values are added as WDL task inputs with defaults, so `~{cpu}` and `~{memory / cpu}` resolve correctly in WDL.
@@ -97,7 +96,7 @@ Both `$var` (unbraced) and `${var}` (braced) are handled identically — they ar
 | `${memory}` | `${task.memory}` |
 | `${time}` | `${task.time}` |
 | `${expr}` with run vars | `${task.cpus}`, `${task.memory}` inside expression |
-| `$HOME`, `$PATH`, etc. | Pass through verbatim |
+| `$var | Pass through verbatim |
 | Unknown var | Pass through verbatim |
 
 **Scope**: Input names from `task.inputs`. Run names mapped through `_NF_RUN_MAP = {'cpu': 'cpus', 'memory': 'memory', 'time': 'time'}` to `${task.*}` syntax.
@@ -113,7 +112,7 @@ Both `$var` (unbraced) and `${var}` (braced) are handled identically — they ar
 | `${cpu}` (run param) | Inlined literal value (e.g., `2`) |
 | `${memory}` (run param) | Inlined literal value (e.g., `8192`) |
 | `${expr}` | `(resolved_expr)` — inner vars replaced per scope |
-| `$HOME`, `$PATH`, etc. | Pass through verbatim as JS string literals |
+| `$var` | Pass through verbatim as JS string literals |
 | Unknown var | Pass through verbatim |
 
 **How it works**: The script body is converted to a CWL `$(...)` JavaScript expression that constructs the shell script string at runtime. The `InitialWorkDirRequirement` `entry` becomes:
