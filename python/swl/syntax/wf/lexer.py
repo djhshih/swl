@@ -12,7 +12,6 @@ TokenType = Enum('TokenType',
         'dot',
         'update',
         'chain',
-        'plus',
         'lparen',
         'rparen',
         'lbracket',
@@ -216,9 +215,6 @@ class Lexer:
             if s1 == '|':
                 self.ignore_eol = True
                 return Token(TokenType.chain)
-
-            if s1 == '+':
-                return Token(TokenType.plus)
 
             # tokens with 2 characters
             if self.size() >= 2:
