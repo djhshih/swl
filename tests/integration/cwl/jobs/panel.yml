@@ -1,0 +1,7 @@
+fastq1:
+  class: File
+  path: ../inputs/sample1.r1.fq
+fastq2:
+  class: File
+  path: ../inputs/sample1.r2.fq
+outbase: panel-test

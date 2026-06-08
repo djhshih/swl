@@ -1,0 +1,16 @@
+fastq1:
+  class: File
+  path: ../inputs/sample1.r1.fq
+fastq2:
+  class: File
+  path: ../inputs/sample1.r2.fq
+outbase: sample1
+ref:
+  class: File
+  path: ../inputs/ref.fa
+ref_amb:    { class: File, path: ../inputs/ref.fa.amb }
+ref_ann:    { class: File, path: ../inputs/ref.fa.ann }
+ref_bwt:    { class: File, path: ../inputs/ref.fa.bwt }
+ref_fai:    { class: File, path: ../inputs/ref.fa.fai }
+ref_pac:    { class: File, path: ../inputs/ref.fa.pac }
+ref_sa:     { class: File, path: ../inputs/ref.fa.sa }
