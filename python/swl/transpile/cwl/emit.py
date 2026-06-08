@@ -3,7 +3,7 @@ import os
 import re
 
 from swl.dag.node import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
-from swl.transpile.common import classify_var, field_chain_parts, field_path_after_first, run_value, source_input_name, source_kind, table_columns, word_interp, _reconstruct_outputs
+from swl.transpile.common import classify_var, field_chain_parts, field_path_after_first, run_value, source_input_name, source_kind, table_columns, word_interp, _flatten_output_names
 from swl.types import to_array_type, to_cwl_type
 
 
@@ -15,7 +15,7 @@ def transpile_dag_file(path):
 def transpile_dag_dict(data, workflow_id='main'):
     dag = DAG.from_dict(data)
     dag.validate()
-    dag.outputs = _reconstruct_outputs(dag.outputs)
+    dag.outputs = _flatten_output_names(dag.outputs)
     _validate_supported(dag)
     tools = []
     tool_ids = {}

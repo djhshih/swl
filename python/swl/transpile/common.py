@@ -1,5 +1,4 @@
-from swl.dag.node import Field, OutputSpec, Record
-from swl.dag.binding import binding_to_dict
+from swl.dag.node import Field
 
 
 def normalize_identifier(name, default, *, upper=False):
@@ -136,30 +135,4 @@ def _flatten_output_names(outputs):
     }
 
 
-def _reconstruct_outputs(outputs):
-    """Convert dotted output keys into nested Record values for targets that support records (WDL, CWL).
 
-    {'a.b': OutputSpec(type='int', ...), 'c': OutputSpec(type='str', ...)}
-    → {'a': OutputSpec(type=None, value=Record({'b': OutputSpec(type='int', ...)})),
-        'c': OutputSpec(type='str', ...)}
-    """
-    dotted = {}
-    flat = {}
-    for name, spec in outputs.items():
-        if '.' in name:
-            root, rest = name.split('.', 1)
-            dotted.setdefault(root, []).append((rest, spec))
-        else:
-            flat[name] = spec
-
-    for root, children in dotted.items():
-        child_outputs = _reconstruct_outputs(dict(children))
-        record_fields = {}
-        for child_name, child_spec in child_outputs.items():
-            record_fields[child_name] = child_spec.value
-        flat[root] = OutputSpec(
-            type=None,
-            value=Record(record_fields),
-        )
-
-    return flat
