@@ -32,6 +32,20 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
             raise ValueError(f'WDL does not support literal workflow outputs: {name}')
 
     structs = _collect_structs(dag)
+
+    input_struct_map = {}
+    for step in dag.steps:
+        m = getattr(step, 'map', None) or {}
+        src = m.get('source', {})
+        if isinstance(src, dict) and src.get('source') == 'input' and not m.get('group_by'):
+            src_name = src['name']
+            if src_name not in input_struct_map:
+                schema = step.input_schema or {}
+                input_struct_map[src_name] = (
+                    _emit_input_struct(step.id, schema),
+                    _input_struct_name(step.id),
+                )
+
     tasks = {}
     sub_workflows = []
     for step in dag.steps:
@@ -49,6 +63,9 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     for s in structs:
         lines.append(s)
         lines.append('')
+    for struct_def, _ in input_struct_map.values():
+        lines.append(struct_def)
+        lines.append('')
     for step in dag.steps:
         if step.type != 'workflow' and step.id not in [s.id for s in dag.steps if s.type == 'workflow']:
             lines.append(_task_to_wdl(step))
@@ -56,7 +73,7 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     for sw in sub_workflows:
         lines.append(sw)
         lines.append('')
-    lines.append(_dag_to_wdl(dag, workflow_id, tasks))
+    lines.append(_dag_to_wdl(dag, workflow_id, tasks, input_struct_map))
     return '\n'.join(lines)
 
 
@@ -175,7 +192,9 @@ def _interp_to_wdl(value):
     return word_interp(value, lambda text: text, lambda name: f"~{{{name}}}", lambda text: f"~{{{text}}}")
 
 
-def _dag_to_wdl(dag, workflow_id, tasks):
+def _dag_to_wdl(dag, workflow_id, tasks, input_struct_map=None):
+    if input_struct_map is None:
+        input_struct_map = {}
     lines = [f'workflow {_wf_name(workflow_id)} {{', '']
 
     decomposed_inputs = {}
@@ -183,24 +202,29 @@ def _dag_to_wdl(dag, workflow_id, tasks):
     for step in dag.steps:
         m = getattr(step, 'map', None) or {}
         src = m.get('source', {})
-        if isinstance(src, dict) and src.get('source') == 'input' and m.get('group_by'):
+        if isinstance(src, dict) and src.get('source') == 'input':
             src_name = src['name']
             input_blacklist.add(src_name)
-            schema = step.input_schema or {}
-            group_key = m.get('group_by')
-            col_names = [group_key] + [n for n in schema if n != group_key]
-            decomposed_inputs[step.id] = [
-                (col, f'Array[{to_wdl_type(schema.get(col, "str"))}]')
-                for col in col_names
-            ]
+            if m.get('group_by'):
+                schema = step.input_schema or {}
+                group_key = m.get('group_by')
+                col_names = [group_key] + [n for n in schema if n != group_key]
+                decomposed_inputs[step.id] = [
+                    (col, f'Array[{to_wdl_type(schema.get(col, "str"))}]')
+                    for col in col_names
+                ]
 
     if dag.inputs:
         lines.append('    input {')
         for name, spec in dag.inputs.items():
-            if name in input_blacklist:
+            if name in input_struct_map:
+                _, struct_name = input_struct_map[name]
+                lines.append(f'        Array[{struct_name}] {name}')
+            elif name in input_blacklist:
                 continue
-            t = to_wdl_type(spec.type)
-            lines.append(f'        {t} {name}')
+            else:
+                t = to_wdl_type(spec.type)
+                lines.append(f'        {t} {name}')
         for step_id, cols in decomposed_inputs.items():
             for col_name, col_type in cols:
                 lines.append(f'        {col_type} {col_name}')
@@ -294,6 +318,7 @@ def _mapped_step_to_wdl(step, tasks):
     source = map_info.get('source', {})
     table_columns = _get_table_columns(source)
     len_expr = _derive_length_expr(source, step.bindings, table_columns)
+    input_name = source_input_name(source)
     lines.append(f'    scatter ({s_var} in range({len_expr})) {{')
 
     call_line = f'        call {tname}'
@@ -303,24 +328,27 @@ def _mapped_step_to_wdl(step, tasks):
     lines.append('            input:')
     task_inputs = (step.task or {}).get('inputs', {})
     for in_name in task_inputs.keys():
-        binding = step.bindings.get(in_name)
-        if binding is None:
-            if in_name in table_columns:
-                expr = f'{_column_input_name(source, in_name)}[{s_var}]'
-            else:
-                expr = in_name
-        elif isinstance(binding, Input):
-            expr = f'{binding.name}[{s_var}]' if binding.name in table_columns else binding.name
-        elif isinstance(binding, Literal):
-            expr = _literal_to_wdl(binding.value)
-        elif isinstance(binding, Field):
-            base = _binding_to_wdl_expr(binding.source, step.id, None)
-            if isinstance(binding.source, StepCall):
-                expr = f'{base}.{binding.name}[{s_var}]'
-            else:
-                expr = f'{base}.{binding.name}'
+        if input_name:
+            expr = f'{input_name}[{s_var}].{in_name}'
         else:
-            expr = _binding_to_wdl_expr(binding, step.id, None)
+            binding = step.bindings.get(in_name)
+            if binding is None:
+                if in_name in table_columns:
+                    expr = f'{_column_input_name(source, in_name)}[{s_var}]'
+                else:
+                    expr = in_name
+            elif isinstance(binding, Input):
+                expr = f'{binding.name}[{s_var}]' if binding.name in table_columns else binding.name
+            elif isinstance(binding, Literal):
+                expr = _literal_to_wdl(binding.value)
+            elif isinstance(binding, Field):
+                base = _binding_to_wdl_expr(binding.source, step.id, None)
+                if isinstance(binding.source, StepCall):
+                    expr = f'{base}.{binding.name}[{s_var}]'
+                else:
+                    expr = f'{base}.{binding.name}'
+            else:
+                expr = _binding_to_wdl_expr(binding, step.id, None)
         lines.append(f'                {in_name} = {expr},')
     lines.append('        }')
     lines.append('    }')
@@ -512,6 +540,21 @@ def _emit_struct(record):
     for fname in sorted(record.fields.keys()):
         typ = _infer_fieldto_wdl_type(record.fields[fname])
         lines.append(f'    {typ} {fname}')
+    lines.append('}')
+    return '\n'.join(lines)
+
+
+def _input_struct_name(step_id):
+    name = step_name(step_id, default='Input')
+    return name[0].upper() + name[1:] + 'Input'
+
+
+def _emit_input_struct(step_id, input_schema):
+    name = _input_struct_name(step_id)
+    lines = [f'struct {name} {{']
+    for col_name in sorted(input_schema):
+        wdl_type = to_wdl_type(input_schema[col_name])
+        lines.append(f'    {wdl_type} {col_name}')
     lines.append('}')
     return '\n'.join(lines)
 
