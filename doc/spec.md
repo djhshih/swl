@@ -234,8 +234,9 @@ All `in` and `out` parameters **must** have a type annotation. A missing type is
 
 Valid types:
 - `file`, `str`, `int`, `float`
-- Optional form: append `?` (e.g. `file?`, `str?`)
-- Array form: `[file]`, `[str]`, `[int]`, `[float]` (no optional arrays currently)
+- Optional: append `?` (e.g. `file?`, `str?`)
+- Arrays: `[file]`, `[str]`, `[int]`, `[float]`
+- Optional arrays are also allowed
 
 `run` parameters may omit the type annotation. When omitted, the type is inferred from the parameter name according to the table below. When present (e.g. `cpu int = 4`), the type must match the expected type for that name.
 
