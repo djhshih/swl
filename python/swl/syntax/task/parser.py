@@ -6,6 +6,7 @@ _VALID_TYPES = {
     'file', 'str', 'int', 'float',
     'file?', 'str?', 'int?', 'float?',
     '[file]', '[str]', '[int]', '[float]',
+    '[file]?', '[str]?', '[int]?', '[float]?',
 }
 
 _SECTION_TYPES = {
@@ -124,6 +125,12 @@ class Parser:
             raise ValueError('Parameter line must contain at least one name')
 
         if param_type is None and section_kind in (node.SectionType.IN, node.SectionType.OUT):
+            for candidate in parts:
+                if candidate.startswith('[') and candidate.endswith(']') and candidate[:-1].endswith('?'):
+                    raise ValueError(
+                        f'Invalid type: {candidate!r}. '
+                        f'[type?] is not allowed — use [type] for required array or [type]? for optional array.'
+                    )
             raise ValueError(
                 f'in/out parameter must have a type annotation; '
                 f'got {names_text!r} (expected e.g. "str {names_text}" or "file {names_text}")'

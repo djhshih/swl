@@ -7,7 +7,16 @@ SWL_TYPE_ALIASES = {
 def normalize_swl_type(value):
     if value is None:
         return None
+    if _is_invalid_array_of_optional(value):
+        raise ValueError(
+            f'Invalid type: {value!r}. '
+            f'Use {value[:-1]}? for optional array, or {value[:-2]} for required array.'
+        )
     return SWL_TYPE_ALIASES.get(value, value)
+
+
+def _is_invalid_array_of_optional(value):
+    return isinstance(value, str) and value.startswith('[') and value.endswith(']') and value[:-1].endswith('?')
 
 
 def is_optional_type(value):
@@ -25,9 +34,22 @@ def array_item_type(value):
 
 
 def to_array_type(value):
-    if value is None or is_array_type(value):
+    if value is None:
+        return None
+    if _is_array_form(value):
         return value
-    return f'[{value}]'
+    base = value[:-1] if value.endswith('?') else value
+    return f'[{base}]'
+
+
+def _is_array_form(value):
+    if not isinstance(value, str) or not value.startswith('['):
+        return False
+    if value.endswith(']') and not value[:-1].endswith('?'):
+        return True
+    if value.endswith(']?') and not value[:-2].endswith('?'):
+        return True
+    return False
 
 
 def base_scalar_type(value):
@@ -42,21 +64,27 @@ def base_scalar_type(value):
 
 
 def to_cwl_type(value):
-    optional = is_optional_type(value)
+    if not value:
+        return 'string'
+    # Handle optional array: [type]?
+    if value.endswith(']?'):
+        inner = value[1:-2]
+        item_cwl = to_cwl_type(inner)
+        return ['null', {'type': 'array', 'items': item_cwl}]
+    # Handle array: [type]
+    if value.startswith('[') and value.endswith(']'):
+        inner = value[1:-1]
+        if inner.endswith('?'):
+            raise ValueError(
+                f'Invalid type: {value!r}. '
+                f'[type?] is not allowed — use [type] for required array or [type]? for optional array.'
+            )
+        item_cwl = to_cwl_type(inner)
+        return {'type': 'array', 'items': item_cwl}
+    # Handle optional scalar
+    optional = value.endswith('?')
     if optional:
         value = value[:-1]
-    if value == '[file]':
-        base = {'type': 'array', 'items': 'File'}
-        return ['null', base] if optional else base
-    if value == '[str]':
-        base = {'type': 'array', 'items': 'string'}
-        return ['null', base] if optional else base
-    if value == '[int]':
-        base = {'type': 'array', 'items': 'int'}
-        return ['null', base] if optional else base
-    if value == '[float]':
-        base = {'type': 'array', 'items': 'float'}
-        return ['null', base] if optional else base
     base = {
         'file': 'File',
         'str': 'string',

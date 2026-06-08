@@ -630,5 +630,55 @@ map call_variant
         self.assertNotIn('InlineJavascriptRequirement', req_classes)
 
 
+class TestCwlTypeHelpers(unittest.TestCase):
+    def test_to_cwl_type_scalar(self):
+        from swl.types import to_cwl_type
+        self.assertEqual(to_cwl_type('str'), 'string')
+        self.assertEqual(to_cwl_type('file'), 'File')
+        self.assertEqual(to_cwl_type('int'), 'int')
+        self.assertEqual(to_cwl_type('float'), 'float')
+
+    def test_to_cwl_type_optional_scalar(self):
+        from swl.types import to_cwl_type
+        self.assertEqual(to_cwl_type('str?'), ['null', 'string'])
+        self.assertEqual(to_cwl_type('file?'), ['null', 'File'])
+        self.assertEqual(to_cwl_type('int?'), ['null', 'int'])
+        self.assertEqual(to_cwl_type('float?'), ['null', 'float'])
+
+    def test_to_cwl_type_array(self):
+        from swl.types import to_cwl_type
+        self.assertEqual(to_cwl_type('[str]'), {'type': 'array', 'items': 'string'})
+        self.assertEqual(to_cwl_type('[file]'), {'type': 'array', 'items': 'File'})
+        self.assertEqual(to_cwl_type('[int]'), {'type': 'array', 'items': 'int'})
+        self.assertEqual(to_cwl_type('[float]'), {'type': 'array', 'items': 'float'})
+
+    def test_to_cwl_type_optional_array(self):
+        from swl.types import to_cwl_type
+        self.assertEqual(to_cwl_type('[str]?'), ['null', {'type': 'array', 'items': 'string'}])
+        self.assertEqual(to_cwl_type('[file]?'), ['null', {'type': 'array', 'items': 'File'}])
+
+    def test_to_cwl_type_rejects_array_of_optional_items(self):
+        from swl.types import to_cwl_type
+        for invalid in ['[str?]', '[file?]', '[int?]', '[float?]']:
+            with self.assertRaises(ValueError):
+                to_cwl_type(invalid)
+
+    def test_to_array_type_strips_optional_before_wrapping(self):
+        from swl.types import to_array_type
+        self.assertEqual(to_array_type('str'), '[str]')
+        self.assertEqual(to_array_type('str?'), '[str]')
+        self.assertEqual(to_array_type('file?'), '[file]')
+        self.assertEqual(to_array_type('int?'), '[int]')
+        self.assertEqual(to_array_type('float?'), '[float]')
+        self.assertEqual(to_array_type('[str]'), '[str]')
+        self.assertEqual(to_array_type('[str]?'), '[str]?')
+
+    def test_normalize_swl_type_rejects_array_of_optional_items(self):
+        from swl.types import normalize_swl_type
+        for invalid in ['[str?]', '[file?]', '[int?]', '[float?]']:
+            with self.assertRaises(ValueError):
+                normalize_swl_type(invalid)
+
+
 if __name__ == '__main__':
     unittest.main()
