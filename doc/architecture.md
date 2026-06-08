@@ -5,10 +5,11 @@ SWL is a workflow language that compiles to a logical DAG of task invocations. T
 1. **Workflow Lexing** → token stream
 2. **Workflow Parsing** → AST (`syntax/wf/node.py`)
 3. **Task Parsing** → parsed task annotation + bash body (`syntax/task/node.py`)
-4. **Semantic Checking** → validated imports, scope, types, inferred signature (`semantic/wf/check.py`)
-5. **IR Lowering** → semantic IR tree (`ir/node.py`)
-6. **IR Forcing** → concrete DAG (`dag/`)
-7. **Output** → JSON-serialized DAG emission
+4. **Semantic Checking — Task Types** → typed task signatures (`semantic/task/type.py`)
+5. **Semantic Checking — Workflow** → validated imports, scope, types, inferred signature (`semantic/wf/check.py`)
+6. **IR Lowering** → semantic IR tree (`ir/node.py`)
+7. **IR Forcing** → concrete DAG (`dag/`)
+8. **Output** → JSON-serialized DAG emission
 
 ---
 
@@ -30,7 +31,7 @@ swl/
 ├── ir/                 # Intermediate representation (nodes + lowering)
 ├── dag/                # DAG construction, forcing, finalization
 ├── eval/               # Debug CLI tools (6 scripts)
-└── transpile/          # Backend code generators (CWL, WDL, Nextflow)
+└── transpile/          # Backend code generators (CWL, WDL, Nextflow, Snakemake)
 ```
 
 ---
