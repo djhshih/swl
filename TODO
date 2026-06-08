@@ -5,6 +5,7 @@ Tests:
 - run snakemake on transpiled .smk files (most likely to be incorrect)
 
 Python:
+- input data feeding for transpiled workflows
 - check that panel.cwl is transpiled correctly
 - cli command for showing workflow inputs and outputs
 - data validation for given input data on a target workflow
