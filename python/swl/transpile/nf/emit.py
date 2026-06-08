@@ -1,6 +1,6 @@
 import json
 
-from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.dag.node import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
 from swl.transpile.common import emit_name, interp_script, run_value, source_kind, step_name, workflow_name, word_interp, _flatten_output_names
 from swl.types import to_nf_qualifier
 
@@ -264,11 +264,6 @@ def _binding_to_channel(binding, channels, current_step):
                 ch += '.toList()'
             return ch
         return f'{source_ch}.map{{ it.{binding.name} }}'
-
-    if isinstance(binding, Merge):
-        left = _binding_to_channel(binding.left, channels, current_step)
-        right = _binding_to_channel(binding.right, channels, current_step)
-        return f'{left}.join({right})'
 
     if isinstance(binding, Record):
         raise ValueError(
