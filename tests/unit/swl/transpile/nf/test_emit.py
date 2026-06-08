@@ -298,6 +298,7 @@ map call_variant
         self.assertEqual(to_nf_qualifier('str'), ('val', 'string'))
         self.assertEqual(to_nf_qualifier('int'), ('val', 'integer'))
         self.assertEqual(to_nf_qualifier('float'), ('val', 'float'))
+        self.assertEqual(to_nf_qualifier('[file]'), ('path', None))
 
     def test_empty_inputs_outputs(self):
         dag = DAG(inputs={}, steps=[], outputs={})

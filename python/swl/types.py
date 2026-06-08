@@ -122,4 +122,5 @@ def to_nf_qualifier(swl_type):
         'str': ('val', 'string'),
         'int': ('val', 'integer'),
         'float': ('val', 'float'),
+        '[file]': ('path', None),
     }.get(swl_type, ('val', 'string'))
