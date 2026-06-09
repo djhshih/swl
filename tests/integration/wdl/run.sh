@@ -3,7 +3,7 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 INT_DIR="$ROOT/tests/integration/wdl"
-SWL_DIR="$ROOT/tests/integration/swl"
+DAG_DIR="$ROOT/tests/integration/dag"
 JOBS_DIR="$INT_DIR/jobs"
 INPUTS_DIR="$ROOT/tests/integration/inputs"
 OUTPUTS_DIR="$INT_DIR/outputs"
@@ -32,11 +32,7 @@ fi
 export PYTHONPATH="$ROOT/python"
 
 for swl in function panel map map_by; do
-  python -m swl.compile "$SWL_DIR/${swl}.swl" -o "$INT_DIR/${swl}.json"
-done
-
-for swl in function panel map map_by; do
-  python -m swl.transpile.wdl "$INT_DIR/${swl}.json" -o "$INT_DIR/${swl}.wdl"
+  python -m swl.transpile.wdl "$DAG_DIR/${swl}.json" -o "$INT_DIR/${swl}.wdl"
 done
 
 cromwell_run() {

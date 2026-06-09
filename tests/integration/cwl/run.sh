@@ -3,7 +3,7 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 INT_DIR="$ROOT/tests/integration/cwl"
-SWL_DIR="$ROOT/tests/integration/swl"
+DAG_DIR="$ROOT/tests/integration/dag"
 JOBS_DIR="$INT_DIR/jobs"
 INPUTS_DIR="$ROOT/tests/integration/inputs"
 OUTPUTS_DIR="$INT_DIR/outputs"
@@ -16,11 +16,7 @@ mkdir -p "$OUTPUTS_DIR"
 
 export PYTHONPATH="$ROOT/python"
 for swl in function pipe explicit panel map map_by; do
-  python -m swl.compile "$SWL_DIR/${swl}.swl" -o "$INT_DIR/${swl}.json"
-done
-
-for swl in function pipe explicit panel map map_by; do
-  python -m swl.transpile.cwl "$INT_DIR/${swl}.json" -o "$INT_DIR/${swl}.cwl"
+  python -m swl.transpile.cwl "$DAG_DIR/${swl}.json" -o "$INT_DIR/${swl}.cwl"
 done
 
 run_test() {
