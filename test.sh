@@ -19,7 +19,8 @@ run_suite() {
 
 run_suite "unit"       "tests/unit/test.sh"
 run_suite "compile"    "tests/compile/test.sh"
-run_suite "integration" "tests/integration/cwl/run.sh"
+run_suite "integration-cwl" "tests/integration/cwl/run.sh"
+run_suite "integration-wdl" "tests/integration/wdl/run.sh"
 
 echo "===== RESULTS ====="
 echo "Passed: $PASS / $((PASS + FAIL))"

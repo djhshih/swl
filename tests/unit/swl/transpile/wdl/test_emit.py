@@ -163,10 +163,10 @@ map call_variant
         dag = force_file(os.path.join(root, 'function.swl'), files)
         wdl = transpile_dag_dict(dag.to_dict())
         self._assert_wdl_contains(wdl,
-            'version 1.1',
+            'version 1.0',
             'task align {',
             'task sort {',
-            'task call {',
+            'task call_ {',
             'workflow main {',
             'input {',
         )
@@ -177,9 +177,9 @@ map call_variant
         self._assert_wdl_contains(wdl, 'command <<<')
         self._assert_wdl_contains(wdl, 'bwa mem -t ~{cpu} ~{ref} ~{fastq1} ~{fastq2}')
         self._assert_wdl_contains(wdl, 'output {')
-        self._assert_wdl_contains(wdl, 'File bam = sort.bam')
+        self._assert_wdl_contains(wdl, 'File bam = sort.bam_out')
         self._assert_wdl_contains(wdl, 'File bai = sort.bai')
-        self._assert_wdl_contains(wdl, 'File bcf = call.bcf')
+        self._assert_wdl_contains(wdl, 'File bcf = call_.bcf')
         self._assert_wdl_contains(wdl, 'requirements {')
         self._assert_wdl_contains(wdl, 'cpu: 2')
         self._assert_wdl_contains(wdl, 'memory: "8192 MB"')
@@ -352,7 +352,7 @@ map call_variant
             outputs={},
         )
         wdl = transpile_dag_dict(dag.to_dict())
-        self._assert_wdl_contains(wdl, 'version 1.1')
+        self._assert_wdl_contains(wdl, 'version 1.0')
         self._assert_wdl_contains(wdl, 'workflow main {')
 
     def test_struct_emits_field_types_from_bindings(self):
