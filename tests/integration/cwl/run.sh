@@ -20,11 +20,11 @@ for f in sample1.r1.fq sample1.r2.fq sample2.r1.fq sample2.r2.fq \
 done
 
 export PYTHONPATH="$ROOT/python"
-for swl in function pipe explicit panel map; do
+for swl in function pipe explicit panel map map_by; do
   python -m swl.compile "$SWL_DIR/${swl}.swl" -o "$INT_DIR/${swl}.json"
 done
 
-for swl in function pipe explicit panel map; do
+for swl in function pipe explicit panel map map_by; do
   python -m swl.transpile.cwl "$INT_DIR/${swl}.json" -o "$INT_DIR/${swl}.cwl"
 done
 
@@ -47,6 +47,7 @@ run_test() {
 run_test function
 run_test panel
 run_test map
+run_test map_by
 
 echo "---"
 echo "Passed: $PASS / $((PASS + FAIL))"

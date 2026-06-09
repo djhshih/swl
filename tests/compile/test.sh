@@ -134,6 +134,7 @@ else
     PYTHONPATH="$ROOT/python" python -m swl.transpile.cwl ../dag/explicit.json -o ../cwl/explicit.cwl
     PYTHONPATH="$ROOT/python" python -m swl.transpile.cwl ../dag/panel.json   -o ../cwl/panel.cwl
     PYTHONPATH="$ROOT/python" python -m swl.transpile.cwl ../dag/map.json     -o ../cwl/map.cwl
+    PYTHONPATH="$ROOT/python" python -m swl.transpile.cwl ../dag/map_by.json  -o ../cwl/map_by.cwl
 
     compare_files ../cwl/pipe.cwl ../cwl/function.cwl
     compare_files ../cwl/explicit.cwl ../cwl/function.cwl

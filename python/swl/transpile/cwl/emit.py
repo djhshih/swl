@@ -91,6 +91,16 @@ def transpile_dag_dict(data, workflow_id='main'):
     for _, (step_entry, _) in record_output_map.items():
         wf_steps.insert(0, step_entry)
 
+    def _is_map_by_step_ref(value):
+        step = None
+        if isinstance(value, StepCall):
+            step = value
+        elif isinstance(value, Field) and isinstance(value.source, StepCall):
+            step = value.source
+        if step and getattr(step, 'map', None) and step.map.get('group_by'):
+            return True
+        return False
+
     outputs = []
     for name, output in dag.outputs.items():
         value = output.value if isinstance(output, OutputSpec) else output
@@ -102,7 +112,15 @@ def transpile_dag_dict(data, workflow_id='main'):
                 'outputSource': source,
             })
         else:
-            outputs.append(_workflow_output_to_cwl(workflow_id, name, output))
+            source = _binding_source(value, workflow_id)
+            typ = to_cwl_type(output.type)
+            if _is_map_by_step_ref(value):
+                typ = {'type': 'array', 'items': typ}
+            outputs.append({
+                'id': f'#{workflow_id}/{name}',
+                'type': typ,
+                'outputSource': source,
+            })
 
     workflow = {
         'id': f'#{workflow_id}',
@@ -113,7 +131,7 @@ def transpile_dag_dict(data, workflow_id='main'):
         'steps': wf_steps,
     }
     return {
-        'cwlVersion': 'v1.0',
+        'cwlVersion': 'v1.2',
         '$graph': all_tools + [workflow],
     }
 
@@ -458,7 +476,7 @@ def _emit_record_tool(workflow_id, step_id, binding_name, record, dag):
         js_lines.append(f'record.{fname} = inputs.{fname};')
     js_lines.append('fs.writeFileSync("record.json", JSON.stringify(record));')
     js_lines.append('return {"class": "File", "path": "record.json"};')
-    js_expression = 'var record = {};\n' + '\n'.join(js_lines)
+    js_expression = '${' + ('var record = {};\n' + '\n'.join(js_lines)) + '}'
     tool = {
         'id': tool_id,
         'class': 'ExpressionTool',
@@ -467,7 +485,6 @@ def _emit_record_tool(workflow_id, step_id, binding_name, record, dag):
         'outputs': [{
             'id': f'{tool_id}/record_out',
             'type': 'File',
-            'outputBinding': {'glob': 'record.json'},
         }],
         'expression': js_expression,
     }
@@ -512,58 +529,68 @@ def _emit_map_by_graph(step, dag):
     wrapper_tool_id = f'#wrap_{step_id}'
 
     col_names = sorted(schema.keys())
-    js_inputs = {}
-    for col in col_names:
-        js_inputs[col] = f"inputs.{col}[i]"
     key_var = 'group_by_key'
 
-    group_js = (
-        'var fs = require("fs");\n'
-        'var keyName = inputs.' + key_var + ';\n'
-        'var cols = ' + json.dumps(col_names) + ';\n'
-        'var numRows = inputs.' + col_names[0] + '.length;\n'
-        'var groups = {};\n'
-        'for (var i = 0; i < numRows; i++) {\n'
-        '    var key = inputs[keyName][i];\n'
-        '    var g = groups[key];\n'
-        '    if (!g) { g = {}; groups[key] = g; }\n'
-        '    for (var ci = 0; ci < cols.length; ci++) {\n'
-        '        var col = cols[ci];\n'
-        '        if (!g[col]) g[col] = [];\n'
-        '        g[col].push(inputs[col][i]);\n'
-        '    }\n'
-        '}\n'
-        'try { fs.mkdirSync("groups"); } catch(e) {}\n'
-        'var files = [];\n'
-        'for (var key in groups) {\n'
-        '    var safe = key.replace(/[^a-zA-Z0-9_]/g, "_");\n'
-        '    var path = "groups/" + safe + ".json";\n'
-        '    fs.writeFileSync(path, JSON.stringify({key: key, rows: groups[key]}));\n'
-        '    files.push({"class": "File", "path": path});\n'
-        '}\n'
-        'return files;\n'
+    grouping_inputs = [{
+        'id': f'{group_tool_id}/{key_var}',
+        'type': 'string',
+    }]
+    for col in col_names:
+        grouping_inputs.append({
+            'id': f'{group_tool_id}/{col}',
+            'type': {'type': 'array', 'items': to_cwl_type(schema[col])},
+        })
+
+    listing = [{'entryname': 'inputs.json', 'entry': '$(JSON.stringify(inputs))'}]
+    group_script = (
+        'import json, os\n'
+        'with open("inputs.json") as f:\n'
+        '    data = json.load(f)\n'
+        'keyName = data["' + key_var + '"]\n'
+        'cols = ' + json.dumps(col_names) + '\n'
+        'numRows = len(data["' + col_names[0] + '"])\n'
+        'groups = {}\n'
+        'for i in range(numRows):\n'
+        '    key = data[keyName][i]\n'
+        '    g = groups.get(key)\n'
+        '    if g is None:\n'
+        '        g = {}\n'
+        '        groups[key] = g\n'
+        '    for col in cols:\n'
+        '        val = data[col][i]\n'
+        '        if isinstance(val, dict) and "path" in val:\n'
+        '            val = val["path"]\n'
+        '        g.setdefault(col, []).append(val)\n'
+        'os.makedirs("groups", exist_ok=True)\n'
+        'files = []\n'
+        'for key, rows in groups.items():\n'
+        '    safe = "".join(c if c.isalnum() or c == "_" else "_" for c in str(key))\n'
+        '    path = f"groups/{safe}.json"\n'
+        '    with open(path, "w") as f:\n'
+        '        json.dump({"key": key, "rows": rows}, f)\n'
+        '    files.append({"class": "File", "path": os.path.abspath(path)})\n'
+        'with open("outputs.json", "w") as f:\n'
+        '    json.dump(files, f)\n'
     )
 
     grouping_tool = {
         'id': group_tool_id,
-        'class': 'ExpressionTool',
-        'requirements': [{'class': 'InlineJavascriptRequirement'}],
-        'inputs': [{  # group_by_key input
-            'id': f'{group_tool_id}/{key_var}',
-            'type': 'string',
-        }],
+        'class': 'CommandLineTool',
+        'baseCommand': ['python3', '-c', group_script],
+        'inputs': grouping_inputs,
         'outputs': [{
             'id': f'{group_tool_id}/groups',
             'type': {'type': 'array', 'items': 'File'},
             'outputBinding': {'glob': 'groups/*.json'},
         }],
-        'expression': group_js,
+        'requirements': [
+            {
+                'class': 'InitialWorkDirRequirement',
+                'listing': listing,
+            },
+            {'class': 'InlineJavascriptRequirement'},
+        ],
     }
-    for col in col_names:
-        grouping_tool['inputs'].append({
-            'id': f'{group_tool_id}/{col}',
-            'type': {'type': 'array', 'items': to_cwl_type(schema[col])},
-        })
 
     wrapper_out_names = sorted(output_schema.keys())
     wrapper_outputs = []
@@ -577,25 +604,19 @@ def _emit_map_by_graph(step, dag):
     wrapper_inputs = [{
         'id': f'{wrapper_tool_id}/group_file',
         'type': 'File',
+        'inputBinding': {'position': 1},
     }]
 
     inner_def = step.task or {}
     original_body = inner_def.get('body', '')
-    row_loop = _gen_wrapper_script(col_names, wrapper_out_names, original_body)
+    wrapper_script = _gen_wrapper_script(col_names, wrapper_out_names, original_body)
 
     wrapper_tool = {
         'id': wrapper_tool_id,
         'class': 'CommandLineTool',
-        'baseCommand': ['bash', 'wrapper.sh'],
+        'baseCommand': ['python3', '-c', wrapper_script],
         'inputs': wrapper_inputs,
         'outputs': wrapper_outputs,
-        'requirements': [
-            {
-                'class': 'InitialWorkDirRequirement',
-                'listing': [{'entryname': 'wrapper.sh', 'entry': row_loop}],
-            },
-            {'class': 'InlineJavascriptRequirement'},
-        ],
     }
 
     group_step_id = f'#main/group_{step_id}'
@@ -633,27 +654,26 @@ def _emit_map_by_graph(step, dag):
 
 
 def _gen_wrapper_script(col_names, out_names, original_body):
-    lines = ['#!/bin/bash', 'set -e', 'group_file="$1"', '']
-    lines.append('python3 -c "')
-    lines.append('import json, os, subprocess, sys')
-    lines.append("group = json.load(open('${group_file}'))")
-    lines.append('rows = group[\"rows\"]')
-    lines.append('cols = ' + json.dumps(col_names))
-    lines.append('n = len(rows[cols[0]])')
+    import base64
+    encoded_body = base64.b64encode(original_body.encode()).decode()
+    lines = [
+        'import base64, json, os, subprocess, sys',
+        "group = json.load(open(sys.argv[1]))",
+        'rows = group["rows"]',
+        'cols = ' + json.dumps(col_names),
+        'n = len(rows[cols[0]])',
+    ]
     for oname in out_names:
         lines.append(f"os.makedirs('{oname}s', exist_ok=True)")
     lines.append('for i in range(n):')
     lines.append('    row_env = os.environ.copy()')
     lines.append('    for col in cols:')
-    lines.append('        row_env[col] = str(rows[col][i])')
+    lines.append("        row_env[col] = str(rows[col][i])")
     lines.append("    row_env['SWL_ROW_INDEX'] = str(i)")
-    lines.append("    subprocess.run(['bash', '-c', '''")
-    for line in original_body.split('\n'):
-        lines.append('    ' + line)
-    lines.append("    '''], env=row_env, shell=True, check=True)")
+    lines.append(f"    body = base64.b64decode('{encoded_body}').decode()")
+    lines.append("    subprocess.run(['bash', '-c', body], env=row_env, shell=True, check=True)")
     for oname in out_names:
         lines.append(f"    for f in os.listdir('.'):")
         lines.append(f"        if os.path.isfile(f) and not f.startswith('{oname}s'):")
         lines.append(f"            os.rename(f, '{oname}s/' + f)")
-    lines.append('"')
     return '\n'.join(lines)

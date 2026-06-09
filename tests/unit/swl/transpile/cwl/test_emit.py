@@ -158,7 +158,7 @@ map call_variant
         files, root = self._files()
         dag = force_file(os.path.join(root, 'function.swl'), files)
         cwl = transpile_dag_dict(dag.to_dict())
-        self.assertEqual(cwl['cwlVersion'], 'v1.0')
+        self.assertEqual(cwl['cwlVersion'], 'v1.2')
         self.assertEqual(cwl['$graph'][-1]['id'], '#main')
         tools = [item for item in cwl['$graph'] if item['class'] == 'CommandLineTool']
         self.assertEqual([item['id'] for item in tools], ['#align', '#sort', '#call'])
@@ -314,7 +314,7 @@ map call_variant
             'outputs': {'sample': {'type': '[str]', 'desc': None, 'value': {'step': 'grouped', 'output': 'sample'}}},
         }
         cwl = transpile_dag_dict(dag_dict)
-        self.assertEqual(cwl['cwlVersion'], 'v1.0')
+        self.assertEqual(cwl['cwlVersion'], 'v1.2')
         tool_ids = [item['id'] for item in cwl['$graph'] if item.get('class') in ('ExpressionTool', 'CommandLineTool')]
         self.assertIn('#group_grouped', tool_ids)
         self.assertIn('#wrap_grouped', tool_ids)
@@ -334,9 +334,9 @@ map call_variant
         )
         dag = force_file(os.path.join(root, 'map_by_test.swl'), files)
         cwl = transpile_dag_dict(dag.to_dict())
-        self.assertEqual(cwl['cwlVersion'], 'v1.0')
-        expr_tools = [item for item in cwl['$graph'] if item.get('class') == 'ExpressionTool']
-        self.assertTrue(expr_tools, 'Should have at least one ExpressionTool for grouping')
+        self.assertEqual(cwl['cwlVersion'], 'v1.2')
+        group_tools = [item for item in cwl['$graph'] if item.get('class') == 'CommandLineTool' and 'group' in item.get('id', '')]
+        self.assertTrue(group_tools, 'Should have at least one CommandLineTool for grouping')
         wrap_tools = [item for item in cwl['$graph'] if item.get('class') == 'CommandLineTool' and 'wrap' in item.get('id', '')]
         self.assertTrue(wrap_tools, 'Should have wrapper tools')
         workflow = cwl['$graph'][-1]
@@ -411,7 +411,7 @@ map call_variant
             outputs={'out': OutputSpec(type='file', desc=None, value=Field(consumer, 'out'))},
         )
         cwl = transpile_dag_dict(dag.to_dict())
-        self.assertEqual(cwl['cwlVersion'], 'v1.0')
+        self.assertEqual(cwl['cwlVersion'], 'v1.2')
         expr_tools = [item for item in cwl['$graph'] if item.get('class') == 'ExpressionTool']
         self.assertEqual(len(expr_tools), 1, 'Should have exactly one ExpressionTool for record input binding')
         workflow = cwl['$graph'][-1]
