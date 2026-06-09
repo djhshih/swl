@@ -140,10 +140,13 @@ def _task_to_wdl(step, rename_map=None):
         if run.get(rv, {}).get('value') is not None:
             run_var_names.add(rv)
 
+    array_input_names = set()
     if inputs or run_var_names:
         lines.append('    input {')
         for name, spec in inputs.items():
             t = to_wdl_type(spec.get('type'))
+            if t.startswith('Array['):
+                array_input_names.add(name)
             lines.append(f'        {t} {name}')
         for rv in sorted(run_var_names):
             t = _RUN_VAR_TYPE[rv]
@@ -154,7 +157,7 @@ def _task_to_wdl(step, rename_map=None):
 
     lines.append('    command <<<')
     for line in body.split('\n'):
-        interp_line = _interpolate_bash_vars(line, set(inputs.keys()) | run_var_names)
+        interp_line = _interpolate_bash_vars(line, set(inputs.keys()) | run_var_names, array_input_names)
         lines.append(f'        {interp_line}')
     lines.append('    >>>')
     lines.append('')
@@ -183,9 +186,14 @@ def _task_to_wdl(step, rename_map=None):
     return '\n'.join(lines)
 
 
-def _interpolate_bash_vars(body, known_vars):
+def _interpolate_bash_vars(body, known_vars, array_vars=None):
+    if array_vars is None:
+        array_vars = set()
+
     def var_fn(name):
         if name in known_vars:
+            if name in array_vars:
+                return '~{sep=" " ' + name + '}'
             return '~{' + name + '}'
         return None
 
