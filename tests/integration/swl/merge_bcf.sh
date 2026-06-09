@@ -7,4 +7,4 @@
 # out
 #   bcf file = ${outbase}.bcf | output
 
-cp "${bcf}" "${outbase}.bcf"
+cat ${bcf} > "${outbase}.bcf"
