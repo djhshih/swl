@@ -9,4 +9,4 @@
 # out
 #   bcf file = ${outbase}.bcf | output
 
-cp "${bam}" "${outbase}.bcf"
+cat "${bam}" "${ref}" "${ref_fai}" > "${outbase}.bcf"

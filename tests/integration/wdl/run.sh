@@ -85,7 +85,9 @@ run_test() {
         return
       fi
     else
-      echo "INFO: $name (sprocket check failed, trying fallback)"
+      echo "FAIL: $name (sprocket check failed)"
+      FAIL=$((FAIL + 1))
+      return
     fi
   fi
 

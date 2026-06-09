@@ -10,4 +10,4 @@
 # out
 #   bam file = ${outbase}.bam | output
 
-cp "${fastq1}" "${outbase}.bam"
+cat "${fastq1}" "${fastq2}" "${ref}" "${ref_amb}" "${ref_ann}" "${ref_bwt}" "${ref_pac}" "${ref_sa}" > "${outbase}.bam"
