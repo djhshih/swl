@@ -1,29 +1,29 @@
 fastq1:
   - class: File
-    path: ../inputs/sample1.r1.fq
+    path: ../../inputs/sample1.r1.fq
 fastq2:
   - class: File
-    path: ../inputs/sample1.r2.fq
+    path: ../../inputs/sample1.r2.fq
 outbase:
   - panel-test
 ref:
   - class: File
-    path: ../inputs/ref.fa
+    path: ../../inputs/ref.fa
 ref_amb:
   - class: File
-    path: ../inputs/ref.fa.amb
+    path: ../../inputs/ref.fa.amb
 ref_ann:
   - class: File
-    path: ../inputs/ref.fa.ann
+    path: ../../inputs/ref.fa.ann
 ref_bwt:
   - class: File
-    path: ../inputs/ref.fa.bwt
+    path: ../../inputs/ref.fa.bwt
 ref_fai:
   - class: File
-    path: ../inputs/ref.fa.fai
+    path: ../../inputs/ref.fa.fai
 ref_pac:
   - class: File
-    path: ../inputs/ref.fa.pac
+    path: ../../inputs/ref.fa.pac
 ref_sa:
   - class: File
-    path: ../inputs/ref.fa.sa
+    path: ../../inputs/ref.fa.sa

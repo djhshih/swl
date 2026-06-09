@@ -5,19 +5,14 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 INT_DIR="$ROOT/tests/integration/cwl"
 SWL_DIR="$ROOT/tests/integration/swl"
 JOBS_DIR="$INT_DIR/jobs"
-INPUTS_DIR="$INT_DIR/inputs"
+INPUTS_DIR="$ROOT/tests/integration/inputs"
 OUTPUTS_DIR="$INT_DIR/outputs"
 PASS=0
 FAIL=0
 
 cwltool --version
 
-mkdir -p "$INPUTS_DIR" "$OUTPUTS_DIR"
-for f in sample1.r1.fq sample1.r2.fq sample2.r1.fq sample2.r2.fq \
-         ref.fa ref.fa.amb ref.fa.ann ref.fa.bwt \
-         ref.fa.fai ref.fa.pac ref.fa.sa empty.fq; do
-  echo "$f" > "$INPUTS_DIR/$f"
-done
+mkdir -p "$OUTPUTS_DIR"
 
 export PYTHONPATH="$ROOT/python"
 for swl in function pipe explicit panel map map_by; do
