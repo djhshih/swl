@@ -1,0 +1,28 @@
+{
+  "main.xs": [
+    {
+      "fastq1": "../../inputs/sample1.r1.fq",
+      "fastq2": "../../inputs/sample1.r2.fq",
+      "outbase": "sample1",
+      "ref": "../../inputs/ref.fa",
+      "ref_amb": "../../inputs/ref.fa.amb",
+      "ref_ann": "../../inputs/ref.fa.ann",
+      "ref_bwt": "../../inputs/ref.fa.bwt",
+      "ref_fai": "../../inputs/ref.fa.fai",
+      "ref_pac": "../../inputs/ref.fa.pac",
+      "ref_sa": "../../inputs/ref.fa.sa"
+    },
+    {
+      "fastq1": "../../inputs/sample2.r1.fq",
+      "fastq2": "../../inputs/sample2.r2.fq",
+      "outbase": "sample2",
+      "ref": "../../inputs/ref.fa",
+      "ref_amb": "../../inputs/ref.fa.amb",
+      "ref_ann": "../../inputs/ref.fa.ann",
+      "ref_bwt": "../../inputs/ref.fa.bwt",
+      "ref_fai": "../../inputs/ref.fa.fai",
+      "ref_pac": "../../inputs/ref.fa.pac",
+      "ref_sa": "../../inputs/ref.fa.sa"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "main.fastq1": "../../inputs/sample1.r1.fq",
+  "main.fastq2": "../../inputs/sample1.r2.fq",
+  "main.outbase": "test",
+  "main.ref": "../../inputs/ref.fa",
+  "main.ref_amb": "../../inputs/ref.fa.amb",
+  "main.ref_ann": "../../inputs/ref.fa.ann",
+  "main.ref_bwt": "../../inputs/ref.fa.bwt",
+  "main.ref_fai": "../../inputs/ref.fa.fai",
+  "main.ref_pac": "../../inputs/ref.fa.pac",
+  "main.ref_sa": "../../inputs/ref.fa.sa"
+}
