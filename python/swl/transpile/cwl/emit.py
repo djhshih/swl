@@ -519,6 +519,63 @@ def _validate_map_by_preconditions(step):
             )
 
 
+def _topological_sort(steps):
+    deps = {s['id']: set(s.get('deps', [])) for s in steps}
+    ordered = []
+    while deps:
+        ready = [sid for sid, d in deps.items() if not d]
+        if not ready:
+            break
+        ready.sort()
+        for sid in ready:
+            ordered.append(sid)
+            del deps[sid]
+            for d in deps.values():
+                d.discard(sid)
+    remaining = list(deps.keys())
+    remaining.sort()
+    ordered.extend(remaining)
+    id_map = {s['id']: s for s in steps}
+    return [id_map[sid] for sid in ordered]
+
+
+def _default_to_bash_expr(default):
+    if not isinstance(default, dict):
+        return None
+    if default.get('kind') == 'word':
+        parts = default.get('parts', [])
+        result = ''
+        for part in parts:
+            if part.get('kind') == 'var':
+                result += '"${' + part['name'] + '}"'
+            elif part.get('kind') == 'literal':
+                result += part.get('text', '')
+            else:
+                result += str(part)
+        return result
+    return None
+
+
+def _dag_to_combined_script(dag_data):
+    steps = list(dag_data.get('steps', []))
+    if not steps:
+        return ''
+    ordered = _topological_sort(steps)
+    body_lines = []
+    for step in ordered:
+        script = step.get('script', '')
+        if script:
+            if body_lines:
+                body_lines.append('')
+            body_lines.append(script)
+        for oname, ospec in step.get('outputs', {}).items():
+            default = ospec.get('default', {})
+            bash_expr = _default_to_bash_expr(default)
+            if bash_expr:
+                body_lines.append(f'export {oname}={bash_expr}')
+    return '\n'.join(body_lines)
+
+
 def _emit_map_by_graph(step, dag):
     map_info = step.map or {}
     group_by = map_info.get('group_by')
@@ -608,7 +665,11 @@ def _emit_map_by_graph(step, dag):
     }]
 
     inner_def = step.task or {}
-    original_body = inner_def.get('body', '')
+    dag_data = inner_def.get('dag', {})
+    if dag_data and inner_def.get('class') == 'Workflow':
+        original_body = _dag_to_combined_script(dag_data)
+    else:
+        original_body = inner_def.get('body', '')
     wrapper_script = _gen_wrapper_script(col_names, wrapper_out_names, original_body)
 
     wrapper_tool = {
@@ -657,12 +718,13 @@ def _gen_wrapper_script(col_names, out_names, original_body):
     import base64
     encoded_body = base64.b64encode(original_body.encode()).decode()
     lines = [
-        'import base64, json, os, subprocess, sys',
+        'import base64, json, os, shutil, subprocess, sys',
         "group = json.load(open(sys.argv[1]))",
         'rows = group["rows"]',
         'cols = ' + json.dumps(col_names),
         'n = len(rows[cols[0]])',
     ]
+    out_dirs = [f"'{oname}s'" for oname in out_names]
     for oname in out_names:
         lines.append(f"os.makedirs('{oname}s', exist_ok=True)")
     lines.append('for i in range(n):')
@@ -671,9 +733,14 @@ def _gen_wrapper_script(col_names, out_names, original_body):
     lines.append("        row_env[col] = str(rows[col][i])")
     lines.append("    row_env['SWL_ROW_INDEX'] = str(i)")
     lines.append(f"    body = base64.b64decode('{encoded_body}').decode()")
-    lines.append("    subprocess.run(['bash', '-c', body], env=row_env, shell=True, check=True)")
-    for oname in out_names:
-        lines.append(f"    for f in os.listdir('.'):")
-        lines.append(f"        if os.path.isfile(f) and not f.startswith('{oname}s'):")
-        lines.append(f"            os.rename(f, '{oname}s/' + f)")
+    lines.append("    subprocess.run(body, env=row_env, shell=True, executable='/bin/bash', check=True)")
+    lines.append("    out_dirs = " + json.dumps([f"{oname}s" for oname in out_names]))
+    lines.append("    for f in os.listdir('.'):")
+    lines.append("        if not os.path.isfile(f):")
+    lines.append("            continue")
+    lines.append("        if any(f.startswith(d) for d in out_dirs):")
+    lines.append("            continue")
+    lines.append("        for d in out_dirs:")
+    lines.append("            shutil.copy(f, os.path.join(d, f))")
+    lines.append("        os.remove(f)")
     return '\n'.join(lines)

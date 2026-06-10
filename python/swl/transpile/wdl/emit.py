@@ -685,6 +685,7 @@ def _mapped_by_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
 
     if step.id in inline_map:
         sub_steps = inline_map[step.id]
+
         s_var = f'{step.id}_i'
         first_col = next((c for c in col_names), None)
         len_expr = f'length({first_col})' if first_col else '1'
@@ -705,11 +706,11 @@ def _mapped_by_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
                 if binding is None:
                     expr = f'{in_name}[{s_var}]'
                 elif binding.get('source') == 'step_output':
-                    step_id = binding['step']
+                    step_id_ref = binding['step']
                     out_name = binding['output']
-                    step_renames = output_renames.get(step_id, {})
+                    step_renames = output_renames.get(step_id_ref, {})
                     renamed = step_renames.get(out_name, out_name)
-                    expr = f'{_call_alias(step_id)}.{renamed}'
+                    expr = f'{_call_alias(step_id_ref)}.{renamed}'
                 elif binding.get('source') == 'input':
                     expr = f'{binding["name"]}[{s_var}]'
                 elif binding.get('source') == 'literal':
@@ -746,7 +747,10 @@ def _mapped_by_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
         if col == group_key:
             continue
         t = to_wdl_type(input_schema.get(col, 'str'))
-        lines.append(f'        Array[{t}] {col}_vals = {g_var}.right.{_col_access_path(col, col_names)}')
+        path = _col_access_path(col, col_names)
+        if path.startswith('right.'):
+            path = path[6:]
+        lines.append(f'        Array[{t}] {col}_vals = {g_var}.right.{path}')
 
     tname = tasks.get(step.id, _task_name(step.id))
     alias = _call_alias(step.id)
