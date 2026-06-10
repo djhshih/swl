@@ -1,0 +1,14 @@
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+
+ N E X T F L O W   ~  version 26.04.3
+
+Launching `/home/davids/projects/swl/tests/integration/nf/explicit.nf` [friendly_lattes] revision: bd58fb9bf2
+
+[-        ] process > ALIGN -
+[-        ] process > SORT  -
+[-        ] process > CALL  -
+

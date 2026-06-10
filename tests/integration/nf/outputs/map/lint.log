@@ -1,0 +1,27 @@
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+Linting Nextflow code..
+Linting: /home/davids/projects/swl/tests/integration/nf/map.nf
+Warn  /home/davids/projects/swl/tests/integration/nf/map.nf:61:13: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  61 |     xs_ch = Channel.fromList(params.xs)
+╰     |             ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/map.nf:79:5: Variable was declared but not used
+│  79 |     bai = SORT.out.bai.toList()
+╰     |     ^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/map.nf:80:5: Variable was declared but not used
+│  80 |     bam = SORT.out.bam.toList()
+╰     |     ^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/map.nf:81:5: Variable was declared but not used
+│  81 |     bcf = CALL.out.bcf.toList()
+╰     |     ^^^
+
+
+Nextflow linting complete!
+ ⚠️  1 file had 4 warnings
+ ✅ 1 file had no errors

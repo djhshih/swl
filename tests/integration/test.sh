@@ -29,6 +29,7 @@ done
 
 run_suite "integration-cwl" "$ROOT/tests/integration/cwl/run.sh"
 run_suite "integration-wdl" "$ROOT/tests/integration/wdl/run.sh"
+run_suite "integration-nf" "$ROOT/tests/integration/nf/run.sh"
 
 echo "===== RESULTS ====="
 echo "Passed: $PASS / $((PASS + FAIL))"

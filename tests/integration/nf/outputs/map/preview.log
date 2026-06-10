@@ -1,0 +1,14 @@
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+
+ N E X T F L O W   ~  version 26.04.3
+
+Launching `/home/davids/projects/swl/tests/integration/nf/map.nf` [backstabbing_cori] revision: 8f1d510f1e
+
+[-        ] process > ALIGN -
+[-        ] process > SORT  -
+[-        ] process > CALL  -
+

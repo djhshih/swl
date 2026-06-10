@@ -1,0 +1,63 @@
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+Linting Nextflow code..
+Linting: /home/davids/projects/swl/tests/integration/nf/function.nf
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:61:17: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  61 |     fastq1_ch = Channel.fromPath(params.fastq1, checkIfExists: true)
+╰     |                 ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:62:17: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  62 |     fastq2_ch = Channel.fromPath(params.fastq2, checkIfExists: true)
+╰     |                 ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:63:18: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  63 |     outbase_ch = Channel.value(params.outbase)
+╰     |                  ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:64:14: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  64 |     ref_ch = Channel.fromPath(params.ref, checkIfExists: true)
+╰     |              ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:65:18: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  65 |     ref_amb_ch = Channel.fromPath(params.ref_amb, checkIfExists: true)
+╰     |                  ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:66:18: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  66 |     ref_ann_ch = Channel.fromPath(params.ref_ann, checkIfExists: true)
+╰     |                  ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:67:18: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  67 |     ref_bwt_ch = Channel.fromPath(params.ref_bwt, checkIfExists: true)
+╰     |                  ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:68:18: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  68 |     ref_fai_ch = Channel.fromPath(params.ref_fai, checkIfExists: true)
+╰     |                  ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:69:18: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  69 |     ref_pac_ch = Channel.fromPath(params.ref_pac, checkIfExists: true)
+╰     |                  ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:70:17: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  70 |     ref_sa_ch = Channel.fromPath(params.ref_sa, checkIfExists: true)
+╰     |                 ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:76:5: Variable was declared but not used
+│  76 |     bai = SORT.out.bai
+╰     |     ^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:77:5: Variable was declared but not used
+│  77 |     bam = SORT.out.bam
+╰     |     ^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/function.nf:78:5: Variable was declared but not used
+│  78 |     bcf = CALL.out.bcf
+╰     |     ^^^
+
+
+Nextflow linting complete!
+ ⚠️  1 file had 13 warnings
+ ✅ 1 file had no errors

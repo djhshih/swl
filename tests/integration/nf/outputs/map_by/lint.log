@@ -1,0 +1,43 @@
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+tput: unknown terminal "rxvt-unicode-256color"
+Linting Nextflow code..
+Linting: /home/davids/projects/swl/tests/integration/nf/map_by.nf
+Error /home/davids/projects/swl/tests/integration/nf/map_by.nf:78:5: `CALL_VARIANT` is not defined
+│  78 |     CALL_VARIANT(call_variant_ch)
+╰     |     ^^^^^^^^^^^^
+
+Error /home/davids/projects/swl/tests/integration/nf/map_by.nf:81:11: `CALL_VARIANT` is not defined
+│  81 |     bai = CALL_VARIANT.out.bai
+╰     |           ^^^^^^^^^^^^
+
+Error /home/davids/projects/swl/tests/integration/nf/map_by.nf:82:11: `CALL_VARIANT` is not defined
+│  82 |     bam = CALL_VARIANT.out.bam
+╰     |           ^^^^^^^^^^^^
+
+Error /home/davids/projects/swl/tests/integration/nf/map_by.nf:83:11: `CALL_VARIANT` is not defined
+│  83 |     bcf = CALL_VARIANT.out.bcf
+╰     |           ^^^^^^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/map_by.nf:61:13: The use of `Channel` to access channel factories is deprecated -- use `channel` instead
+│  61 |     xs_ch = Channel.fromList(params.xs)
+╰     |             ^^^^^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/map_by.nf:81:5: Variable was declared but not used
+│  81 |     bai = CALL_VARIANT.out.bai
+╰     |     ^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/map_by.nf:82:5: Variable was declared but not used
+│  82 |     bam = CALL_VARIANT.out.bam
+╰     |     ^^^
+
+Warn  /home/davids/projects/swl/tests/integration/nf/map_by.nf:83:5: Variable was declared but not used
+│  83 |     bcf = CALL_VARIANT.out.bcf
+╰     |     ^^^
+
+
+Nextflow linting complete!
+ ❌ 1 file had 4 errors
+ ⚠️  1 file had 4 warnings

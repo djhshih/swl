@@ -1,0 +1,12 @@
+{
+  "fastq1": "/tmp/dummy/sample1.r1.fq",
+  "fastq2": "/tmp/dummy/sample1.r2.fq",
+  "outbase": "test",
+  "ref": "/tmp/dummy/ref.fa",
+  "ref_amb": "/tmp/dummy/ref.fa.amb",
+  "ref_ann": "/tmp/dummy/ref.fa.ann",
+  "ref_bwt": "/tmp/dummy/ref.fa.bwt",
+  "ref_fai": "/tmp/dummy/ref.fa.fai",
+  "ref_pac": "/tmp/dummy/ref.fa.pac",
+  "ref_sa": "/tmp/dummy/ref.fa.sa"
+}
