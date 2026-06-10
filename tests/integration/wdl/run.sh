@@ -4,8 +4,8 @@ set -e
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 INT_DIR="$ROOT/tests/integration/wdl"
 DAG_DIR="$ROOT/tests/integration/dag"
-JOBS_DIR="$INT_DIR/jobs"
-INPUTS_DIR="$ROOT/tests/integration/inputs"
+JOBS_DIR="$INT_DIR/inputs"
+INPUTS_DIR="$ROOT/tests/integration/data"
 OUTPUTS_DIR="$INT_DIR/outputs"
 PASS=0
 FAIL=0
