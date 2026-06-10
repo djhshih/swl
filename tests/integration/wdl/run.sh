@@ -75,23 +75,20 @@ run_test() {
 
   if $HAVE_SPROCKET; then
     if sprocket check "$wdl" > "$outdir/sprocket_check.log" 2>&1; then
-      if sprocket run "$wdl" "@$json" -o "$outdir/sprocket" > "$outdir/sprocket_run.log" 2>&1; then
+      if sprocket run --no-call-cache "$wdl" "@$json" -o "$outdir/sprocket" > "$outdir/sprocket_run.log" 2>&1; then
         echo "PASS: $name"
         PASS=$((PASS + 1))
-        return
       else
         echo "FAIL: $name (sprocket run failed, see $outdir/sprocket_run.log)"
         FAIL=$((FAIL + 1))
-        return
       fi
     else
       echo "FAIL: $name (sprocket check failed)"
       FAIL=$((FAIL + 1))
-      return
     fi
+  else
+    cromwell_run "$name"
   fi
-
-  cromwell_run "$name"
 }
 
 run_test function
