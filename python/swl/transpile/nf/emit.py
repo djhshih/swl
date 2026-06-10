@@ -257,20 +257,35 @@ def _dag_to_nf(dag, workflow_id, processes):
     lines = [wf_header]
 
     input_sourced_sources = set()
+    table_sourced_inputs = set()
     for step in dag.steps:
         m = getattr(step, 'map', None) or {}
         src = m.get('source', {})
         if isinstance(src, dict) and src.get('source') == 'input':
             input_sourced_sources.add(src['name'])
+        if isinstance(src, dict) and src.get('source') == 'table':
+            columns = src.get('columns', {})
+            for col_binding in columns.values():
+                if col_binding.get('source') == 'input':
+                    table_sourced_inputs.add(col_binding['name'])
 
     channels = {}
-    for name, spec in dag.inputs.items():
-        ch_name = _channel_name(name)
-        channels[name] = ch_name
-        if name in input_sourced_sources:
-            lines.append(f'    {ch_name} = Channel.fromList(params.{name})')
-        else:
-            lines.append(f'    {ch_name} = {_input_channel(name, spec)}')
+    all_table = bool(dag.inputs) and set(dag.inputs.keys()) == table_sourced_inputs
+
+    if all_table:
+        lines.append('    xs_ch = Channel.fromList(params.xs)')
+        for name in dag.inputs:
+            ch_name = _channel_name(name)
+            channels[name] = ch_name
+            lines.append(f'    {ch_name} = xs_ch.map{{ it.{name} }}')
+    else:
+        for name, spec in dag.inputs.items():
+            ch_name = _channel_name(name)
+            channels[name] = ch_name
+            if name in input_sourced_sources:
+                lines.append(f'    {ch_name} = Channel.fromList(params.{name})')
+            else:
+                lines.append(f'    {ch_name} = {_input_channel(name, spec)}')
 
     if dag.inputs:
         lines.append('')
@@ -451,6 +466,10 @@ def _mapped_by_step_to_call(step, channels, processes):
     map_info = step.map or {}
     source = map_info.get('source', {})
     group_key = map_info.get('group_by')
+
+    if step.type == 'workflow' and isinstance(source, dict) and source.get('source') in ('input', 'table'):
+        return _mapped_workflow_step_to_call(step, channels, processes)
+
     pname = _process_name(step.id)
 
     source_type = source_kind(source)

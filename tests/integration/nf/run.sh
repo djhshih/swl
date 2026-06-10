@@ -55,8 +55,8 @@ run_test function
 run_test pipe
 run_test explicit
 run_test map
-# FIXME: panel fails preview (transpiler emits outer params that conflict with table-sourced workflow)
-# FIXME: map_by fails lint (transpiler references CALL_VARIANT process that is never emitted)
+run_test panel
+run_test map_by
 
 echo "---"
 echo "Passed: $PASS / $((PASS + FAIL))"
