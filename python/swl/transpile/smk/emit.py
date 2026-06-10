@@ -174,7 +174,7 @@ def _task_to_rule(step, dag, wrap_map=None):
         else:
             scatter_ports = set(step.map.get('scatter', []))
 
-    lines = [f'rule {rname}:', '']
+    lines = [f'rule {rname}:']
 
     task_inputs = task.get('inputs', {})
     file_inputs = {}
@@ -226,16 +226,12 @@ def _task_to_rule(step, dag, wrap_map=None):
     if body.strip():
         interp_body = _interpolate_shell(body, step)
         lines.append('    shell:')
-        if '\n' in interp_body:
-            lines.append('        """')
-            for line in interp_body.split('\n'):
-                lines.append(f'        {line}' if line.strip() else '')
-            lines.append('        """')
-        else:
-            lines.append(f'        "{interp_body}"')
+        lines.append('        """')
+        for line in interp_body.split('\n'):
+            lines.append(f'        {line}' if line.strip() else '')
+        lines.append('        """')
         lines.append('')
 
-    lines.append('}')
     return '\n'.join(lines)
 
 
