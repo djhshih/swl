@@ -217,7 +217,8 @@ map call_variant
         files, root = self._files()
         dag = force_file(os.path.join(root, 'import_partial.swl'), files)
         wdl = transpile_dag_dict(dag.to_dict())
-        self._assert_wdl_contains(wdl, 'workflow main_partial {')
+        self._assert_wdl_contains(wdl, 'workflow main {')
+        self.assertNotIn('workflow main_partial {', wdl)
 
     def test_rejects_merged_task_input_binding(self):
         bad = {
@@ -286,7 +287,7 @@ map call_variant
             'outputs': {'sample': {'type': '[str]', 'desc': None, 'value': {'step': 'grouped', 'output': 'sample'}}},
         }
         wdl = transpile_dag_dict(bad)
-        self._assert_wdl_contains(wdl, 'collect_by_key')
+        self._assert_wdl_contains(wdl, 'scatter')
 
     def test_root_partial_map_transpiles_as_scattered_subworkflow(self):
         files, root = self._files()
