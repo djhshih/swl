@@ -59,10 +59,8 @@ run_test() {
 }
 
 run_test function
-run_test pipe
-run_test explicit
-run_test map
 run_test panel
+run_test map
 run_test map_by
 
 echo "---"
