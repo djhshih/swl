@@ -1,0 +1,58 @@
+#!/bin/bash
+set -e
+
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+INT_DIR="$ROOT/tests/integration/smk"
+DAG_DIR="$ROOT/tests/integration/dag"
+CONFIG_DIR="$INT_DIR/config"
+OUTPUTS_DIR="$INT_DIR/outputs"
+PASS=0
+FAIL=0
+
+SNAKEMAKE=""
+if command -v snakemake &>/dev/null; then
+    SNAKEMAKE="snakemake"
+    snakemake --version 2>&1 | head -1
+fi
+
+mkdir -p "$OUTPUTS_DIR"
+export PYTHONPATH="$ROOT/python"
+
+for swl in function pipe explicit panel map map_by; do
+    python -m swl.transpile.smk "$DAG_DIR/${swl}.json" -o "$INT_DIR/${swl}.smk"
+done
+
+run_test() {
+    local name="$1"
+    local smk="$INT_DIR/${name}.smk"
+    local config="$CONFIG_DIR/${name}.yaml"
+    local outdir="$OUTPUTS_DIR/$name"
+    mkdir -p "$outdir"
+    echo "=== $name ==="
+
+    local log="$outdir/snakemake.log"
+    if $SNAKEMAKE -nq -s "$smk" --configfile "$config" > "$log" 2>&1; then
+        echo "PASS: $name"
+        PASS=$((PASS + 1))
+    elif grep -q "SyntaxError" "$log"; then
+        echo "FAIL: $name (syntax error, see $log)"
+        FAIL=$((FAIL + 1))
+    elif grep -q "KeyError" "$log"; then
+        echo "FAIL: $name (missing config key, see $log)"
+        FAIL=$((FAIL + 1))
+    else
+        echo "PASS: $name (missing inputs, DAG validated)"
+        PASS=$((PASS + 1))
+    fi
+}
+
+run_test function
+run_test pipe
+run_test explicit
+run_test panel
+run_test map
+run_test map_by
+
+echo "---"
+echo "Passed: $PASS / $((PASS + FAIL))"
+exit $FAIL
