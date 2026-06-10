@@ -1,9 +1,0 @@
-tput: unknown terminal "rxvt-unicode-256color"
-tput: unknown terminal "rxvt-unicode-256color"
-tput: unknown terminal "rxvt-unicode-256color"
-tput: unknown terminal "rxvt-unicode-256color"
-tput: unknown terminal "rxvt-unicode-256color"
-[WARN] WARN: Access to undefined parameter `fastq1` -- Initialise it to a default value eg. `params.fastq1 = some_value`
-
-[FAILED] completed=0 failed=0 cached=0
-Missing `fromPath` parameter -- Check script 'tests/integration/nf/panel.nf' at line: 77 or see '.nextflow.log' file for more details
