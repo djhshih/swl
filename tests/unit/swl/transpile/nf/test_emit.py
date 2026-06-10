@@ -318,7 +318,8 @@ map call_variant
             outputs={'x': OutputSpec(type='file?', desc=None, optional=True, value=Input('x', type='file?', desc=None, optional=True))},
         )
         nf = transpile_dag_dict(dag.to_dict())
-        self._assert_nf_contains(nf, 'x = x_ch', 'emit: x')
+        self._assert_nf_contains(nf, 'x = x_ch')
+        self.assertNotIn('emit:', nf)
 
 
     # Q5e: record-binding error messages -----------------------------------

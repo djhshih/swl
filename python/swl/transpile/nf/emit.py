@@ -252,6 +252,7 @@ def _setup_inner_channels(step, inner_dag, channels):
 
 
 def _dag_to_nf(dag, workflow_id, processes):
+    is_entrypoint = workflow_id == 'main'
     wf_header = f'workflow {_wf_name(workflow_id)} {{' if workflow_id != 'main' else 'workflow {'
     lines = [wf_header]
 
@@ -282,7 +283,11 @@ def _dag_to_nf(dag, workflow_id, processes):
             binding = output.value if isinstance(output, OutputSpec) else output
             ch_expr = _binding_to_channel(binding, channels, None)
             lines.append(f'    {name} = {ch_expr}')
-            lines.append(f'    emit: {name}')
+        if not is_entrypoint:
+            lines.append('')
+            lines.append('    emit:')
+            for name in dag.outputs:
+                lines.append(f'    {name}')
 
     lines.append('}')
     return '\n'.join(lines)
