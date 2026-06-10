@@ -15,6 +15,13 @@ if command -v nextflow &>/dev/null; then
     nextflow -version 2>&1 | head -2
 fi
 
+# Create dummy input files for actual nextflow execution
+mkdir -p /tmp/dummy
+for sample in sample1 sample2; do
+    touch "/tmp/dummy/${sample}.r1.fq" "/tmp/dummy/${sample}.r2.fq"
+done
+touch /tmp/dummy/ref.fa{,.amb,.ann,.bwt,.fai,.pac,.sa}
+
 mkdir -p "$OUTPUTS_DIR"
 export PYTHONPATH="$ROOT/python"
 
@@ -41,12 +48,12 @@ run_test() {
         echo "LINT PASS: $name"
     fi
 
-    local preview_log="$outdir/preview.log"
-    if $NEXTFLOW run "$nf" -params-file "$params" -preview > "$preview_log" 2>&1; then
+    local run_log="$outdir/run.log"
+    if $NEXTFLOW run "$nf" -params-file "$params" > "$run_log" 2>&1; then
         echo "PASS: $name"
         PASS=$((PASS + 1))
     else
-        echo "FAIL: $name (preview failed, see $preview_log)"
+        echo "FAIL: $name (run failed, see $run_log)"
         FAIL=$((FAIL + 1))
     fi
 }
