@@ -491,6 +491,8 @@ def _mapped_by_step_to_call(step, channels, processes):
     group_key = map_info.get('group_by')
 
     if step.type == 'workflow' and isinstance(source, dict) and source.get('source') in ('input', 'table'):
+        if map_info.get('group_by') and source.get('source') == 'table':
+            return _mapped_by_workflow_step(step, channels, processes, source, group_key)
         return _mapped_workflow_step_to_call(step, channels, processes)
 
     pname = _process_name(step.id)
@@ -551,6 +553,94 @@ def _mapped_by_step_to_call(step, channels, processes):
 
     for out_name in step.outputs:
         channels[f'{step.id}.{out_name}'] = f'{pname}.out.{_nf_emit_name(out_name)}'
+
+    return lines
+
+
+def _mapped_by_workflow_step(step, channels, processes, source, group_key):
+    source_type = source_kind(source)
+    lines = []
+
+    definition = step.task or {}
+    dag_data = definition.get('dag', {})
+    inner_dag = DAG.from_dict(dag_data) if dag_data else None
+    if inner_dag is None:
+        return lines
+
+    field_names = list(inner_dag.inputs.keys())
+
+    if source_type == 'input':
+        src_name = source['name']
+        base_ch = channels.get(src_name, _channel_name(src_name))
+        schema = getattr(step, 'input_schema', None) or {}
+        step_inputs = getattr(step, 'inputs', None) or {}
+        group_key_nf = group_key.replace('-', '_')
+        order = list(step_inputs.keys()) or sorted(schema)
+        tuple_parts = []
+        if group_key in order:
+            wdl_type = schema.get(group_key, 'str')
+            qual, _ = to_nf_qualifier(wdl_type)
+            if qual == 'path':
+                tuple_parts.append(f'file(x.{group_key_nf})')
+            else:
+                tuple_parts.append(f'x.{group_key_nf}')
+        for col_name in order:
+            if col_name == group_key:
+                continue
+            wdl_type = schema.get(col_name, 'str')
+            qual, _ = to_nf_qualifier(wdl_type)
+            if qual == 'path':
+                tuple_parts.append(f'file(x.{col_name})')
+            else:
+                tuple_parts.append(f'x.{col_name}')
+        ch_var = f'{step.id}_ch'
+        lines.append(f'    {ch_var} = {base_ch}')
+        lines.append(f'        .map{{ x -> tuple(')
+        for i, part in enumerate(tuple_parts):
+            comma = ',' if i < len(tuple_parts) - 1 else ''
+            lines.append(f'            {part}{comma}')
+        lines.append(f'        ) }}')
+        lines.append(f'        .groupTuple()')
+
+        inner_channels = {}
+        for i, field_name in enumerate(field_names):
+            inner_channels[field_name] = f'{ch_var}.map{{ it[{(i + 1) if field_name == group_key else i}] }}'
+    elif source_type == 'table':
+        columns = source.get('columns', {})
+        ch_var = f'{step.id}_vals'
+        col_binding = columns.get(group_key, {})
+        col_src = col_binding.get('name', group_key)
+        src_ch = channels.get(col_src) or _channel_name(col_src)
+        lines.append(f'    {ch_var} = {src_ch}')
+        grouped_var = f'{step.id}_groups'
+        lines.append(f'    {grouped_var} = {ch_var}')
+        lines.append(f'        .map{{ val -> tuple(groupKey(val), val) }}')
+        lines.append(f'        .groupTuple()')
+
+        inner_channels = {}
+        for field_name in field_names:
+            col = columns.get(field_name, {})
+            if col.get('source') == 'input' and field_name == group_key:
+                inner_channels[field_name] = f'{grouped_var}.map{{ it[1] }}'
+            elif col.get('source') == 'input':
+                inner_channels[field_name] = channels.get(col['name'], _channel_name(col['name']))
+            else:
+                inner_channels[field_name] = _channel_name(field_name)
+    else:
+        return lines
+
+    if lines:
+        lines.append('')
+    _inline_dag_steps(inner_dag, inner_channels, lines, processes)
+
+    for out_name in step.outputs:
+        inner_output_binding = inner_dag.outputs.get(out_name)
+        if inner_output_binding is not None:
+            binding = inner_output_binding.value if isinstance(inner_output_binding, OutputSpec) else inner_output_binding
+            ch = _binding_to_channel(binding, inner_channels, None)
+        else:
+            ch = f'{_process_name(step.id)}.out.{_nf_emit_name(out_name)}'
+        channels[f'{step.id}.{out_name}'] = f'{ch}.toList()'
 
     return lines
 
