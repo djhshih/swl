@@ -11,8 +11,8 @@ PYTHONPATH="$ROOT/python:$ROOT/tests/unit" python -m unittest \
     tests.unit.swl.semantic.task.test_type \
     tests.unit.swl.semantic.wf.test_check \
     tests.unit.swl.ir.test_lower \
-    tests.unit.swl.ir.test_force \
-    tests.unit.swl.ir.test_force_codec \
+    tests.unit.swl.dag.test_force \
+    tests.unit.swl.dag.test_force_codec \
     tests.unit.swl.transpile.cwl.test_emit \
     tests.unit.swl.transpile.wdl.test_emit \
     tests.unit.swl.transpile.nf.test_emit \
