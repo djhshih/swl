@@ -28,8 +28,9 @@ for swl in function pipe explicit panel map map_by; do
 done
 
 run_suite "integration-cwl" "$ROOT/tests/integration/cwl/run.sh"
-run_suite "integration-wdl" "$ROOT/tests/integration/wdl/run.sh"
 run_suite "integration-nf" "$ROOT/tests/integration/nf/run.sh"
+run_suite "integration-smk" "$ROOT/tests/integration/smk/run.sh"
+run_suite "integration-wdl" "$ROOT/tests/integration/wdl/run.sh"
 
 echo "===== RESULTS ====="
 echo "Passed: $PASS / $((PASS + FAIL))"
