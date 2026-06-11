@@ -1,7 +1,3 @@
-Tests:
-- fix integration test errors for nextflow on transpiled .nf files
-- fix integration test errors for snakemake on transpiled .smk files
-
 Python:
 - input data feeding for transpiled workflows
 - cli command for showing workflow inputs and outputs
