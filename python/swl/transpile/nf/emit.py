@@ -57,16 +57,6 @@ def _nf_emit_name(name):
     return emit_name(name)
 
 
-def _has_dynamic_output(outputs):
-    for spec in outputs.values():
-        default = spec.get('default')
-        if default and isinstance(default, dict) and default.get('kind') == 'word':
-            for part in default.get('parts', []):
-                if part.get('kind') == 'var':
-                    return True
-    return False
-
-
 def _task_to_process(step):
     task = step.task or {}
     body = task.get('body', '')
@@ -83,12 +73,6 @@ def _task_to_process(step):
     outputs = task.get('outputs', {})
     has_map = getattr(step, 'map', None) is not None
 
-    has_path_input = any(
-        to_nf_qualifier(spec.get('type'))[0] == 'path'
-        for spec in inputs.values()
-    )
-    needs_stage_as = has_path_input and _has_dynamic_output(outputs)
-
     if inputs:
         lines.append('    input:')
         if has_map:
@@ -98,10 +82,7 @@ def _task_to_process(step):
                 spec = inputs.get(in_name, {})
                 qual, _ = to_nf_qualifier(spec.get('type'))
                 if qual == 'path':
-                    if needs_stage_as:
-                        tuple_parts.append(f'path({in_name}, stageAs: "{in_name}")')
-                    else:
-                        tuple_parts.append(f'path({in_name})')
+                    tuple_parts.append(f'path({in_name})')
                 else:
                     tuple_parts.append(f'val({in_name})')
             lines.append(f'    tuple {"(" + ", ".join(tuple_parts) + ")" if len(tuple_parts) > 1 else tuple_parts[0]}')
@@ -109,10 +90,7 @@ def _task_to_process(step):
             for in_name, spec in inputs.items():
                 qual, _ = to_nf_qualifier(spec.get('type'))
                 if qual == 'path':
-                    if needs_stage_as:
-                        lines.append(f'    path {in_name}, stageAs: "{in_name}"')
-                    else:
-                        lines.append(f'    path {in_name}')
+                    lines.append(f'    path {in_name}')
                 else:
                     lines.append(f'    val {in_name}')
         lines.append('')

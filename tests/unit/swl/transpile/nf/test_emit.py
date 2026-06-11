@@ -35,15 +35,15 @@ bwa mem -t ${cpu} ${ref} ${fastq1} ${fastq2} | samtools view -b - > ${outbase}.b
 #   bam      file                    | input bam
 #   outbase  str                     | output base name
 # out
-#   bam      file  =  ${outbase}.bam | output alignment
+#   bam      file  =  ${outbase}.sorted.bam | output alignment
 #   bai      file  =  ${outbase}.bai | output alignment index
 # run
 #   cpu    = 2
 #   memory = 8G
 #   image  = djhshih/seqkit:0.1
 
-samtools sort -@ ${cpu} -m ${memory / cpu} aligned.bam ${outbase}.bam
-samtools index ${outbase}.bam ${outbase}.bai
+samtools sort -@ ${cpu} -m ${memory / cpu} aligned.bam ${outbase}.sorted.bam
+samtools index ${outbase}.sorted.bam ${outbase}.bai
 ''',
             os.path.join(root, 'call.sh'): '''#@  Call mutations on read alignment
 # in
@@ -234,7 +234,7 @@ map call_variant
             'emit: bam',
         )
         self.assertIn('tuple', nf)
-        self.assertIn('path(fastq1, stageAs:', nf)
+        self.assertIn('path(fastq1)', nf)
 
     def test_batch_mapped_workflow_inlines_pipeline(self):
         files, root = self._files()
