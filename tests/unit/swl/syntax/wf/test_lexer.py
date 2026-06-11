@@ -107,6 +107,23 @@ class TestLexer(ut.TestCase):
             Token(TokenType.eof)]
         )
 
+    def test_empty_string(self):
+        lexer = Lexer('')
+        self.assertEqual([x for x in lexer], [Token(TokenType.eof)])
+
+    def test_unterminated_string_fails(self):
+        lexer = Lexer('x = "unterminated')
+        with self.assertRaises(Exception):
+            [x for x in lexer]
+
+    def test_just_comment_line(self):
+        lexer = Lexer('# just a comment')
+        self.assertEqual([x for x in lexer], [Token(TokenType.eof)])
+
+    def test_multiple_blank_lines(self):
+        lexer = Lexer('\n\n\n')
+        self.assertEqual([x for x in lexer], [Token(TokenType.eof)])
+
 
 if __name__ == '__main__':
     ut.main()

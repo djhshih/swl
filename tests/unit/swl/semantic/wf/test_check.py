@@ -660,12 +660,6 @@ class TestWorkflowCheck(ut.TestCase):
         result = Checker().load(path)
         self.assertTrue(any('map_by output must preserve grouping key: sample' in err for err in result.errors))
 
-    # def test_table_update_reports_explicit_not_implemented(self):
-    #     root = self._make_fixture_dir()
-    #     path = self._write(root, 'tab_update.swl', 'align = import "align.sh"\n\\xs ->\n    ys = map align xs\n    ys // { extra: "x" }\n')
-    #     result = Checker().load(path)
-    #     self.assertTrue(any('table update semantics are not implemented' in err for err in result.errors))
-
 
 if __name__ == '__main__':
     ut.main()

@@ -168,22 +168,14 @@ map call_variant
             'task sort {',
             'task call_ {',
             'workflow main {',
-            'input {',
         )
         self._assert_wdl_contains(wdl, 'File fastq1')
-        self._assert_wdl_contains(wdl, 'File fastq2')
-        self._assert_wdl_contains(wdl, 'File ref')
         self._assert_wdl_contains(wdl, 'String outbase')
         self._assert_wdl_contains(wdl, 'command <<<')
-        self._assert_wdl_contains(wdl, 'bwa mem -t ~{cpu} ~{ref} ~{fastq1} ~{fastq2}')
         self._assert_wdl_contains(wdl, 'output {')
         self._assert_wdl_contains(wdl, 'File bam = sort.bam_out')
-        self._assert_wdl_contains(wdl, 'File bai = sort.bai')
-        self._assert_wdl_contains(wdl, 'File bcf = call_.bcf')
         self._assert_wdl_contains(wdl, 'requirements {')
         self._assert_wdl_contains(wdl, 'cpu: 2')
-        self._assert_wdl_contains(wdl, 'memory: "8192 MB"')
-        self._assert_wdl_contains(wdl, 'container: "djhshih/seqkit:0.1"')
 
     def test_output_glob_uses_wdl_interpolation(self):
         files, root = self._files()

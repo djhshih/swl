@@ -50,6 +50,14 @@ class TestBashParser(ut.TestCase):
             ]
         )
 
+    def test_empty_script(self):
+        script = bash.parse('')
+        self.assertEqual(len(script.statements), 0)
+
+    def test_script_with_only_comment(self):
+        script = bash.parse('# just a comment\n')
+        self.assertEqual(len(script.statements), 0)
+
 
 if __name__ == '__main__':
     ut.main()

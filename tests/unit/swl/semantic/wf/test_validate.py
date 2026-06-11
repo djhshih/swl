@@ -110,6 +110,30 @@ class TestWorkflowInputValidate(unittest.TestCase):
             })
         self.assertIn('array column', str(ctx.exception))
 
+    def test_validate_missing_input_reports_error(self):
+        root = self._fixture_dir()
+        self._write(root, 'align.sh', _ALIGN)
+        path = self._write(root, 'simple.swl', _SIMPLE)
+        result = Checker().load(path)
+        with self.assertRaises(WorkflowInputValidationError) as ctx:
+            validate_workflow_inputs(result, {'outbase': 'x'})
+        self.assertIn('fastq', str(ctx.exception))
+
+    def test_validate_batch_single_element_arrays(self):
+        root = self._fixture_dir()
+        self._write(root, 'align.sh', _ALIGN)
+        self._write(root, 'merge.sh', _MERGE)
+        path = self._write(root, 'batch.swl', _BATCH)
+        result = Checker().load(path)
+        value = {
+            'fastq1': ['a.fq'],
+            'fastq2': ['b.fq'],
+            'ref': ['hg38.fa'],
+            'ref_fai': ['hg38.fa.fai'],
+            'outbase': ['a'],
+        }
+        self.assertEqual(validate_workflow_inputs(result, value), value)
+
 
 if __name__ == '__main__':
     unittest.main()

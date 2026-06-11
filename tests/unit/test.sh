@@ -15,5 +15,6 @@ PYTHONPATH="$ROOT/python:$ROOT/tests/unit" python -m unittest \
     tests.unit.swl.ir.test_force_codec \
     tests.unit.swl.transpile.cwl.test_emit \
     tests.unit.swl.transpile.wdl.test_emit \
-    tests.unit.swl.transpile.nf.test_emit
+    tests.unit.swl.transpile.nf.test_emit \
+    tests.unit.swl.test_api
 printf "unit tests passed\n\n"
