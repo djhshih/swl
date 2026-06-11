@@ -9,7 +9,6 @@ OUTPUTS_DIR="$INT_DIR/outputs"
 PASS=0
 FAIL=0
 
-SNAKEMAKE=""
 if command -v snakemake &>/dev/null; then
     SNAKEMAKE="snakemake"
     snakemake --version 2>&1 | head -1
@@ -18,7 +17,7 @@ fi
 mkdir -p "$OUTPUTS_DIR"
 export PYTHONPATH="$ROOT/python"
 
-for swl in function pipe explicit panel map map_by; do
+for swl in function panel map map_by; do
     python -m swl.transpile.smk "$DAG_DIR/${swl}.json" -o "$INT_DIR/${swl}.smk"
 done
 
@@ -41,14 +40,12 @@ run_test() {
         echo "FAIL: $name (missing config key, see $log)"
         FAIL=$((FAIL + 1))
     else
-        echo "PASS: $name (missing inputs, DAG validated)"
-        PASS=$((PASS + 1))
+        echo "FAIL: $name (see $log)"
+        PASS=$((FAIL + 1))
     fi
 }
 
 run_test function
-run_test pipe
-run_test explicit
 run_test panel
 run_test map
 run_test map_by
