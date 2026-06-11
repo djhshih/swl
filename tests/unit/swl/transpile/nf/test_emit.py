@@ -234,7 +234,7 @@ map call_variant
             'emit: bam',
         )
         self.assertIn('tuple', nf)
-        self.assertIn('path(fastq1)', nf)
+        self.assertIn('path(fastq1, stageAs:', nf)
 
     def test_batch_mapped_workflow_inlines_pipeline(self):
         files, root = self._files()
