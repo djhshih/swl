@@ -21,7 +21,7 @@ for swl in function panel map map_by; do
     python -m swl.transpile.smk "$DAG_DIR/${swl}.json" -o "$INT_DIR/${swl}.smk"
 done
 
-test_workflow() {
+run_test() {
     local name="$1"
     local smk="$INT_DIR/${name}.smk"
     local config="$CONFIG_DIR/${name}.yaml"
@@ -29,22 +29,19 @@ test_workflow() {
     mkdir -p "$outdir"
     local log="$outdir/snakemake.log"
 
-    echo "=== lint $name ==="
+    echo "=== $name ==="
+
     if $SNAKEMAKE -nq -s "$smk" --configfile "$config" --directory "$INT_DIR" > "$log" 2>&1; then
-        echo "PASS: $name (lint)"
+        echo "LINT PASS: $name (lint)"
         PASS=$((PASS + 1))
     elif grep -q "SyntaxError" "$log"; then
-        echo "FAIL: $name (syntax error, see $log)"
+        echo "LINT FAIL: $name (syntax error, see $log)"
         FAIL=$((FAIL + 1))
-        echo "FAIL: $name (see $log)"
-        FAIL=$((FAIL + 1))
-        return
     else
-        echo "PASS: $name (lint OK)"
-        PASS=$((PASS + 1))
+        echo "LINT FAIL: $name (see $log)"
+        FAIL=$((FAIL + 1))
     fi
 
-    echo "=== $name ==="
     if $SNAKEMAKE -nq -s "$smk" --configfile "$config" --directory "$INT_DIR" > "$log" 2>&1; then
         echo "PASS: $name"
         PASS=$((PASS + 1))
@@ -57,10 +54,10 @@ test_workflow() {
     fi
 }
 
-test_workflow function
-test_workflow panel
-test_workflow map
-test_workflow map_by
+run_test function
+run_test panel
+run_test map
+run_test map_by
 
 echo "---"
 echo "Passed: $PASS / $((PASS + FAIL))"
