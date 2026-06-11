@@ -21,34 +21,46 @@ for swl in function panel map map_by; do
     python -m swl.transpile.smk "$DAG_DIR/${swl}.json" -o "$INT_DIR/${swl}.smk"
 done
 
-run_test() {
+test_workflow() {
     local name="$1"
     local smk="$INT_DIR/${name}.smk"
     local config="$CONFIG_DIR/${name}.yaml"
     local outdir="$OUTPUTS_DIR/$name"
     mkdir -p "$outdir"
-    echo "=== $name ==="
-
     local log="$outdir/snakemake.log"
-    if $SNAKEMAKE -nq -s "$smk" --configfile "$config" > "$log" 2>&1; then
-        echo "PASS: $name"
+
+    echo "=== lint $name ==="
+    if $SNAKEMAKE -nq -s "$smk" --configfile "$config" --directory "$INT_DIR" > "$log" 2>&1; then
+        echo "PASS: $name (lint)"
         PASS=$((PASS + 1))
     elif grep -q "SyntaxError" "$log"; then
         echo "FAIL: $name (syntax error, see $log)"
         FAIL=$((FAIL + 1))
+        echo "FAIL: $name (see $log)"
+        FAIL=$((FAIL + 1))
+        return
+    else
+        echo "PASS: $name (lint OK)"
+        PASS=$((PASS + 1))
+    fi
+
+    echo "=== $name ==="
+    if $SNAKEMAKE -nq -s "$smk" --configfile "$config" --directory "$INT_DIR" > "$log" 2>&1; then
+        echo "PASS: $name"
+        PASS=$((PASS + 1))
     elif grep -q "KeyError" "$log"; then
         echo "FAIL: $name (missing config key, see $log)"
         FAIL=$((FAIL + 1))
     else
         echo "FAIL: $name (see $log)"
-        PASS=$((FAIL + 1))
+        FAIL=$((FAIL + 1))
     fi
 }
 
-run_test function
-run_test panel
-run_test map
-run_test map_by
+test_workflow function
+test_workflow panel
+test_workflow map
+test_workflow map_by
 
 echo "---"
 echo "Passed: $PASS / $((PASS + FAIL))"

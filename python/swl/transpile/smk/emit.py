@@ -45,6 +45,10 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True, wrap_map=None)
             for g in wildcard_globs:
                 lines.append(g)
             lines.append('')
+        dag_lines = _dag_to_smk(dag, workflow_id, rule_names)
+        if dag_lines.strip():
+            lines.append(dag_lines)
+            lines.append('')
     for step in dag.steps:
         if step.type == 'workflow':
             continue
@@ -53,11 +57,6 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True, wrap_map=None)
     for sub in sub_workflows:
         lines.append(sub)
         lines.append('')
-    if _top_level:
-        dag_lines = _dag_to_smk(dag, workflow_id, rule_names)
-        if dag_lines.strip():
-            lines.append(dag_lines)
-            lines.append('')
     return '\n'.join(lines)
 
 
