@@ -22,6 +22,10 @@ class TestAPI(unittest.TestCase):
         self.assertIsInstance(dag, DAG)
         self.assertEqual(len(dag.steps), 1)
 
+    def test_force_workflow_errors_on_invalid(self):
+        with self.assertRaises(Exception):
+            force_workflow('/v/nonexistent.swl', files=self._files())
+
     def test_load_workflow_returns_check_result(self):
         result = load_workflow('/v/wf.swl', files=self._files())
         self.assertIsNotNone(result.signature)
