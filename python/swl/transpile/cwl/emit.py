@@ -5,7 +5,6 @@ from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, 
 from swl.transpile.common import (
     classify_var,
     field_chain_parts,
-    field_path_after_first,
     flatten_dag_outputs,
     run_value,
     source_input_name,
@@ -102,11 +101,6 @@ def transpile_dag_dict(data, workflow_id='main'):
     for _, (step_entry, _) in record_output_map.items():
         wf_steps.insert(0, step_entry)
 
-    def _is_map_by_step_ref(value, dag):
-        if isinstance(value, Field) and isinstance(value.source, StepCall):
-            return value.source.has_group_by
-        return False
-
     outputs = []
     for name, output in dag.outputs.items():
         value = output.value if isinstance(output, OutputSpec) else output
@@ -120,7 +114,7 @@ def transpile_dag_dict(data, workflow_id='main'):
         else:
             source = _binding_source(value, workflow_id)
             typ = to_cwl_type(output.type)
-            if _is_map_by_step_ref(value, dag):
+            if isinstance(value, Field) and isinstance(value.source, StepCall) and value.source.has_group_by:
                 typ = {'type': 'array', 'items': typ}
             outputs.append({
                 'id': f'#{workflow_id}/{name}',
@@ -143,7 +137,7 @@ def transpile_dag_dict(data, workflow_id='main'):
 
 
 def _tool_to_cwl(step, tool_id):
-    definition = step.task or {}
+    definition = step.task_def
     if definition.get('class') == 'Workflow':
         packed = transpile_dag_dict(definition['dag'], workflow_id=tool_id[1:])
         return packed.get('$graph', [])
@@ -321,7 +315,7 @@ def _validate_supported(dag):
     for step in dag.steps:
         for name, spec in step.task_def.get('outputs', {}).items():
             try:
-                _interp_to_cwl_glob(spec.get('default'), step.task.get('inputs', {}).keys())
+                _interp_to_cwl_glob(spec.get('default'), step.task_def.get('inputs', {}).keys())
             except ValueError as exc:
                 raise ValueError(f'Unsupported step output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
     validate_no_merge_bindings(dag, 'CWL')
@@ -359,7 +353,7 @@ def _has_expr_interpolation(spec):
 def _interpolate_shell(body, step):
     if '$' not in body:
         return body
-    task = step.task or {}
+    task = step.task_def
     input_names = set(task.get('inputs', {}).keys())
     input_types = {n: s.get('type') for n, s in task.get('inputs', {}).items()}
     run = task.get('run', {})
@@ -642,7 +636,7 @@ def _emit_map_by_graph(step, dag):
         'inputBinding': {'position': 1},
     }]
 
-    inner_def = step.task or {}
+    inner_def = step.task_def
     dag_data = inner_def.get('dag', {})
     if dag_data and inner_def.get('class') == 'Workflow':
         original_body = _dag_to_combined_script(dag_data)

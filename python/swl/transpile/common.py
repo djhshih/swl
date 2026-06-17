@@ -158,9 +158,5 @@ def field_chain_parts(value):
     return current, chain[-1] if chain else None, None
 
 
-def field_path_after_first(value):
-    _, _, tail = field_chain_parts(value)
-    return tail or value.name
-
 
 

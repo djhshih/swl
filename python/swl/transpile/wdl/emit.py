@@ -25,7 +25,7 @@ def transpile_dag_file(path):
 
 
 def _conflicting_outputs(step):
-    task = step.task or {}
+    task = step.task_def
     inputs = task.get('inputs', {})
     outputs = task.get('outputs', {})
     renames = {}
@@ -221,7 +221,7 @@ def _emit_task_body(name, body, inputs_dict, outputs_dict, run_dict, rename_map)
 def _task_to_wdl(step, rename_map=None):
     if rename_map is None:
         rename_map = {}
-    task = step.task or {}
+    task = step.task_def
     return _emit_task_body(
         _task_name(step.id),
         task.get('body', ''),
@@ -767,7 +767,7 @@ def _infer_fieldto_wdl_type(fbinding, dag):
     if isinstance(fbinding, Literal):
         return _infer_literal_type(fbinding.value)
     if isinstance(fbinding, Field) and isinstance(fbinding.source, StepCall):
-        spec = (fbinding.source.task or {}).get('outputs', {}).get(fbinding.name, {})
+        spec = fbinding.source.task_def.get('outputs', {}).get(fbinding.name, {})
         out_type = spec.get('type')
         return to_wdl_type(out_type) if out_type else 'String'
     if isinstance(fbinding, (Field, StepCall)):

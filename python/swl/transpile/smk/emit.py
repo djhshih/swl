@@ -8,12 +8,10 @@ from swl.transpile.common import (
     format_resource_directives,
     interp_script,
     run_value,
-    source_kind,
     step_name,
     validate_dag_for_transpile,
     validate_no_merge_bindings,
     word_interp,
-    workflow_name,
 )
 
 
@@ -80,57 +78,37 @@ def _resolve_concrete_path(pattern, params):
     return result
 
 
-def _scope_path(step_id, rendered, is_mapped, scatter_ports):
-    if is_mapped and scatter_ports:
+def _output_path(step_id, leaf, scatter_ports):
+    if scatter_ports:
         parts = [f'results/{step_id}']
         for port in sorted(scatter_ports):
             parts.append('{' + port + '}')
-        parts.append(rendered)
-        return repr('/'.join(parts))
-    return repr(f'results/{step_id}/{rendered}')
-
-
-def _scope_path_raw(step_id, rendered, is_mapped, scatter_ports):
-    if is_mapped and scatter_ports:
-        parts = [f'results/{step_id}']
-        for port in sorted(scatter_ports):
-            parts.append('{' + port + '}')
-        parts.append(rendered)
+        parts.append(leaf)
         return '/'.join(parts)
-    return f'results/{step_id}/{rendered}'
+    return f'results/{step_id}/{leaf}'
 
 
 def _render_output_path(value, dag=None):
     if isinstance(value, Field) and isinstance(value.source, StepCall):
         prev = value.source
         out_name = value.name
-        prev_is_mapped = prev.is_mapped
         prev_scatter = set(prev.map_info.get('scatter', [])) if prev.is_mapped else set()
         spec = prev.task_def.get('outputs', {}).get(out_name, {})
         rendered = _output_template(spec)
         if rendered is not None:
-            return _scope_path_raw(prev.id, rendered, prev_is_mapped, prev_scatter)
+            return _output_path(prev.id, rendered, prev_scatter)
         if prev.type == 'workflow':
             inner_default, inner_step_id = _inner_output_default(prev, out_name)
             if inner_default:
                 rendered = _interp_to_smk(inner_default)
                 if rendered is not None:
-                    return _scope_path_raw(inner_step_id, rendered, False, set()) if inner_step_id else rendered
+                    return _output_path(inner_step_id, rendered, set()) if inner_step_id else rendered
         if prev.is_mapped:
             scatter_ports = set(prev.map_info.get('scatter', []))
-            return _default_output_path_raw(prev.id, out_name, scatter_ports)
+            return _output_path(prev.id, out_name, scatter_ports)
         return f'results/{prev.id}/{out_name}'
     return None
 
-
-def _default_output_path_raw(step_id, out_name, scatter_ports):
-    if scatter_ports:
-        parts = [f'results/{step_id}']
-        for port in sorted(scatter_ports):
-            parts.append('{' + port + '}')
-        parts.append(out_name)
-        return '/'.join(parts)
-    return f'results/{step_id}/{out_name}'
 
 
 def _collect_wildcard_globs(dag):
@@ -186,7 +164,7 @@ def _mapped_output_expand(name, step):
     if default_spec:
         rendered = _interp_to_smk(default_spec)
         if rendered:
-            scoped = _scope_path_raw(inner_step_id, rendered, False, set()) if inner_step_id else rendered
+            scoped = _output_path(inner_step_id, rendered, set()) if inner_step_id else rendered
             vars_in = re.findall(r'\{(\w+)\}', scoped)
             if vars_in:
                 kwargs = ', '.join(f'{v}={v.upper()}' for v in vars_in)
@@ -301,9 +279,9 @@ def _task_to_rule(step, dag, wrap_map=None):
                 if concrete is not None:
                     path_expr = repr(f'results/{step.id}/{concrete}')
                 else:
-                    path_expr = _scope_path(step.id, rendered, is_mapped, scatter_ports)
+                    path_expr = repr(_output_path(step.id, rendered, scatter_ports))
             else:
-                path_expr = _default_output_path(step.id, out_name, is_mapped, scatter_ports)
+                path_expr = repr(_output_path(step.id, out_name, scatter_ports))
             lines.append(f'        {_san(out_name)}={path_expr},')
         lines.append('')
 
@@ -342,15 +320,6 @@ def _task_to_rule(step, dag, wrap_map=None):
     return '\n'.join(lines)
 
 
-def _default_output_path(step_id, out_name, is_mapped, scatter_ports):
-    if is_mapped and scatter_ports:
-        parts = [f'results/{step_id}']
-        for port in sorted(scatter_ports):
-            parts.append('{' + port + '}')
-        parts.append(out_name)
-        return repr('/'.join(parts))
-    return repr(f'results/{step_id}/{out_name}')
-
 
 def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None, dag=None):
     if binding is None:
@@ -365,14 +334,13 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
         if isinstance(binding.source, StepCall):
             prev_step = binding.source
             out_name = binding.name
-            prev_is_mapped = prev_step.is_mapped
             prev_scatter = set(prev_step.map_info.get('scatter', [])) if prev_step.is_mapped else set()
             if prev_step.type == 'workflow' and prev_step.is_mapped:
                 inner_default, inner_step_id = _inner_output_default(prev_step, out_name)
                 if inner_default:
                     rendered = _interp_to_smk(inner_default)
                     if rendered is not None:
-                        scoped = _scope_path_raw(inner_step_id, rendered, False, set())
+                        scoped = _output_path(inner_step_id, rendered, set())
                         vars_in = re.findall(r'\{(\w+)\}', scoped)
                         if vars_in:
                             kwargs = ', '.join(f'{v}={v.upper()}' for v in vars_in)
@@ -381,9 +349,9 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
             spec = prev_step.task_def.get('outputs', {}).get(out_name, {})
             rendered = _output_template(spec)
             if rendered is not None:
-                return _scope_path(prev_step.id, rendered, prev_is_mapped, prev_scatter)
+                return repr(_output_path(prev_step.id, rendered, prev_scatter))
             if prev_step.is_mapped:
-                return _default_output_path(prev_step.id, out_name, True, prev_scatter)
+                return repr(_output_path(prev_step.id, out_name, prev_scatter))
             return repr(f'results/{prev_step.id}/{out_name}')
         return f'config["{port_name}"]'
 
