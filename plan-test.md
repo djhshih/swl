@@ -1,306 +1,179 @@
-# Test Improvement Plan
+# SWL Testing Upgrade Plan
 
-## What compile & integration tests cover
+## 1. Trivial & Restrictive Tests
 
-`tests/compile/test.sh` runs every `.swl`/`.sh` file through `eval.syntax_task`, `eval.semantic_task`, `eval.syntax_wf`, `eval.semantic_wf`, `eval.ir`, `eval.dag`, and `swl.compile`. It also transpiles every compiled DAG through all 4 backends (CWL/WDL/NF/SMK) and verifies pipe==function and explicit==function equivalence.
+### Trivial Tests (insufficient depth)
 
-**Already covered — do NOT add redundant unit tests:**
-- `swl/eval/*.py` — run on every SWL file
-- `swl/compile.py` — CLI exercised directly
-- All 4 transpile backends — end-to-end equivalence verified for 6 workflows
-- All transpile CLI/`__main__.py` — invoked by compile test
-- `swl.api.compile_workflow` — called via CLI
-- `swl/dag/merge.py` — all functions private (`_`), exercised by force tests
-- `swl/dag/tooldefs.py` — all functions private, exercised by force tests
-- `swl/semantic/wf/bashvars.py` — private function, exercised via tooldefs
-- `swl/semantic/wf/infer.py` — exercised by `test_check.py` (which calls `apply_function`, `application_result`, etc.)
+These tests verify the bare minimum and miss edge cases:
 
----
+| File | Issue |
+|------|-------|
+| `tests/unit/swl/syntax/task/test_interpolation.py` | Only 5 tests, each testing one trivial happy-path. Missing: empty input, nested `${}`, special chars, multiple vars, escaped `$`, invalid syntax variations |
+| `tests/unit/swl/syntax/task/test_bash.py` | Only 2 tests parsing 2 script bodies. Missing: empty scripts, comments in body, heredocs, pipes, redirects, error recovery |
+| `tests/unit/swl/syntax/wf/test_lexer.py` | 7 tests, all happy-path token sequences. Missing: error cases (unterminated strings, unexpected chars, empty input, deeply nested `{}`) |
+| `tests/unit/swl/syntax/wf/test_parser.py` | 10 of 14 tests use `assertIsNotNone` — they check parsing doesn't crash but never inspect the AST structure emitted. Missing: AST shape verification, error recovery, complex nested structures |
+| `tests/unit/swl/semantic/wf/test_validate.py` | Only 4 tests covering 2 workflows. Missing: missing required inputs, wrong types, extra unknown inputs, optional inputs, mixed batch/simple |
+| `tests/unit/swl/transpile/nf/test_emit.py` | `test_empty_inputs_outputs`, `test_outputspec_passthrough` — single assertion per test |
+| `tests/unit/swl/transpile/wdl/test_emit.py` | `test_empty_inputs_outputs` — trivial smoke test |
 
-## 1. Make Restrictive Tests Less Restrictive
+### Restrictive Tests (brittle, impede refactoring)
 
-These tests currently impede refactoring by checking deep implementation structure rather than behavioral contracts. Each change preserves the test's original intent while removing coupling to internal details.
+These assert exact structure/strings that make the code hard to refactor:
 
-### 1.1 `tests/unit/swl/ir/test_force.py`
-
-**`test_force_saturated_workflow_produces_task_dag`** (line 266)
-- Replace hardcoded step IDs `['align', 'sort']` with step count + output key check:
-
-```python
-self.assertEqual(len(data['steps']), 2)
-self.assertEqual(sorted(data['outputs'].keys()), ['bai', 'bam'])
-```
-
-**`test_chain_root_is_instantiated_during_force`** (line 302, 16 assertions)
-- Cut to 3-4: step count == 3, output count == 3, one dependency check:
-
-```python
-self.assertEqual(len(data['steps']), 3)
-self.assertEqual(len(data['outputs']), 3)
-self.assertEqual(data['steps'][2]['deps'], [data['steps'][1]['id']])
-```
-
-**`test_serialized_dag_is_self_contained`** (line 320)
-- Replace exact path assertion with `assertTrue(data['steps'][0]['path'].endswith('align.sh'))`.
-
-**`test_function_and_chain_compile_to_same_shape`** (line 331)
-- Replace tuple comparison with `assertEqual(len(chain['steps']), len(function['steps']))` + compare just the structural summary (keys sets, dep counts).
-
-**`test_force_partial_map_root_materializes_batch_workflow`** (line 285)
-- Check `'xs'` ∈ inputs, step count == 1, map source type == `'input'`. Drop exact key-list assertions.
-
-**All dedup tests** (lines 342–382: `test_reused_variable_...`, `test_partial_application_reuse_...`, `test_workflow_partial_application_reuse_...`, `test_nested_workflow_value_reuse_...`)
-- Replace `[task['id'] for task in data['steps']] == ['align']` with `self.assertEqual(len(data['steps']), 1)`.
-- For `test_workflow_partial_application_reuse` (which checks `['align', 'align_2']`): check step count == 2, not exact names.
-
-**`test_mapped_table_source_uses_explicit_logical_table_metadata`** (line 444)
-- Check source type is `'table'`, verify column count, spot-check one column — drop full dict equality.
-
-### 1.2 `tests/unit/swl/ir/test_lower.py`
-
-**`test_lower_imports_to_functions`** (line 93, 13 assertions into IR node internals)
-- Cut to: verify Lambda, verify Block with 2 bindings.
-
-```python
-self.assertIsInstance(tree, ir.Lambda)
-self.assertIsInstance(tree.body, ir.Block)
-self.assertEqual(len(tree.body.bindings), 2)
-```
-
-**`test_lower_bindings_produce_variables_and_refs`** (line 113)
-- Merge into `test_lower_imports_to_functions` (same input). Tests overlap.
-
-### 1.3 `tests/unit/swl/transpile/cwl/test_emit.py`
-
-**`test_transpile_function_workflow`** (line 157, 22 assertions)
-- Check `cwlVersion`, count tools (== 3), count workflow outputs (== 3), verify one tool has `baseCommand` and `coresMin`:
-
-```python
-self.assertEqual(cwl['cwlVersion'], 'v1.2')
-tools = [item for item in cwl['$graph'] if item['class'] == 'CommandLineTool']
-self.assertEqual(len(tools), 3)
-outputs = [item for item in cwl['$graph'][-1]['outputs']]
-self.assertEqual(len(outputs), 3)
-```
-
-**`test_batch_mapped_task_emits_scatter_and_tab_column_input_type`** (line 249) + **`test_root_partial_map_transpiles_as_scattered_subworkflow`** (line 345)
-- Replace 10-item scatter port lists with `self.assertIn('scatter', step)` + `self.assertGreater(len(step.get('scatter', [])), 0)`.
-
-### 1.4 `tests/unit/swl/transpile/nf/test_emit.py`
-
-**`test_transpile_function_workflow`** (line 152)
-- Use `self.assertIn('process', nf)` instead of exact process-name assertions.
-
-**`test_root_partial_map_inlines_pipeline`** (line 276)
-- Replace `'SORT(ALIGN.out.bam, outbase)'` with `self.assertIn('ALIGN', nf)` + `self.assertIn('SORT', nf)`.
-
-### 1.5 `tests/unit/swl/transpile/wdl/test_emit.py`
-
-**`test_transpile_function_workflow`** (line 161, 27 assertions)
-- Keep 8–10: `version 1.0`, 3 `task` sections, `workflow main`, one input declaration, one output declaration.
+| File | Test | Issue |
+|------|------|-------|
+| `test_force.py` | `test_serialized_dag_is_self_contained` | Asserts exact path `data['steps'][0]['path']` |
+| `test_force.py` | `test_force_saturated_workflow_produces_task_dag` | Hardcodes step IDs `['align', 'sort']` and output keys |
+| `test_force.py` | `test_mapped_table_source_uses_explicit_logical_table_metadata` | Asserts entire 5-column dict verbatim |
+| `test_force.py` | `test_chain_root_is_instantiated_during_force` | 16 assertions on exact structure |
+| `test_lower.py` | `test_lower_imports_to_functions` | 13 assertions on exact IR node structure chain |
+| `test_lower.py` | `test_chain_and_explicit_have_equivalent_lowered_shape` | Good in spirit but fragile — any IR shape change breaks both |
+| CWL `test_emit.py` | `test_batch_mapped_task_emits_scatter_and_tab_column_input_type` | Asserts 10 scatter port names verbatim |
+| CWL `test_emit.py` | `test_root_partial_map_transpiles_as_scattered_subworkflow` | Asserts 10 scatter port names verbatim |
+| NF `test_emit.py` | `test_root_partial_map_inlines_pipeline` | Asserts exact string `'SORT(ALIGN.out.bam, outbase)'` |
+| NF `test_emit.py` | `test_process_name_sanitization` | Asserts `_process_name('_align') == 'ALIGN'` — losing `_` prefix silently |
 
 ---
 
-## 2. Improve Trivial Tests
+## 2. Coverage Gaps — Untested Modules
 
-### 2.1 `tests/unit/swl/syntax/task/test_interpolation.py`
+### Critical — Entire modules with zero tests:
 
-Currently 5 tests. The `Parser.parse_word` method is a public API with contract-based output (returns `Word`). These additions close edge-case gaps:
+| Module | Functions/Methods | Risk |
+|--------|-------------------|------|
+| `swl/api.py` | `compile_workflow`, `force_workflow`, `load_workflow`, `transpile_dag` | Public API is completely untested |
+| `swl/compile.py` | CLI arg parsing, error handling | Entry-point has zero coverage |
+| `swl/loader.py` | `Loader.__init__`, `read_file`, `get_parsed_task`, `cache_task`, `get_checked_workflow`, `cache_workflow` | Core file I/O caching untested |
+| `swl/repl.py` | REPL loop | REPL is untested |
+| `swl/transpile/smk/emit.py` | All 25+ functions (`transpile_dag_dict`, `_task_to_rule`, `_interpolate_shell`, `_dag_to_smk`, etc.) | **Complete Snakemake backend** has zero unit tests |
+| `swl/transpile/common.py` | `normalize_identifier`, `workflow_name`, `step_name`, `emit_name`, `field_chain_parts`, `field_path_after_first`, `classify_var`, `interp_script`, `word_interp`, `run_value`, `source_kind`, etc. | Shared utilities used by ALL backends — untested |
+| `swl/transpile/_cli.py` | `run()` | CLI runner untested |
+| `swl/dag/merge.py` | `_canonicalize_merges`, `_flatten_value_terms`, `_normalize_output_value`, `_value_key`, `_merge_key`, `_record_fields_key` | Merge normalization logic untested |
+| `swl/dag/tooldefs.py` | All 15+ functions (`_tool_definition`, `_workflow_definition`, `_materialize_workflow_dag`, `_force_root`, etc.) | Tool/workflow definition logic untested |
+| `swl/eval/ir.py` | `eval()` | IR evaluator untested |
+| `swl/eval/dag.py` | `eval()` | DAG evaluator untested |
+| `swl/eval/semantic_wf.py` | `eval()`, `_format_param` | Workflow semantic evaluator untested |
+| `swl/eval/semantic_task.py` | `eval()`, `_format_param` | Task semantic evaluator untested |
+| `swl/eval/syntax_task.py` | `eval()` | Task syntax evaluator untested |
+| `swl/eval/syntax_wf.py` | `eval()`, `print_ast` | Workflow syntax evaluator untested |
 
-```python
-def test_literal_before_var(self):
-    result = Parser().parse_word('prefix${var}')
-    self.assertEqual(result, Word([Literal('prefix'), Var('var')]))
-
-def test_multiple_vars(self):
-    result = Parser().parse_word('${a}${b}')
-    self.assertEqual(result, Word([Var('a'), Var('b')]))
-
-def test_escaped_dollar_is_literal(self):
-    result = Parser().parse_word('\\${notavar}')
-    self.assertEqual(result, Word([Literal('${notavar}')]))
-
-def test_empty_brace_fails(self):
-    with self.assertRaises(ValueError):
-        Parser().parse_word('${}')
-
-def test_complex_expression(self):
-    result = Parser().parse_word('${a + b * c}')
-    self.assertEqual(result, Word([Expr('a + b * c')]))
-
-def test_empty_string(self):
-    result = Parser().parse_word('')
-    self.assertEqual(result, Word([]))
-```
-
-### 2.2 `tests/unit/swl/syntax/wf/test_lexer.py`
-
-Currently 7 tests, all happy-path token sequences. `Lexer` is a public class:
-
-```python
-def test_empty_string(self):
-    lexer = Lexer('')
-    self.assertEqual([x for x in lexer], [Token(TokenType.eof)])
-
-def test_unterminated_string_fails(self):
-    lexer = Lexer('x = "unterminated')
-    with self.assertRaises(ValueError):
-        [x for x in lexer]
-
-def test_just_comment_line(self):
-    lexer = Lexer('# just a comment')
-    self.assertEqual([x for x in lexer], [Token(TokenType.eof)])
-
-def test_multiple_blank_lines(self):
-    lexer = Lexer('\n\n\n')
-    self.assertEqual([x for x in lexer], [Token(TokenType.eof)])
-```
-
-### 2.3 `tests/unit/swl/syntax/task/test_bash.py`
-
-Currently 2 tests. `bash.parse` is the public API:
-
-```python
-def test_empty_script(self):
-    script = bash.parse('')
-    self.assertEqual(len(script.statements), 0)
-
-def test_script_with_only_comment(self):
-    script = bash.parse('# just a comment\n')
-    self.assertEqual(len(script.statements), 0)
-```
-
-### 2.4 `tests/unit/swl/syntax/wf/test_parser.py`
-
-10 of 14 tests use `assertIsNotNone` — they verify parsing "doesn't crash" but never check the result. Replace with shallow top-level node type checks:
-
-```python
-from swl.syntax.wf.node import NodeType as NT
-
-result = Parser().parse(src)
-self.assertEqual(result.type, NT.fun)   # for lambda tests
-# or
-self.assertEqual(result.type, NT.id)    # for simple expression tests
-# or
-self.assertEqual(result.type, NT.chain) # for chain tests
-```
-
-Use the appropriate `NodeType` per test case (see `swl/syntax/wf/node.py` for enum values). These verify what shape the parser returns without descending into subtrees.
-
-### 2.5 `tests/unit/swl/semantic/wf/test_validate.py`
-
-Currently 4 tests. `validate_workflow_inputs` is a public function:
-
-```python
-def test_validate_missing_input_reports_error(self):
-    root = self._fixture_dir()
-    self._write(root, 'align.sh', _ALIGN)
-    path = self._write(root, 'simple.swl', _SIMPLE)
-    result = Checker().load(path)
-    with self.assertRaises(WorkflowInputValidationError) as ctx:
-        validate_workflow_inputs(result, {'outbase': 'x'})
-    self.assertIn('fastq1', str(ctx.exception))
-
-def test_validate_batch_single_element_arrays(self):
-    root = self._fixture_dir()
-    self._write(root, 'align.sh', _ALIGN)
-    self._write(root, 'merge.sh', _MERGE)
-    path = self._write(root, 'batch.swl', _BATCH)
-    result = Checker().load(path)
-    value = {'fastq1': ['a.fq'], 'fastq2': ['b.fq'], 'ref': ['hg38.fa'],
-             'ref_fai': ['hg38.fa.fai'], 'outbase': ['a']}
-    self.assertEqual(validate_workflow_inputs(result, value), value)
-```
+### All transpile CLI/`__main__` modules (zero tests):
+- `swl/transpile/cwl/cli.py`, `cwl/__main__.py`
+- `swl/transpile/nf/cli.py`, `nf/__main__.py`
+- `swl/transpile/wdl/cli.py`, `wdl/__main__.py`
+- `swl/transpile/smk/cli.py`, `smk/__main__.py`
 
 ---
 
-## 3. Fill Coverage Gaps
+## 3. Coverage Gaps — Untested Functions Within Tested Modules
 
-Only add tests for code genuinely not exercised by compile/integration tests.
+### `swl/ir/lower.py`
+- `_lower_inline_import`
+- `_generated_callable_from_lambda`
+- Other private `_lower_*` helpers
 
-### 3.1 `tests/unit/swl/test_api.py` (NEW)
+### `swl/dag/forcer.py`
+- `_is_opaque_record_carrier`
+- `_ensure_forced_record`
+- `make_force_state` constructor logic (tested indirectly but never directly)
 
-Three API functions are never called by compile tests (they call the underlying modules directly):
+### `swl/dag/evaluator.py`
+- Most of `_force_map`, `_apply`, `_available_inputs`, `_value_key`, `force_value` internals (only tested end-to-end)
 
-```python
-import unittest, json, os, tempfile
-from swl.api import force_workflow, load_workflow, transpile_dag
-from swl.dag.node import DAG
+### `swl/dag/node.py`
+- `DAG.validate()` — only error paths tested (circular, self-loop, unknown dep); success path not tested
+- `DAG.from_dict()` — only a few `from_dict` round-trip tests; many node types not validated
+- `Field`, `Record`, `Literal`, `Merge` serialization/deserialization not tested
 
-class TestAPI(unittest.TestCase):
-    def _files(self):
-        return {
-            '/v/align.sh': '# @ Align\n# in\n#   x file\n# out\n#   y file = out.txt\necho hi\n',
-            '/v/wf.swl': 'a = import "align.sh"\na\n',
-        }
+### `swl/dag/context.py`
+- `ForceEnv` — all methods untested
 
-    def test_force_workflow_returns_dag(self):
-        dag = force_workflow('/v/wf.swl', files=self._files())
-        self.assertIsInstance(dag, DAG)
-        self.assertEqual(len(dag.steps), 1)
+### `swl/dag/binding.py`
+- All binding utilities untested
 
-    def test_force_workflow_errors_on_invalid(self):
-        with self.assertRaises(Exception):
-            force_workflow('/v/nonexistent.swl', files=self._files())
+### `swl/dag/finalize.py`
+- `_prune_unused_inputs`, `_build_output_specs`, `_finalize_dag` — only tested indirectly
 
-    def test_load_workflow_returns_check_result(self):
-        result = load_workflow('/v/wf.swl', files=self._files())
-        self.assertIsNotNone(result.signature)
-        self.assertIn('y', result.signature.outputs)
+### `swl/semantic/wf/infer.py`
+- `application_result`, `apply_function`, `ClosureValue`, `ComputationValue`, `ClosedRecord` — most inference logic only indirectly tested
 
-    def test_transpile_dag_cwl(self):
-        dag = force_workflow('/v/wf.swl', files=self._files())
-        td = tempfile.TemporaryDirectory()
-        dag.write(os.path.join(td.name, 'plan.json'))
-        result = transpile_dag(os.path.join(td.name, 'plan.json'), 'cwl')
-        parsed = json.loads(result)
-        self.assertEqual(parsed['cwlVersion'], 'v1.2')
+### `swl/semantic/wf/bashvars.py`
+- `_validate_bash_variables` — only indirectly tested when it throws; no direct tests
 
-    def test_transpile_dag_nf(self):
-        dag = force_workflow('/v/wf.swl', files=self._files())
-        td = tempfile.TemporaryDirectory()
-        dag.write(os.path.join(td.name, 'plan.json'))
-        result = transpile_dag(os.path.join(td.name, 'plan.json'), 'nf')
-        self.assertIn('process', result)
+### `swl/semantic/wf/scope.py`
+- Scope checking entirely untested
 
-    def test_transpile_dag_invalid_target(self):
-        with self.assertRaises(ValueError):
-            transpile_dag('/fake.json', 'invalid')
-```
+### `swl/semantic/wf/imports.py`
+- Import resolution logic untested
 
-### 3.2 Expand test runner
+### `swl/semantic/wf/signature.py`
+- Signature operations untested
 
-Add new module to `tests/unit/test.sh`:
+### `swl/syntax/wf/builtins.py`
+- `map`, `map_by` builtin logic untested
 
-```bash
-tests.unit.swl.test_api \
-```
+### `swl/semantic/wf/type.py`
+- `FunctionType`, `RecordType`, `TableType` — partially tested through check tests but type constructors/operations not directly tested
 
 ---
 
-## 4. Cleanup
+## 4. Recommended Test Plan (Priority Ordered)
 
-- `tests/unit/swl/semantic/wf/test_check.py` line 663: Remove commented-out dead test:
-  ```python
-  # def test_table_update_reports_explicit_not_implemented(self):
-  ```
+### Phase 1 — Shore up existing tests (low effort, high impact)
+
+1. **Deepen interpolation tests** (`test_interpolation.py`): Add edge cases — empty `${}`, nested `${}`, escaped `\$`, multiple vars, invalid syntax
+2. **Deepen lexer tests** (`test_lexer.py`): Add error recovery — unterminated strings, unexpected chars, empty string, max nesting
+3. **Add AST structure checks** to `test_parser.py`: Don't just `assertIsNotNone` — verify node types, children, positions
+4. **Deepen bash parser tests** (`test_bash.py`): Add heredocs, redirects, pipelines, comments, empty body, error handling
+5. **Deepen validation tests** (`test_validate.py`): Missing inputs, wrong types, extra inputs, optional handling
+
+### Phase 2 — Add unit tests for shared utilities (medium effort, high impact)
+
+1. **`swl/transpile/common.py`**: Unit test all 12+ functions. Especially `interp_script`, `word_interp`, `normalize_identifier`, `field_chain_parts`
+2. **`swl/dag/merge.py`**: Unit test `_canonicalize_merges`, `_normalize_output_value`, `_value_key` with various merge tree shapes
+3. **`swl/dag/node.py`**: Unit test `DAG.validate()` success path, all `from_dict` node types, `StepCall` construction
+
+### Phase 3 — Add Snakemake backend tests (medium effort, high impact)
+
+1. **Create `tests/unit/swl/transpile/smk/test_emit.py`**: Test `transpile_dag_dict`, `_task_to_rule`, `_dag_to_smk`, `_interpolate_shell`, `_binding_to_path`, `_collect_params`, `_emit_resources`, `_validate_supported`
+2. Match coverage pattern of existing CWL/NF/WDL test suites
+
+### Phase 4 — API and Loader tests (medium effort, high impact)
+
+1. **`swl/api.py`**: Unit test `compile_workflow`, `force_workflow`, `load_workflow`, `transpile_dag` with in-memory virtual filesystem
+2. **`swl/loader.py`**: Unit test caching behavior, read_file from both virtual files and real filesystem
+
+### Phase 5 — Core evaluation and forcing internals (high effort, high impact)
+
+1. **`swl/dag/evaluator.py`**: Direct unit tests for `_force_map`, `_apply`, `_available_inputs` with controlled IR inputs
+2. **`swl/dag/tooldefs.py`**: Unit test `_tool_definition`, `_workflow_definition`, `_force_root`, `_materialize_workflow_dag`
+3. **`swl/dag/forcer.py`**: Direct test for `_is_opaque_record_carrier`, `make_force_state`
+
+### Phase 6 — Semantic inference and analysis (medium effort, medium impact)
+
+1. **`swl/semantic/wf/infer.py`**: Direct unit tests for `apply_function`, `application_result` with mock signatures
+2. **`swl/semantic/wf/scope.py`**: Test scope resolution, shadow rules, forward references
+3. **`swl/semantic/wf/imports.py`**: Test circular import detection, caching, path resolution
+4. **`swl/semantic/wf/bashvars.py`**: Test `_validate_bash_variables` with known/unknown variables
+
+### Phase 7 — Lowerer internals (low effort, medium impact)
+
+1. **`swl/ir/lower.py`**: Direct tests for `_lower_inline_import`, `_generated_callable_from_lambda`
+2. **`swl/syntax/wf/builtins.py`**: Direct tests for `map`/`map_by` builtin resolution
+
+### Phase 8 — REPL and CLIs (low effort, low impact)
+
+1. **`swl/repl.py`**: Basic smoke test with simulated stdin
+2. **All `cli.py`/`__main__.py`**: Test argument parsing and error handling
 
 ---
 
-## Summary
+## 5. Summary Metrics
 
-| Category | Change | Refactoring impact |
-|----------|--------|--------------------|
-| **Harden** 15 brittle tests | Replace deep assertion chains with count/type/contract checks | Tests break only when external contract changes, not when internals are reorganized |
-| **Deepen** 5 trivial test files | Add edge-case coverage (empty input, error paths, boundary conditions) | Tests exercise public APIs with inputs the compile tests never use |
-| **New** `test_api.py` | Test 3 truly uncovered public API functions | Catches regressions in the public interface |
-| **Remove** dead code | Delete commented-out test | N/A |
-
-**Deliberately excluded** (covered by compile/integration or impedes refactoring):
-- `merge.py`, `tooldefs.py`, `bashvars.py` — all private functions, exercised by force/compile tests
-- `infer.py` — exercised by `test_check.py`
-- `loader.py` — exercised by compile (Checker.load uses Loader)
-- All `eval/*` modules — run on every SWL file in compile tests
-- `common.py` — exercised by all 4 transpile backends across 6 workflows each
-- All transpile backends — end-to-end equivalence verified by compile tests
-- All CLI/`__main__.py` — invoked by compile test runner
+| Category | Count |
+|----------|-------|
+| Python source modules | 33 (excluding empty `__init__.py`) |
+| Modules with any unit tests | ~14 |
+| Modules with zero tests | ~19 |
+| Functions with zero tests | ~100+ |
+| Trivial/brittle tests needing hardening | ~20 |
