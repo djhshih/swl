@@ -4,6 +4,7 @@ from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, 
 from swl.transpile.common import (
     column_input_name,
     flatten_dag_outputs,
+    format_resource_directives,
     interp_script,
     source_input_name,
     source_kind,
@@ -65,12 +66,11 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
 
     input_struct_map = {}
     for step in dag.steps:
-        m = getattr(step, 'map', None) or {}
-        src = m.get('source', {})
-        if isinstance(src, dict) and src.get('source') == 'input' and not m.get('group_by'):
+        src = step.map_source
+        if src.get('source') == 'input' and not step.map_info.get('group_by'):
             src_name = src['name']
             if src_name not in input_struct_map:
-                schema = step.input_schema or {}
+                schema = step.input_schema_def
                 input_struct_map[src_name] = (
                     _emit_input_struct(step.id, schema),
                     _input_struct_name(step.id),
@@ -81,9 +81,8 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     inline_output_map = {}
     for step in dag.steps:
         if step.id not in tasks:
-            step_map = getattr(step, 'map', None) or {}
             if step.type == 'workflow':
-                sub_dag_data = (step.task or {}).get('dag', {})
+                sub_dag_data = step.task_def.get('dag', {})
                 if sub_dag_data:
                     sub_steps_data = sub_dag_data.get('steps', [])
                     sub_renames = {}
@@ -113,7 +112,7 @@ def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     lines = []
     if _top_level:
         has_map_by = any(
-            getattr(s, 'map', None) and s.map.get('group_by')
+            s.has_group_by
             for s in dag.steps
         )
         lines.append('version 1.1\n' if has_map_by else 'version 1.0\n')
@@ -199,14 +198,14 @@ def _emit_task_body(name, body, inputs_dict, outputs_dict, run_dict, rename_map)
     if outputs_dict:
         lines.append('    output {')
         for out_name, spec in outputs_dict.items():
-            emit_name = rename_map.get(out_name, out_name)
+            renamed = rename_map.get(out_name, out_name)
             t = to_wdl_type(spec.get('type'))
             default = spec.get('default')
             if default:
                 path_expr = _interp_to_wdl(default)
-                lines.append(f'        {t} {emit_name} = "{path_expr}"')
+                lines.append(f'        {t} {renamed} = "{path_expr}"')
             else:
-                lines.append(f'        {t} {emit_name} = "*.{out_name}"')
+                lines.append(f'        {t} {renamed} = "*.{out_name}"')
         lines.append('    }')
         lines.append('')
 
@@ -263,27 +262,15 @@ def _interpolate_bash_vars(body, known_vars, array_vars=None):
 
 
 def _emit_resource_requirements(run):
-    attrs = []
-    for name, spec in run.items():
-        if not isinstance(spec, dict):
-            continue
-        value = spec.get('value')
-        if value is None:
-            continue
-
-        if name == 'cpu':
-            attrs.append(f'        cpu: {value}')
-        elif name == 'memory':
-            memory_val = _format_memory(value)
-            attrs.append(f'        memory: "{memory_val}"')
-        elif name == 'image':
-            attrs.append(f'        container: "{value}"')
-        elif name == 'time':
-            attrs.append(f'        time_minutes: {value}')
-
-    if not attrs:
+    directives = format_resource_directives(run, {
+        'cpu': lambda v: f'        cpu: {v}',
+        'memory': lambda v: f'        memory: "{_format_memory(v)}"',
+        'image': lambda v: f'        container: "{v}"',
+        'time': lambda v: f'        time_minutes: {v}',
+    })
+    if not directives:
         return ''
-    return '    requirements {\n' + '\n'.join(attrs) + '\n    }'
+    return '    requirements {\n' + '\n'.join(directives) + '\n    }'
 
 
 
@@ -314,20 +301,19 @@ def _dag_to_wdl(dag, workflow_id, tasks, input_struct_map=None, output_renames=N
     input_blacklist = set()
     array_inputs = set()
     for step in dag.steps:
-        m = getattr(step, 'map', None) or {}
-        src = m.get('source', {})
-        if isinstance(src, dict) and src.get('source') == 'input':
+        src = step.map_source
+        if src.get('source') == 'input':
             src_name = src['name']
             input_blacklist.add(src_name)
-            if m.get('group_by'):
-                schema = step.input_schema or {}
-                group_key = m.get('group_by')
+            if step.map_info.get('group_by'):
+                schema = step.input_schema_def
+                group_key = step.map_info.get('group_by')
                 col_names = [group_key] + [n for n in schema if n != group_key]
                 decomposed_inputs[step.id] = [
                     (col, f'Array[{to_wdl_type(schema.get(col, "str"))}]')
                     for col in col_names
                 ]
-        elif isinstance(src, dict) and src.get('source') == 'table':
+        elif src.get('source') == 'table':
             for col_name, col_src in (src.get('columns') or {}).items():
                 if isinstance(col_src, dict) and col_src.get('source') == 'input':
                     array_inputs.add(col_src['name'])
@@ -353,8 +339,8 @@ def _dag_to_wdl(dag, workflow_id, tasks, input_struct_map=None, output_renames=N
         lines.append('')
 
     for step in dag.steps:
-        if getattr(step, 'map', None) is not None:
-            if step.map.get('group_by') is not None:
+        if step.is_mapped:
+            if step.has_group_by:
                 lines.extend(_mapped_by_step_to_wdl(step, tasks, output_renames, inline_map=inline_map))
             else:
                 lines.extend(_mapped_step_to_wdl(step, tasks, output_renames, inline_map=inline_map))
@@ -487,8 +473,7 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
     lines = []
     s_var = f'{step.id}_i'
 
-    map_info = step.map or {}
-    source = map_info.get('source', {})
+    source = step.map_source
     table_columns = _get_table_columns(source)
     len_expr = _derive_length_expr(source, step.bindings, table_columns)
     input_name = source_input_name(source)
@@ -544,7 +529,7 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
             call_line += f' as {alias}'
         lines.append(call_line + ' {')
         lines.append('            input:')
-        task_inputs = (step.task or {}).get('inputs', {})
+        task_inputs = step.task_def.get('inputs', {})
         for in_name in task_inputs.keys():
             if input_name:
                 expr = f'{input_name}[{s_var}].{in_name}'
@@ -608,10 +593,9 @@ def _mapped_by_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
     if inline_map is None:
         inline_map = {}
     lines = []
-    map_info = step.map or {}
-    group_key = map_info.get('group_by')
-    source = map_info.get('source', {})
-    input_schema = step.input_schema or {}
+    group_key = step.map_info.get('group_by')
+    source = step.map_source
+    input_schema = step.input_schema_def
 
     col_names = list(input_schema.keys())
     if group_key:
@@ -693,7 +677,7 @@ def _mapped_by_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
         call_line += f' as {alias}'
     lines.append(call_line + ' {')
     lines.append('            input:')
-    task_inputs = (step.task or {}).get('inputs', {})
+    task_inputs = step.task_def.get('inputs', {})
     for in_name in task_inputs.keys():
         if in_name == group_key:
             lines.append(f'                {in_name} = {group_key}_val,')

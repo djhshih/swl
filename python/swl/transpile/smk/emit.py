@@ -11,6 +11,7 @@ from swl.transpile.common import (
     source_kind,
     step_name,
     validate_dag_for_transpile,
+    validate_no_merge_bindings,
     word_interp,
     workflow_name,
 )
@@ -103,9 +104,9 @@ def _render_output_path(value, dag=None):
     if isinstance(value, Field) and isinstance(value.source, StepCall):
         prev = value.source
         out_name = value.name
-        prev_is_mapped = prev.map is not None
-        prev_scatter = set(prev.map.get('scatter', [])) if prev.map else set()
-        spec = (prev.task or {}).get('outputs', {}).get(out_name, {})
+        prev_is_mapped = prev.is_mapped
+        prev_scatter = set(prev.map_info.get('scatter', [])) if prev.is_mapped else set()
+        spec = prev.task_def.get('outputs', {}).get(out_name, {})
         rendered = _output_template(spec)
         if rendered is not None:
             return _scope_path_raw(prev.id, rendered, prev_is_mapped, prev_scatter)
@@ -115,8 +116,8 @@ def _render_output_path(value, dag=None):
                 rendered = _interp_to_smk(inner_default)
                 if rendered is not None:
                     return _scope_path_raw(inner_step_id, rendered, False, set()) if inner_step_id else rendered
-        if prev.map is not None:
-            scatter_ports = set(prev.map.get('scatter', []))
+        if prev.is_mapped:
+            scatter_ports = set(prev.map_info.get('scatter', []))
             return _default_output_path_raw(prev.id, out_name, scatter_ports)
         return f'results/{prev.id}/{out_name}'
     return None
@@ -152,7 +153,7 @@ def _collect_wildcard_globs(dag):
 
 
 def _inner_output_default(step, output_name):
-    dag_data = (step.task or {}).get('dag', {})
+    dag_data = step.task_def.get('dag', {})
     sub_outputs = dag_data.get('outputs', {})
     sub_value = sub_outputs.get(output_name, {})
     if isinstance(sub_value, dict):
@@ -169,7 +170,7 @@ def _inner_output_default(step, output_name):
 
 def _mapped_output_wildcards(step):
     vars_set = set()
-    dag_data = (step.task or {}).get('dag', {})
+    dag_data = step.task_def.get('dag', {})
     for out_name in dag_data.get('outputs', {}):
         default_spec, _ = _inner_output_default(step, out_name)
         if default_spec:
@@ -191,7 +192,7 @@ def _mapped_output_expand(name, step):
                 kwargs = ', '.join(f'{v}={v.upper()}' for v in vars_in)
                 return f'expand({repr(scoped)}, {kwargs})'
             return repr(scoped)
-    scatter_ports = sorted(step.map.get('scatter', []))
+    scatter_ports = sorted(step.map_info.get('scatter', []))
     if not scatter_ports:
         return repr(f'results/{step.id}/{name}')
     first = scatter_ports[0]
@@ -203,13 +204,7 @@ def _mapped_output_expand(name, step):
 
 def _validate_supported(dag):
     validate_dag_for_transpile(dag, 'Snakemake')
-    for step in dag.steps:
-        for binding in step.bindings.values():
-            if isinstance(binding, Merge):
-                raise ValueError(
-                    f'Merge bindings must be flattened before Snakemake transpilation. '
-                    f'Found in step {step.id}'
-                )
+    validate_no_merge_bindings(dag, 'Snakemake')
 
 
 def _rule_name(step_id):
@@ -262,18 +257,18 @@ def _output_template(spec):
 
 
 def _task_to_rule(step, dag, wrap_map=None):
-    task = step.task or {}
+    task = step.task_def
     body = task.get('body', '')
     rname = _rule_name(step.id)
-    is_mapped = step.map is not None
+    is_mapped = step.is_mapped
 
     scatter_ports = set()
     if is_mapped:
-        group_by = step.map.get('group_by')
+        group_by = step.map_info.get('group_by')
         if group_by:
             scatter_ports = {group_by}
         else:
-            scatter_ports = set(step.map.get('scatter', []))
+            scatter_ports = set(step.map_info.get('scatter', []))
 
     lines = [f'rule {rname}:']
 
@@ -370,9 +365,9 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
         if isinstance(binding.source, StepCall):
             prev_step = binding.source
             out_name = binding.name
-            prev_is_mapped = prev_step.map is not None
-            prev_scatter = set(prev_step.map.get('scatter', [])) if prev_step.map else set()
-            if prev_step.type == 'workflow' and prev_step.map is not None:
+            prev_is_mapped = prev_step.is_mapped
+            prev_scatter = set(prev_step.map_info.get('scatter', [])) if prev_step.is_mapped else set()
+            if prev_step.type == 'workflow' and prev_step.is_mapped:
                 inner_default, inner_step_id = _inner_output_default(prev_step, out_name)
                 if inner_default:
                     rendered = _interp_to_smk(inner_default)
@@ -383,11 +378,11 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
                             kwargs = ', '.join(f'{v}={v.upper()}' for v in vars_in)
                             return f'expand({repr(scoped)}, {kwargs})'
                         return repr(scoped)
-            spec = (prev_step.task or {}).get('outputs', {}).get(out_name, {})
+            spec = prev_step.task_def.get('outputs', {}).get(out_name, {})
             rendered = _output_template(spec)
             if rendered is not None:
                 return _scope_path(prev_step.id, rendered, prev_is_mapped, prev_scatter)
-            if prev_step.map is not None:
+            if prev_step.is_mapped:
                 return _default_output_path(prev_step.id, out_name, True, prev_scatter)
             return repr(f'results/{prev_step.id}/{out_name}')
         return f'config["{port_name}"]'
@@ -413,7 +408,7 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
 
 
 def _interpolate_shell(body, step, dag=None):
-    task = step.task or {}
+    task = step.task_def
     task_inputs = task.get('inputs', {})
     input_names = set()
     for name, spec in task_inputs.items():
@@ -447,7 +442,7 @@ def _interpolate_shell(body, step, dag=None):
 
 def _collect_params(step, dag=None):
     params = []
-    task_inputs = (step.task or {}).get('inputs', {})
+    task_inputs = step.task_def.get('inputs', {})
     for in_name, spec in task_inputs.items():
         typ = spec.get('type', 'str')
         if typ in ('str', 'int', 'float'):
@@ -457,7 +452,7 @@ def _collect_params(step, dag=None):
             elif isinstance(binding, Field) and isinstance(binding.source, StepCall):
                 prev_step = binding.source
                 out_name = binding.name
-                prev_spec = (prev_step.task or {}).get('outputs', {}).get(out_name, {})
+                prev_spec = prev_step.task_def.get('outputs', {}).get(out_name, {})
                 default = prev_spec.get('default')
                 if default:
                     rendered = _interp_to_smk(default)
@@ -466,7 +461,7 @@ def _collect_params(step, dag=None):
                     params.append((_san(in_name), repr(f'results/{prev_step.id}/{out_name}')))
             else:
                 params.append((_san(in_name), f'config["{in_name}"]'))
-    run = (step.task or {}).get('run', {})
+    run = step.task_def.get('run', {})
     for name in ('cpu', 'memory', 'time'):
         spec = run.get(name, {})
         if isinstance(spec, dict) and spec.get('type') in ('int', 'str', 'float', 'memory', 'time'):
@@ -475,7 +470,7 @@ def _collect_params(step, dag=None):
 
 
 def _emit_resources(step):
-    run = (step.task or {}).get('run', {})
+    run = step.task_def.get('run', {})
     directives = []
 
     directives.extend(format_resource_directives(run, {
@@ -585,14 +580,13 @@ def _output_to_path(name, value, dag):
 
 
 def _subworkflow_to_smk(step, parent_id):
-    definition = step.task or {}
-    dag_data = definition.get('dag', {})
+    dag_data = step.task_def.get('dag', {})
     if not dag_data:
         return ''
     wf_id = f'{parent_id}_{step.id}'
     wrap_map = None
-    if step.map is not None:
-        scatter_ports = step.map.get('scatter', [])
+    if step.is_mapped:
+        scatter_ports = step.map_info.get('scatter', [])
         if scatter_ports:
             wrap_map = {
                 "step_id": step.id,

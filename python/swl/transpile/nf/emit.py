@@ -30,8 +30,7 @@ def _collect_processes(dag, processes):
         if step.type != 'workflow':
             processes[step.id] = _process_name(step.id)
         else:
-            inner = step.task or {}
-            inner_dag = inner.get('dag', {})
+            inner_dag = step.task_def.get('dag', {})
             if inner_dag:
                 _collect_processes(DAG.from_dict(inner_dag), processes)
 
@@ -42,8 +41,7 @@ def _emit_processes(dag, lines, processes):
             lines.append(_task_to_process(step))
             lines.append('')
         else:
-            inner = step.task or {}
-            inner_dag = inner.get('dag', {})
+            inner_dag = step.task_def.get('dag', {})
             if inner_dag:
                 _emit_processes(DAG.from_dict(inner_dag), lines, processes)
 
@@ -58,7 +56,7 @@ def _nf_emit_name(name):
 
 
 def _task_to_process(step):
-    task = step.task or {}
+    task = step.task_def
     body = task.get('body', '')
     pname = _process_name(step.id)
     lines = [f'process {pname} {{', '']
@@ -71,7 +69,7 @@ def _task_to_process(step):
 
     inputs = task.get('inputs', {})
     outputs = task.get('outputs', {})
-    has_map = getattr(step, 'map', None) is not None
+    has_map = step.is_mapped
 
     if inputs:
         lines.append('    input:')
@@ -126,7 +124,7 @@ def _task_to_process(step):
 
 
 def _emit_directives(step):
-    run = (step.task or {}).get('run', {})
+    run = step.task_def.get('run', {})
     directives = format_resource_directives(run, {
         'cpu': lambda v: f'    cpus {v}',
         'memory': lambda v: f"    memory '{v} MB'",
@@ -145,7 +143,7 @@ _NF_RUN_MAP = {'cpu': 'cpus', 'memory': 'memory', 'time': 'time'}
 def _interpolate_shell(body, step):
     if '$' not in body:
         return body
-    task = step.task or {}
+    task = step.task_def
     input_names = set(task.get('inputs', {}).keys())
     run = task.get('run', {})
     run_names = set()
@@ -186,9 +184,8 @@ def _input_channel(name, spec):
 
 def _inline_dag_steps(inner_dag, channels, lines, processes):
     for step in inner_dag.steps:
-        if getattr(step, 'map', None) is not None:
-            map_info = step.map
-            if map_info.get('group_by') is not None:
+        if step.is_mapped:
+            if step.has_group_by:
                 lines.extend(_mapped_by_step_to_call(step, channels, processes))
             else:
                 lines.extend(_mapped_step_to_call(step, channels, processes))
@@ -202,7 +199,7 @@ def _inline_dag_steps(inner_dag, channels, lines, processes):
         pname = _process_name(step.id)
 
         inputs = []
-        for input_name in (step.task or {}).get('inputs', {}).keys():
+        for input_name in step.task_def.get('inputs', {}).keys():
             binding = step.bindings.get(input_name)
             if binding is None:
                 ch = channels.get(input_name, _channel_name(input_name))
@@ -221,8 +218,7 @@ def _inline_dag_steps(inner_dag, channels, lines, processes):
 
 
 def _inline_workflow_step(step, channels, lines, processes):
-    definition = step.task or {}
-    dag_data = definition.get('dag', {})
+    dag_data = step.task_def.get('dag', {})
     if not dag_data:
         return
     inner_dag = DAG.from_dict(dag_data)
@@ -251,11 +247,10 @@ def _dag_to_nf(dag, workflow_id, processes):
     input_sourced_sources = set()
     table_sourced_inputs = set()
     for step in dag.steps:
-        m = getattr(step, 'map', None) or {}
-        src = m.get('source', {})
-        if isinstance(src, dict) and src.get('source') == 'input':
+        src = step.map_source
+        if src.get('source') == 'input':
             input_sourced_sources.add(src['name'])
-        if isinstance(src, dict) and src.get('source') == 'table':
+        if src.get('source') == 'table':
             columns = src.get('columns', {})
             for col_binding in columns.values():
                 if col_binding.get('source') == 'input':
@@ -333,13 +328,11 @@ def _binding_to_channel(binding, channels, current_step):
 
 def _mapped_workflow_step_to_call(step, channels, processes):
     lines = []
-    m = step.map
-    schema = getattr(step, 'input_schema', None) or {}
-    src = m.get('source', {})
+    src = step.map_source
     src_type = src.get('source')
+    schema = step.input_schema_def
 
-    definition = step.task or {}
-    dag_data = definition.get('dag', {})
+    dag_data = step.task_def.get('dag', {})
     inner_dag = DAG.from_dict(dag_data) if dag_data else None
 
     if inner_dag is None:
@@ -390,19 +383,17 @@ def _mapped_step_to_call(step, channels, processes):
     pname = _process_name(step.id)
     lines = []
 
-    m = getattr(step, 'map', None) or {}
-    src = m.get('source', {})
+    src = step.map_source
 
-    if step.type == 'workflow' and isinstance(src, dict) and src.get('source') in ('input', 'table') and not m.get('group_by'):
+    if step.type == 'workflow' and src.get('source') in ('input', 'table') and not step.map_info.get('group_by'):
         return _mapped_workflow_step_to_call(step, channels, processes)
 
-    if isinstance(src, dict) and src.get('source') == 'input' and not m.get('group_by'):
+    if src.get('source') == 'input' and not step.map_info.get('group_by'):
         src_name = src['name']
-        schema = getattr(step, 'input_schema', None) or {}
-        step_inputs = getattr(step, 'inputs', None) or {}
+        schema = step.input_schema_def
         base_ch = channels.get(src_name, _channel_name(src_name))
         ch_var = f'{step.id}_ch'
-        order = list(step_inputs.keys()) or sorted(schema)
+        order = sorted(schema)
         tuple_parts = []
         for col_name in order:
             wdl_type = schema.get(col_name, 'str')
@@ -419,14 +410,14 @@ def _mapped_step_to_call(step, channels, processes):
         lines.append(f'        ) }}')
         lines.append(f'    {pname}({ch_var})')
     else:
-        task_inputs = (step.task or {}).get('inputs', {})
+        task_inputs = step.task_def.get('inputs', {})
         join_expr = None
         for input_name in task_inputs.keys():
             binding = step.bindings.get(input_name)
             if binding is None:
                 ch = channels.get(input_name)
                 if ch is None:
-                    if input_name in (getattr(step, 'input_schema', None) or {}):
+                    if input_name in step.input_schema_def:
                         ch = _channel_name(input_name)
                         channels[input_name] = ch
                 if ch is None:
@@ -449,12 +440,11 @@ def _mapped_step_to_call(step, channels, processes):
 
 
 def _mapped_by_step_to_call(step, channels, processes):
-    map_info = step.map or {}
-    source = map_info.get('source', {})
-    group_key = map_info.get('group_by')
+    source = step.map_source
+    group_key = step.map_info.get('group_by')
 
-    if step.type == 'workflow' and isinstance(source, dict) and source.get('source') in ('input', 'table'):
-        if map_info.get('group_by') and source.get('source') == 'table':
+    if step.type == 'workflow' and source.get('source') in ('input', 'table'):
+        if step.has_group_by and source.get('source') == 'table':
             return _mapped_by_workflow_step(step, channels, processes, source, group_key)
         return _mapped_workflow_step_to_call(step, channels, processes)
 
@@ -466,12 +456,11 @@ def _mapped_by_step_to_call(step, channels, processes):
         src_ch = channels.get(source.get('name')) or _channel_name(source['name'])
 
     if source_type == 'input' and src_ch is not None:
-        schema = getattr(step, 'input_schema', None) or {}
-        step_inputs = getattr(step, 'inputs', None) or {}
+        schema = step.input_schema_def
         group_key_nf = group_key.replace('-', '_')
         base_ch = channels.get(source.get('name'), _channel_name(source['name']))
         ch_var = f'{step.id}_ch'
-        order = list(step_inputs.keys()) or sorted(schema)
+        order = sorted(schema)
         tuple_parts = []
         if group_key in order:
             wdl_type = schema.get(group_key, 'str')
@@ -524,8 +513,7 @@ def _mapped_by_workflow_step(step, channels, processes, source, group_key):
     source_type = source_kind(source)
     lines = []
 
-    definition = step.task or {}
-    dag_data = definition.get('dag', {})
+    dag_data = step.task_def.get('dag', {})
     inner_dag = DAG.from_dict(dag_data) if dag_data else None
     if inner_dag is None:
         return lines
@@ -535,10 +523,9 @@ def _mapped_by_workflow_step(step, channels, processes, source, group_key):
     if source_type == 'input':
         src_name = source['name']
         base_ch = channels.get(src_name, _channel_name(src_name))
-        schema = getattr(step, 'input_schema', None) or {}
-        step_inputs = getattr(step, 'inputs', None) or {}
+        schema = step.input_schema_def
         group_key_nf = group_key.replace('-', '_')
-        order = list(step_inputs.keys()) or sorted(schema)
+        order = sorted(schema)
         tuple_parts = []
         if group_key in order:
             wdl_type = schema.get(group_key, 'str')

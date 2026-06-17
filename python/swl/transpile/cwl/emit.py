@@ -12,6 +12,7 @@ from swl.transpile.common import (
     source_kind,
     table_columns,
     validate_dag_for_transpile,
+    validate_no_merge_bindings,
     word_interp,
 )
 from swl.types import to_array_type, to_cwl_type
@@ -52,7 +53,7 @@ def transpile_dag_dict(data, workflow_id='main'):
 
     for step in dag.steps:
         tool_id = step.id
-        if getattr(step, 'map', None) is not None and step.map.get('group_by') is not None:
+        if step.has_group_by:
             map_graph, map_steps = _emit_map_by_graph(step, dag)
             map_by_tools[tool_id] = map_graph
             map_by_steps[tool_id] = map_steps
@@ -63,10 +64,10 @@ def transpile_dag_dict(data, workflow_id='main'):
 
     workflow_inputs = dict(dag.inputs)
     for step in dag.steps:
-        if getattr(step, 'map', None) is None:
+        if not step.is_mapped:
             continue
-        source = step.map.get('source', {})
-        schema = (getattr(step, 'input_schema', None) or {})
+        source = step.map_source
+        schema = step.input_schema_def
         for name, typ in schema.items():
             if name not in workflow_inputs:
                 workflow_inputs[name] = {'type': to_array_type(typ), 'desc': None}
@@ -102,8 +103,8 @@ def transpile_dag_dict(data, workflow_id='main'):
         wf_steps.insert(0, step_entry)
 
     def _is_map_by_step_ref(value, dag):
-        if isinstance(value, Field) and isinstance(value.source, StepCall) and getattr(value.source, 'map', None):
-            return bool(value.source.map.get('group_by'))
+        if isinstance(value, Field) and isinstance(value.source, StepCall):
+            return value.source.has_group_by
         return False
 
     outputs = []
@@ -215,10 +216,10 @@ def _step_to_cwl(workflow_id, step, tool_id, record_map=None):
         'in': inputs,
         'out': [f'#{workflow_id}/{step.id}/{name}' for name in step.outputs],
     }
-    if getattr(step, 'map', None) is not None:
-        scatter_ports = step.map.get('scatter') or sorted((getattr(step, 'input_schema', None) or {}).keys())
+    if step.is_mapped:
+        scatter_ports = step.map_info.get('scatter') or sorted(step.input_schema_def)
         if scatter_ports:
-            source = step.map.get('source', {})
+            source = step.map_source
             if source_input_name(source) is not None:
                 for port in scatter_ports:
                     if not any(item['id'] == f'#{workflow_id}/{step.id}/{port}' for item in data['in']):
@@ -272,16 +273,12 @@ def _tool_output_to_cwl(tool_id, name, spec, input_names=()):
 
 
 def _resource_requirement(run):
-    req = {'class': 'ResourceRequirement'}
-    cpu = run_value(run, 'cpu')
-    memory = run_value(run, 'memory')
-    if cpu is not None:
-        req['coresMin'] = cpu
-    if memory is not None:
-        req['ramMin'] = memory
-    if len(req) == 1:
-        return None
-    return req
+    parts = {}
+    for key, cwl_key in [('cpu', 'coresMin'), ('memory', 'ramMin')]:
+        val = run_value(run, key)
+        if val is not None:
+            parts[cwl_key] = val
+    return {'class': 'ResourceRequirement', **parts} if parts else None
 
 
 def _hints_from_run(run):
@@ -291,9 +288,7 @@ def _hints_from_run(run):
 
 def _docker_requirement(run):
     image = run_value(run, 'image')
-    if image is None:
-        return None
-    return {'class': 'DockerRequirement', 'dockerPull': image}
+    return None if image is None else {'class': 'DockerRequirement', 'dockerPull': image}
 
 
 def _binding_source(value, workflow_id='main'):
@@ -320,21 +315,16 @@ def _binding_source(value, workflow_id='main'):
 
 def _validate_supported(dag):
     for step in dag.steps:
-        if getattr(step, 'map', None) is not None and step.map.get('group_by') is not None:
+        if step.has_group_by:
             _validate_map_by_preconditions(step)
     validate_dag_for_transpile(dag, 'CWL')
     for step in dag.steps:
-        for name, spec in step.task.get('outputs', {}).items():
+        for name, spec in step.task_def.get('outputs', {}).items():
             try:
                 _interp_to_cwl_glob(spec.get('default'), step.task.get('inputs', {}).keys())
             except ValueError as exc:
                 raise ValueError(f'Unsupported step output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
-    for step in dag.steps:
-        for binding in step.bindings.values():
-            if isinstance(binding, Merge):
-                raise ValueError(
-                    f'CWL does not support Merge bindings: step {step.id} contains a Merge value'
-                )
+    validate_no_merge_bindings(dag, 'CWL')
 
 
 def _interp_to_cwl_glob(value, input_names=()):
@@ -489,10 +479,9 @@ def _emit_record_tool(workflow_id, step_id, binding_name, record, dag):
 # map_by (grouped scatter) ------------------------------------------------
 
 def _validate_map_by_preconditions(step):
-    map_info = step.map or {}
-    group_by = map_info.get('group_by')
-    schema = step.input_schema or {}
-    if group_by not in schema and group_by not in (map_info.get('source', {}).get('columns', {}) or {}):
+    group_by = step.map_info.get('group_by')
+    schema = step.input_schema_def
+    if group_by not in schema and group_by not in step.map_info.get('source', {}).get('columns', {}):
         raise ValueError(
             f'map_by key {group_by!r} must be a column in the input schema'
         )
@@ -501,7 +490,7 @@ def _validate_map_by_preconditions(step):
             raise ValueError(
                 f'map_by does not support array-typed input {name!r} ({typ}) in mapped function'
             )
-    for name, spec in (getattr(step, 'task', None) or {}).get('outputs', {}).items():
+    for name, spec in step.task_def.get('outputs', {}).items():
         if _has_expr_interpolation(spec):
             raise ValueError(
                 f'map_by does not support expr interpolation in mapped function output {name!r}'
@@ -566,10 +555,10 @@ def _dag_to_combined_script(dag_data):
 
 
 def _emit_map_by_graph(step, dag):
-    map_info = step.map or {}
+    map_info = step.map_info
     group_by = map_info.get('group_by')
-    schema = step.input_schema or {}
-    output_schema = step.output_schema or {}
+    schema = step.input_schema_def
+    output_schema = step.output_schema_def
     step_id = step.id
     group_tool_id = f'#group_{step_id}'
     wrapper_tool_id = f'#wrap_{step_id}'

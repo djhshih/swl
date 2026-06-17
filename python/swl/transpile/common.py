@@ -1,6 +1,6 @@
 import re as _re
 
-from swl.dag.node import Field, Literal, OutputSpec
+from swl.dag.node import Field, Literal, Merge, OutputSpec
 
 
 def normalize_identifier(name, default, *, upper=False):
@@ -137,6 +137,16 @@ def validate_dag_for_transpile(dag, backend_name):
 def flatten_dag_outputs(dag):
     dag.outputs = _flatten_output_names(dag.outputs)
     return dag
+
+
+def validate_no_merge_bindings(dag, backend_name):
+    for step in dag.steps:
+        for name, binding in step.bindings.items():
+            if isinstance(binding, Merge):
+                raise ValueError(
+                    f'{backend_name} does not support Merge bindings: '
+                    f'step {step.id} binding {name!r}'
+                )
 
 
 def field_chain_parts(value):

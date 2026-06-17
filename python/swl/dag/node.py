@@ -88,6 +88,34 @@ class StepCall:
     input_schema: Optional[dict] = None
     output_schema: Optional[dict] = None
 
+    @property
+    def is_mapped(self):
+        return self.map is not None
+
+    @property
+    def has_group_by(self):
+        return self.map is not None and self.map.get('group_by') is not None
+
+    @property
+    def map_info(self):
+        return self.map or {}
+
+    @property
+    def map_source(self):
+        return (self.map or {}).get('source', {})
+
+    @property
+    def task_def(self):
+        return self.task or {}
+
+    @property
+    def input_schema_def(self):
+        return self.input_schema or {}
+
+    @property
+    def output_schema_def(self):
+        return self.output_schema or {}
+
 @dataclass(frozen=True)
 class Output:
     name: str
@@ -393,36 +421,4 @@ def _run_value_from_dict(name, spec, defaults, inputs, steps):
     return None
 
 
-def _resolve_interp_part(part, bindings):
-    kind = part.get('kind')
-    if kind == 'literal':
-        return part['text']
-    if kind == 'var':
-        name = part['name']
-        if name in bindings:
-            return str(bindings[name])
-        return '${' + name + '}'
-    if kind == 'expr':
-        return '${' + part['text'] + '}'
-    return ''
 
-
-def resolve_default(default, bindings=None):
-    if bindings is None:
-        bindings = {}
-    if not isinstance(default, dict):
-        return default
-    kind = default.get('kind')
-    if kind == 'literal':
-        return default['text']
-    if kind == 'var':
-        name = default['name']
-        if name in bindings:
-            return str(bindings[name])
-        return '${' + name + '}'
-    if kind == 'expr':
-        return '${' + default['text'] + '}'
-    if kind == 'word':
-        parts = default.get('parts', [])
-        return ''.join(_resolve_interp_part(part, bindings) for part in parts)
-    return None
