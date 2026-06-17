@@ -209,19 +209,15 @@ map call_variant
         bad = {
             'inputs': {'a': {'type': None, 'desc': None}, 'b': {'type': None, 'desc': None}},
             'steps': [{
-                'id': 'align',
-                'type': 'task',
-                'path': '/tmp/align.sh',
-                'deps': [],
+                'id': 'align', 'type': 'task', 'path': '/tmp/align.sh', 'deps': [],
                 'inputs': {'x': {'type': 'str', 'desc': None}},
                 'bindings': {'x': {'source': 'merge', 'left': {'source': 'input', 'name': 'a'}, 'right': {'source': 'input', 'name': 'b'}}},
                 'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
-                'run': {},
-                'script': 'echo hi\n',
+                'run': {}, 'script': 'echo hi\n',
             }],
             'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
-        with self.assertRaisesRegex(ValueError, 'Merge'):
+        with self.assertRaisesRegex(ValueError, '[Mm]erge'):
             transpile_dag_dict(bad)
 
     def test_batch_mapped_task_emits_join_and_tuple(self):
@@ -329,15 +325,11 @@ map call_variant
         bad = {
             'inputs': {},
             'steps': [{
-                'id': 'test',
-                'type': 'task',
-                'path': '/test.sh',
-                'deps': [],
+                'id': 'test', 'type': 'task', 'path': '/test.sh', 'deps': [],
                 'inputs': {'x': {'type': 'str'}},
                 'bindings': {'x': {'source': 'record', 'fields': {'a': {'source': 'literal', 'value': 1}, 'b': {'source': 'literal', 'value': 2}}}},
                 'outputs': {'out': {'type': 'file'}},
-                'run': {},
-                'script': 'echo hi',
+                'run': {}, 'script': 'echo hi',
             }],
             'outputs': {'out': {'type': 'file', 'desc': None, 'value': {'step': 'test', 'output': 'out'}}},
         }

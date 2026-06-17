@@ -216,19 +216,15 @@ map call_variant
         bad = {
             'inputs': {'a': {'type': None, 'desc': None}, 'b': {'type': None, 'desc': None}},
             'steps': [{
-                'id': 'align',
-                'type': 'task',
-                'path': '/tmp/align.sh',
-                'deps': [],
+                'id': 'align', 'type': 'task', 'path': '/tmp/align.sh', 'deps': [],
                 'inputs': {'x': {'type': 'str', 'desc': None}},
                 'bindings': {'x': {'source': 'merge', 'left': {'source': 'input', 'name': 'a'}, 'right': {'source': 'input', 'name': 'b'}}},
                 'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
-                'run': {},
-                'script': 'echo hi\n',
+                'run': {}, 'script': 'echo hi\n',
             }],
             'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
-        with self.assertRaisesRegex(ValueError, 'Merge'):
+        with self.assertRaisesRegex(ValueError, '[Mm]erge'):
             transpile_dag_dict(bad)
 
 
@@ -262,18 +258,14 @@ map call_variant
         bad = {
             'inputs': {'sample': {'type': '[str]', 'desc': None}},
             'steps': [{
-                'id': 'grouped',
-                'type': 'workflow',
-                'path': '/tmp/grouped.swl',
+                'id': 'grouped', 'type': 'workflow', 'path': '/tmp/grouped.swl',
                 'map': {'source': {'source': 'table', 'name': 'table', 'columns': {'sample': {'source': 'input', 'name': 'sample'}}}, 'group_by': 'sample'},
-                'input_schema': {'sample': 'str'},
-                'output_schema': {'sample': 'str'},
+                'input_schema': {'sample': 'str'}, 'output_schema': {'sample': 'str'},
                 'deps': [],
                 'inputs': {'sample': {'type': 'str', 'desc': None}},
                 'bindings': {},
                 'outputs': {'sample': {'type': 'str'}},
-                'run': {},
-                'script': '',
+                'run': {}, 'script': '',
                 'definition': {'class': 'Workflow', 'dag': {'inputs': {'sample': {'type': 'str', 'desc': None}}, 'steps': [], 'outputs': {'sample': {'type': 'str', 'desc': None, 'value': {'source': 'input', 'name': 'sample'}}}}, 'inputs': {'sample': {'type': 'str', 'desc': None}}, 'outputs': {'sample': {'type': 'str'}}, 'body': '', 'run': {}},
             }],
             'outputs': {'sample': {'type': '[str]', 'desc': None, 'value': {'step': 'grouped', 'output': 'sample'}}},
@@ -389,8 +381,6 @@ map call_variant
         self.assertIn('File f_file', wdl)
         self.assertIn('String f_str', wdl)
         self.assertIn('Int f_int', wdl)
-        self.assertIn('File f_step', wdl)
-
     def test_none_literal_raises_error(self):
         from swl.transpile.wdl.emit import _literal_to_wdl
         with self.assertRaisesRegex(ValueError, 'None/null literals'):

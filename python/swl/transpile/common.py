@@ -1,4 +1,6 @@
-from swl.dag.node import Field
+import re as _re
+
+from swl.dag.node import Field, Literal, OutputSpec
 
 
 def normalize_identifier(name, default, *, upper=False):
@@ -22,25 +24,6 @@ def emit_name(name):
     return name.replace('-', '_')
 
 
-def field_chain_parts(value):
-    chain = []
-    current = value
-    while isinstance(current, Field):
-        chain.append(current)
-        current = current.source
-    if not chain:
-        return value, None, None
-    chain.reverse()
-    return chain[0].source, chain[0].name, '.'.join(part.name for part in chain[1:])
-
-
-def field_path_after_first(value):
-    if not isinstance(value, Field):
-        return None
-    _, _, tail = field_chain_parts(value)
-    return tail or None
-
-
 def classify_var(name, input_names, output_names, run_names):
     from swl.syntax.task.bash import _BUILTIN_VARS
     if name in _BUILTIN_VARS:
@@ -54,8 +37,8 @@ def classify_var(name, input_names, output_names, run_names):
     return None
 
 
+
 def interp_script(body, var_fn, expr_fn, joiner=''):
-    import re as _re
     pattern = r'(?<!\$)\$\{(.+?)\}|(?<!\$)\$(\w+)'
     result = []
     for line in body.split('\n'):
@@ -133,6 +116,41 @@ def _flatten_output_names(outputs):
         name.replace('.', '_'): spec
         for name, spec in outputs.items()
     }
+
+
+def format_resource_directives(run, formatters):
+    directives = []
+    for name, fmt in formatters.items():
+        value = run_value(run, name)
+        if value is not None:
+            directives.append(fmt(value))
+    return directives
+
+
+def validate_dag_for_transpile(dag, backend_name):
+    for name, output in dag.outputs.items():
+        value = output.value if isinstance(output, OutputSpec) else output
+        if isinstance(value, Literal):
+            raise ValueError(f'{backend_name} does not support literal workflow outputs: {name}')
+
+
+def flatten_dag_outputs(dag):
+    dag.outputs = _flatten_output_names(dag.outputs)
+    return dag
+
+
+def field_chain_parts(value):
+    current = value
+    chain = []
+    while isinstance(current, Field):
+        chain.append(current.name)
+        current = current.source
+    return current, chain[-1] if chain else None, None
+
+
+def field_path_after_first(value):
+    _, _, tail = field_chain_parts(value)
+    return tail or value.name
 
 
 

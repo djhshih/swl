@@ -4,6 +4,8 @@ from typing import Dict, List, Optional, Set
 
 from swl.dag.binding import binding_from_dict, binding_to_dict
 
+
+
 """
 Interpolation JSON schema for task parameter defaults.
 
@@ -86,7 +88,6 @@ class StepCall:
     input_schema: Optional[dict] = None
     output_schema: Optional[dict] = None
 
-
 @dataclass(frozen=True)
 class Output:
     name: str
@@ -140,10 +141,7 @@ class DAG:
                         for name, value in step.bindings.items()
                         if not (isinstance(value, Input) and value.name == name)
                     },
-                    'outputs': {
-                        name: step.task['outputs'][name]
-                        for name in step.outputs
-                    },
+                    'outputs': dict(step.task.get('outputs', {})),
                     'run': {
                         name: _run_param_to_dict(spec, step.run.get(name))
                         for name, spec in step.task.get('run', {}).items()
@@ -153,20 +151,20 @@ class DAG:
                 }
                 for step in self.steps
             ],
-            'outputs': {
-                name: (
-                    {
-                        'type': value.type,
-                        'desc': value.desc,
-                        **({'optional': True} if value.optional else {}),
-                        'value': binding_to_dict(value.value),
-                    }
-                    if isinstance(value, OutputSpec) or (hasattr(value, 'value') and hasattr(value, 'type'))
-                    else binding_to_dict(value)
-                )
-                for name, value in self.outputs.items()
-            },
-        }
+        'outputs': {
+            name: (
+                {
+                    'type': value.type,
+                    'desc': value.desc,
+                    **({'optional': True} if value.optional else {}),
+                    'value': binding_to_dict(value.value),
+                }
+                if isinstance(value, OutputSpec) or (hasattr(value, 'type') and hasattr(value, 'value'))
+                else binding_to_dict(value)
+            )
+            for name, value in self.outputs.items()
+        },
+    }
 
     def validate(self):
         step_by_id = {step.id: step for step in self.steps}
@@ -281,11 +279,11 @@ class DAG:
             steps.append(step)
             step_by_id[step.id] = step
         for step, item in zip(steps, steps_data):
-            step.bindings.update(_default_input_bindings(step, inputs, item))
             step.bindings.update({
                 name: binding_from_dict(value, inputs, step_by_id)
                 for name, value in item.get('bindings', {}).items()
             })
+            step.bindings.update(_default_input_bindings(step, inputs, item))
         outputs = {
             name: _output_spec_from_dict(value, inputs, step_by_id)
             for name, value in data.get('outputs', {}).items()
@@ -345,23 +343,27 @@ def _mapped_step_fields(map_data, item, inputs, step_by_id):
 
 
 def _default_input_bindings(step, inputs, item):
+    existing = set(item.get('bindings', {}).keys())
     return {
         name: inputs[name]
         for name in step.task.get('inputs', {}).keys()
-        if name in inputs and name not in item.get('bindings', {})
+        if name in inputs and name not in existing
     }
 
 
 
 def _output_spec_from_dict(data, inputs, steps):
     if isinstance(data, dict) and 'value' in data:
+        value = data['value']
+        if isinstance(value, dict):
+            value = binding_from_dict(value, inputs, steps)
         return OutputSpec(
             type=data.get('type'),
             desc=data.get('desc'),
             optional=data.get('optional', False),
-            value=binding_from_dict(data['value'], inputs, steps),
+            value=value,
         )
-    return OutputSpec(type=None, value=binding_from_dict(data, inputs, steps))
+    return OutputSpec(type=None, value=data)
 
 
 def _run_param_to_dict(spec, value):
@@ -373,7 +375,7 @@ def _run_param_to_dict(spec, value):
     if isinstance(value, Literal):
         data['value'] = value.value
         return data
-    data['value'] = binding_to_dict(value)
+    data['value'] = value
     return data
 
 

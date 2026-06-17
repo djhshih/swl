@@ -1,7 +1,7 @@
 import json
 
-from swl.dag.node import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
-from swl.transpile.common import emit_name, interp_script, run_value, source_kind, step_name, workflow_name, word_interp, _flatten_output_names
+from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.transpile.common import emit_name, flatten_dag_outputs, format_resource_directives, interp_script, source_kind, step_name, validate_dag_for_transpile, workflow_name, word_interp
 from swl.types import to_nf_qualifier
 
 
@@ -13,7 +13,7 @@ def transpile_dag_file(path):
 def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     dag = DAG.from_dict(data)
     dag.validate()
-    dag.outputs = _flatten_output_names(dag.outputs)
+    flatten_dag_outputs(dag)
     _validate_supported(dag)
 
     processes = {}
@@ -126,20 +126,13 @@ def _task_to_process(step):
 
 
 def _emit_directives(step):
-    directives = []
     run = (step.task or {}).get('run', {})
-    cpu = run_value(run, 'cpu')
-    memory = run_value(run, 'memory')
-    time = run_value(run, 'time')
-    image = run_value(run, 'image')
-    if cpu is not None:
-        directives.append(f'    cpus {cpu}')
-    if memory is not None:
-        directives.append(f"    memory '{memory} MB'")
-    if time is not None:
-        directives.append(f"    time '{time}m'")
-    if image is not None:
-        directives.append(f"    container '{image}'")
+    directives = format_resource_directives(run, {
+        'cpu': lambda v: f'    cpus {v}',
+        'memory': lambda v: f"    memory '{v} MB'",
+        'time': lambda v: f"    time '{v}m'",
+        'image': lambda v: f"    container '{v}'",
+    })
     return '\n'.join(directives)
 
 
@@ -149,35 +142,33 @@ def _interp_to_nf(value):
 
 _NF_RUN_MAP = {'cpu': 'cpus', 'memory': 'memory', 'time': 'time'}
 
-
 def _interpolate_shell(body, step):
+    if '$' not in body:
+        return body
     task = step.task or {}
     input_names = set(task.get('inputs', {}).keys())
     run = task.get('run', {})
     run_names = set()
-    for rv in _NF_RUN_MAP:
+    for rv in ('cpu', 'memory', 'time'):
         if run.get(rv, {}).get('value') is not None:
             run_names.add(rv)
-    nf_run = {k: _NF_RUN_MAP[k] for k in run_names}
+    _NF_RUN_MAP = {'cpu': 'cpus', 'memory': 'memory', 'time': 'time'}
 
     def var_fn(name):
         if name in input_names:
-            return '${' + name + '}'
-        if name in nf_run:
-            return '${task.' + nf_run[name] + '}'
+            return f'${{{name}}}'
+        if name in run_names:
+            return f'${{task.{_NF_RUN_MAP.get(name, name)}}}'
         return None
 
     def expr_fn(text):
         resolved = text
-        if 'memory' in resolved and 'memory' in nf_run:
-            resolved = resolved.replace('memory', 'task.memory', 1)
-        if 'cpu' in resolved and 'cpu' in nf_run:
-            resolved = resolved.replace('cpu', 'task.cpus', 1)
-        if 'time' in resolved and 'time' in nf_run:
-            resolved = resolved.replace('time', 'task.time', 1)
+        for swl_name, nf_name in _NF_RUN_MAP.items():
+            if swl_name in run_names and swl_name in resolved:
+                resolved = resolved.replace(swl_name, f'task.{nf_name}', 1)
         return '${' + resolved + '}'
 
-    return interp_script(body, var_fn, expr_fn, joiner='')
+    return interp_script(body, var_fn, expr_fn)
 
 
 def _channel_name(name):
@@ -312,37 +303,31 @@ def _dag_to_nf(dag, workflow_id, processes):
 def _binding_to_channel(binding, channels, current_step):
     if isinstance(binding, Input):
         return channels[binding.name]
-
     if isinstance(binding, Literal):
         val = json.dumps(binding.value)
         return f'Channel.value({val})'
-
     if isinstance(binding, Field):
-        source_ch = _binding_to_channel(binding.source, channels, current_step)
         if isinstance(binding.source, StepCall):
             step_key = f'{binding.source.id}.{binding.name}'
             if step_key in channels:
                 return channels[step_key]
             pname = _process_name(binding.source.id)
-            ch = f'{pname}.out.{_nf_emit_name(binding.name)}'
-            if getattr(binding.source, 'map', None) is not None:
-                ch += '.toList()'
-            return ch
-        return f'{source_ch}.map{{ it.{binding.name} }}'
-
+            return f'{pname}.out.{_nf_emit_name(binding.name)}'
+        return channels.get(binding.name, _channel_name(binding.name))
     if isinstance(binding, Record):
         raise ValueError(
             f'Record binding with fields {list(binding.fields.keys())} must be flattened '
-            'before Nextflow transpilation. This typically means a non-saturating record '
-            'survived to DAG output. Use explicit field bindings instead.'
+            'before Nextflow transpilation.'
         )
-
+    if isinstance(binding, Merge):
+        raise ValueError(
+            f'Merge bindings must be flattened before Nextflow transpilation.'
+        )
     if isinstance(binding, StepCall):
-        pname = _process_name(binding.id)
         if binding.id in channels:
             return channels[binding.id]
+        pname = _process_name(binding.id)
         return f'{pname}.out'
-
     raise ValueError(f'Unsupported binding for Nextflow: {type(binding).__name__}')
 
 
@@ -628,7 +613,4 @@ def _wf_name(workflow_id):
 
 
 def _validate_supported(dag):
-    for name, output in dag.outputs.items():
-        binding = output.value if isinstance(output, OutputSpec) else output
-        if isinstance(binding, Literal):
-            raise ValueError(f'Nextflow does not support literal workflow outputs: {name}')
+    validate_dag_for_transpile(dag, 'Nextflow')

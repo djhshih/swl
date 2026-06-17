@@ -1,9 +1,19 @@
 import json
-import os
 import re
 
-from swl.dag.node import DAG, Field, Input, Literal, OutputSpec, Record, StepCall
-from swl.transpile.common import classify_var, field_chain_parts, field_path_after_first, run_value, source_input_name, source_kind, table_columns, word_interp, _flatten_output_names
+from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
+from swl.transpile.common import (
+    classify_var,
+    field_chain_parts,
+    field_path_after_first,
+    flatten_dag_outputs,
+    run_value,
+    source_input_name,
+    source_kind,
+    table_columns,
+    validate_dag_for_transpile,
+    word_interp,
+)
 from swl.types import to_array_type, to_cwl_type
 
 
@@ -15,7 +25,7 @@ def transpile_dag_file(path):
 def transpile_dag_dict(data, workflow_id='main'):
     dag = DAG.from_dict(data)
     dag.validate()
-    dag.outputs = _flatten_output_names(dag.outputs)
+    flatten_dag_outputs(dag)
     _validate_supported(dag)
     tools = []
     tool_ids = {}
@@ -91,14 +101,9 @@ def transpile_dag_dict(data, workflow_id='main'):
     for _, (step_entry, _) in record_output_map.items():
         wf_steps.insert(0, step_entry)
 
-    def _is_map_by_step_ref(value):
-        step = None
-        if isinstance(value, StepCall):
-            step = value
-        elif isinstance(value, Field) and isinstance(value.source, StepCall):
-            step = value.source
-        if step and getattr(step, 'map', None) and step.map.get('group_by'):
-            return True
+    def _is_map_by_step_ref(value, dag):
+        if isinstance(value, Field) and isinstance(value.source, StepCall) and getattr(value.source, 'map', None):
+            return bool(value.source.map.get('group_by'))
         return False
 
     outputs = []
@@ -114,7 +119,7 @@ def transpile_dag_dict(data, workflow_id='main'):
         else:
             source = _binding_source(value, workflow_id)
             typ = to_cwl_type(output.type)
-            if _is_map_by_step_ref(value):
+            if _is_map_by_step_ref(value, dag):
                 typ = {'type': 'array', 'items': typ}
             outputs.append({
                 'id': f'#{workflow_id}/{name}',
@@ -191,20 +196,11 @@ def _workflow_input_to_cwl(workflow_id, name, spec):
     }
 
 
-def _workflow_output_to_cwl(workflow_id, name, output):
-    source = _binding_source(output.value, workflow_id)
-    return {
-        'id': f'#{workflow_id}/{name}',
-        'type': to_cwl_type(output.type),
-        'outputSource': source,
-    }
-
-
 def _step_to_cwl(workflow_id, step, tool_id, record_map=None):
     if record_map is None:
         record_map = {}
     inputs = []
-    for name, value in step.bindings.items():
+    for name, binding in step.bindings.items():
         if (step.id, name) in record_map:
             _, source = record_map[(step.id, name)]
             inputs.append({
@@ -212,7 +208,7 @@ def _step_to_cwl(workflow_id, step, tool_id, record_map=None):
                 'source': source,
             })
         else:
-            inputs.append(_step_input_to_cwl(workflow_id, step.id, name, value))
+            inputs.append(_step_input_to_cwl(workflow_id, step.id, name, binding))
     data = {
         'id': f'#{workflow_id}/{step.id}',
         'run': tool_id,
@@ -251,9 +247,8 @@ def _step_input_to_cwl(workflow_id, task_id, name, value):
         'id': f'#{workflow_id}/{task_id}/{name}',
         'source': _binding_source(value, workflow_id),
     }
-    field_path = field_path_after_first(value)
-    if field_path is not None:
-        result['valueFrom'] = f"$({field_path})"
+    if isinstance(value, Field) and value.name != name:
+        result['valueFrom'] = f"$({value.name})"
     return result
 
 
@@ -320,23 +315,26 @@ def _binding_source(value, workflow_id='main'):
                 return f'#{workflow_id}/{root.name}'
             if isinstance(root, StepCall):
                 return f'#{workflow_id}/{root.id}/{root_name}'
-    raise ValueError(f'Unsupported binding for CWL transpilation: {value!r}')
+    raise ValueError(f'Unsupported value for CWL binding source: {type(value).__name__} {value!r}')
 
 
 def _validate_supported(dag):
     for step in dag.steps:
         if getattr(step, 'map', None) is not None and step.map.get('group_by') is not None:
             _validate_map_by_preconditions(step)
-    for name, output in dag.outputs.items():
-        value = output.value if isinstance(output, OutputSpec) else output
-        if isinstance(value, Literal):
-            raise ValueError(f'Unsupported workflow output for CWL transpilation: {name}: literal outputs are not supported')
+    validate_dag_for_transpile(dag, 'CWL')
     for step in dag.steps:
         for name, spec in step.task.get('outputs', {}).items():
             try:
                 _interp_to_cwl_glob(spec.get('default'), step.task.get('inputs', {}).keys())
             except ValueError as exc:
                 raise ValueError(f'Unsupported step output path for CWL transpilation: {step.id}.{name}: {exc}') from exc
+    for step in dag.steps:
+        for binding in step.bindings.values():
+            if isinstance(binding, Merge):
+                raise ValueError(
+                    f'CWL does not support Merge bindings: step {step.id} contains a Merge value'
+                )
 
 
 def _interp_to_cwl_glob(value, input_names=()):
@@ -387,10 +385,10 @@ def _interpolate_shell(body, step):
         scope = classify_var(name, input_names, output_names, run_names)
         if scope == 'input':
             typ = input_types.get(name)
-            if typ == 'file':
-                return f'inputs.{name}.path'
             if typ == '[file]':
                 return f'inputs.{name}.map(function(f){{return f.path;}}).join(" ")'
+            if typ == 'file':
+                return f'inputs.{name}.path'
             return f'inputs.{name}'
         if scope == 'run':
             val = run_values.get(name)
@@ -439,18 +437,11 @@ def _interpolate_shell(body, step):
 def _infer_record_field_type(field_value, dag):
     if isinstance(field_value, Input):
         spec = dag.inputs.get(field_value.name)
-        typ = spec.type if hasattr(spec, 'type') else (spec or {}).get('type') if isinstance(spec, dict) else None
+        typ = spec.type if hasattr(spec, 'type') else None
         return to_cwl_type(typ)
     if isinstance(field_value, Literal):
         return to_cwl_type(type(field_value.value).__name__)
-    if isinstance(field_value, StepCall):
-        return 'string'
-    if isinstance(field_value, Field):
-        root, root_name, _ = field_chain_parts(field_value)
-        if isinstance(root, StepCall) and root.task:
-            out_spec = root.task.get('outputs', {}).get(root_name, {})
-            if out_spec:
-                return to_cwl_type(out_spec.get('type') or 'str')
+    if isinstance(field_value, (Field, StepCall)):
         return 'string'
     return 'string'
 
@@ -467,10 +458,8 @@ def _emit_record_tool(workflow_id, step_id, binding_name, record, dag):
         tool_inputs.append({'id': f'{tool_id}/{fname}', 'type': typ})
         if isinstance(fvalue, Literal):
             step_inputs.append({'id': f'{step_entry_id}/{fname}', 'default': fvalue.value})
-        elif isinstance(fvalue, (Input, Field, StepCall)):
-            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'source': _binding_source(fvalue, workflow_id)})
         else:
-            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'default': None})
+            step_inputs.append({'id': f'{step_entry_id}/{fname}', 'source': _binding_source(fvalue, workflow_id)})
     js_lines = ['var fs = require("fs");']
     for fname in field_names:
         js_lines.append(f'record.{fname} = inputs.{fname};')

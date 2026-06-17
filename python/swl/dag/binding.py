@@ -1,7 +1,3 @@
-def is_instance(value, class_name):
-    return value.__class__.__name__ == class_name
-
-
 def binding_to_dict(value):
     cls = value.__class__.__name__
     if cls == 'Input':
@@ -9,7 +5,7 @@ def binding_to_dict(value):
     if cls == 'Literal':
         return {'source': 'literal', 'value': value.value}
     if cls == 'Field':
-        if is_instance(value.source, 'StepCall'):
+        if value.source.__class__.__name__ == 'StepCall':
             return {'source': 'step_output', 'step': value.source.id, 'output': value.name}
         return {'source': 'field', 'field': value.name, 'value': binding_to_dict(value.source)}
     if cls == 'Merge':

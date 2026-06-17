@@ -4,15 +4,15 @@ import re
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.transpile.common import (
     emit_name,
-    field_chain_parts,
-    field_path_after_first,
+    flatten_dag_outputs,
+    format_resource_directives,
     interp_script,
     run_value,
     source_kind,
     step_name,
+    validate_dag_for_transpile,
     word_interp,
     workflow_name,
-    _flatten_output_names,
 )
 
 
@@ -24,7 +24,7 @@ def transpile_dag_file(path):
 def transpile_dag_dict(data, workflow_id='main', _top_level=True, wrap_map=None):
     dag = DAG.from_dict(data)
     dag.validate()
-    dag.outputs = _flatten_output_names(dag.outputs)
+    flatten_dag_outputs(dag)
     _validate_supported(dag)
 
     rule_names = {}
@@ -99,27 +99,26 @@ def _scope_path_raw(step_id, rendered, is_mapped, scatter_ports):
     return f'results/{step_id}/{rendered}'
 
 
-def _render_output_path(value):
+def _render_output_path(value, dag=None):
     if isinstance(value, Field) and isinstance(value.source, StepCall):
         prev = value.source
+        out_name = value.name
         prev_is_mapped = prev.map is not None
         prev_scatter = set(prev.map.get('scatter', [])) if prev.map else set()
-        spec = (prev.task or {}).get('outputs', {}).get(value.name, {})
-        default_spec = spec.get('default')
-        if default_spec:
-            rendered = _interp_to_smk(default_spec)
-            if rendered is not None:
-                return _scope_path_raw(prev.id, rendered, prev_is_mapped, prev_scatter)
+        spec = (prev.task or {}).get('outputs', {}).get(out_name, {})
+        rendered = _output_template(spec)
+        if rendered is not None:
+            return _scope_path_raw(prev.id, rendered, prev_is_mapped, prev_scatter)
         if prev.type == 'workflow':
-            inner_default, inner_step_id = _inner_output_default(prev, value.name)
+            inner_default, inner_step_id = _inner_output_default(prev, out_name)
             if inner_default:
                 rendered = _interp_to_smk(inner_default)
                 if rendered is not None:
                     return _scope_path_raw(inner_step_id, rendered, False, set()) if inner_step_id else rendered
         if prev.map is not None:
             scatter_ports = set(prev.map.get('scatter', []))
-            return _default_output_path_raw(prev.id, value.name, scatter_ports)
-        return f'results/{prev.id}/{value.name}'
+            return _default_output_path_raw(prev.id, out_name, scatter_ports)
+        return f'results/{prev.id}/{out_name}'
     return None
 
 
@@ -138,12 +137,12 @@ def _collect_wildcard_globs(dag):
     all_vars = set()
     for name, output in dag.outputs.items():
         value = output.value if isinstance(output, OutputSpec) else output
-        if _is_mapped_output(value):
-            step = _step_for_output(value)
+        if _is_mapped_output(value, dag):
+            step = _step_for_output(value, dag)
             if step is not None:
                 all_vars.update(_mapped_output_wildcards(step))
         else:
-            rendered = _render_output_path(value)
+            rendered = _render_output_path(value, dag)
             if rendered:
                 vars_in = re.findall(r'\{(\w+)\}', rendered)
                 all_vars.update(vars_in)
@@ -164,7 +163,7 @@ def _inner_output_default(step, output_name):
             for s in dag_data.get('steps', []):
                 if s.get('id') == inner_step_id:
                     out_spec = s.get('outputs', {}).get(inner_output_name, {})
-                    return out_spec.get('default'), inner_step_id
+                    return out_spec.get('path_template') or out_spec.get('default'), inner_step_id
     return None, None
 
 
@@ -203,10 +202,7 @@ def _mapped_output_expand(name, step):
 
 
 def _validate_supported(dag):
-    for name, output in dag.outputs.items():
-        value = output.value if isinstance(output, OutputSpec) else output
-        if isinstance(value, Literal):
-            raise ValueError(f'Snakemake does not support literal workflow outputs: {name}')
+    validate_dag_for_transpile(dag, 'Snakemake')
     for step in dag.steps:
         for binding in step.bindings.values():
             if isinstance(binding, Merge):
@@ -218,10 +214,6 @@ def _validate_supported(dag):
 
 def _rule_name(step_id):
     return step_name(step_id, 'rule')
-
-
-def _wf_name(workflow_id):
-    return workflow_name(workflow_id, 'workflow')
 
 
 def _san(name):
@@ -259,6 +251,16 @@ def _interp_to_smk(value):
     )
 
 
+def _output_template(spec):
+    template = spec.get('path_template') if isinstance(spec, dict) else None
+    if template is not None:
+        return template
+    default = spec.get('default') if isinstance(spec, dict) else None
+    if default:
+        return _interp_to_smk(default)
+    return None
+
+
 def _task_to_rule(step, dag, wrap_map=None):
     task = step.task or {}
     body = task.get('body', '')
@@ -289,32 +291,28 @@ def _task_to_rule(step, dag, wrap_map=None):
         lines.append('    input:')
         for in_name in file_inputs:
             binding = step.bindings.get(in_name)
-            path_expr = _binding_to_path(binding, in_name, is_mapped, scatter_ports, wrap_map)
+            path_expr = _binding_to_path(binding, in_name, is_mapped, scatter_ports, wrap_map, dag)
             lines.append(f'        {_san(in_name)}={path_expr},')
         lines.append('')
 
     task_outputs = task.get('outputs', {})
-    params = _collect_params(step)
+    params = _collect_params(step, dag)
     if task_outputs:
         lines.append('    output:')
         for out_name in task_outputs:
-            default_spec = task_outputs[out_name].get('default')
-            if default_spec:
-                rendered = _interp_to_smk(default_spec)
-                if rendered is not None:
-                    concrete = _resolve_concrete_path(rendered, params)
-                    if concrete is not None:
-                        path_expr = repr(f'results/{step.id}/{concrete}')
-                    else:
-                        path_expr = _scope_path(step.id, rendered, is_mapped, scatter_ports)
+            rendered = _output_template(task_outputs[out_name])
+            if rendered is not None:
+                concrete = _resolve_concrete_path(rendered, params)
+                if concrete is not None:
+                    path_expr = repr(f'results/{step.id}/{concrete}')
                 else:
-                    path_expr = _default_output_path(step.id, out_name, is_mapped, scatter_ports)
+                    path_expr = _scope_path(step.id, rendered, is_mapped, scatter_ports)
             else:
                 path_expr = _default_output_path(step.id, out_name, is_mapped, scatter_ports)
             lines.append(f'        {_san(out_name)}={path_expr},')
         lines.append('')
 
-    params = _collect_params(step)
+    params = _collect_params(step, dag)
     if params:
         lines.append('    params:')
         for name, expr in params:
@@ -328,7 +326,7 @@ def _task_to_rule(step, dag, wrap_map=None):
         lines.append('')
 
     if body.strip():
-        interp_body = _interpolate_shell(body, step)
+        interp_body = _interpolate_shell(body, step, dag)
         for out_name, out_spec in task_outputs.items():
             pattern = _interp_preview(out_spec.get('default'))
             if pattern:
@@ -359,7 +357,7 @@ def _default_output_path(step_id, out_name, is_mapped, scatter_ports):
     return repr(f'results/{step_id}/{out_name}')
 
 
-def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None):
+def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None, dag=None):
     if binding is None:
         return f'config["{port_name}"]'
 
@@ -367,15 +365,15 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
         return f'config["{binding.name}"]'
 
     if isinstance(binding, Field):
-        if isinstance(binding.source, Input):
-            root = binding.source
-            return f'config["{root.name}"]'
+        if dag and binding.name in dag.inputs:
+            return f'config["{binding.name}"]'
         if isinstance(binding.source, StepCall):
             prev_step = binding.source
+            out_name = binding.name
             prev_is_mapped = prev_step.map is not None
             prev_scatter = set(prev_step.map.get('scatter', [])) if prev_step.map else set()
             if prev_step.type == 'workflow' and prev_step.map is not None:
-                inner_default, inner_step_id = _inner_output_default(prev_step, binding.name)
+                inner_default, inner_step_id = _inner_output_default(prev_step, out_name)
                 if inner_default:
                     rendered = _interp_to_smk(inner_default)
                     if rendered is not None:
@@ -385,15 +383,14 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
                             kwargs = ', '.join(f'{v}={v.upper()}' for v in vars_in)
                             return f'expand({repr(scoped)}, {kwargs})'
                         return repr(scoped)
-            spec = (prev_step.task or {}).get('outputs', {}).get(binding.name, {})
-            default_spec = spec.get('default')
-            if default_spec:
-                rendered = _interp_to_smk(default_spec)
-                if rendered is not None:
-                    return _scope_path(prev_step.id, rendered, prev_is_mapped, prev_scatter)
+            spec = (prev_step.task or {}).get('outputs', {}).get(out_name, {})
+            rendered = _output_template(spec)
+            if rendered is not None:
+                return _scope_path(prev_step.id, rendered, prev_is_mapped, prev_scatter)
             if prev_step.map is not None:
-                return _default_output_path(prev_step.id, binding.name, True, prev_scatter)
-            return repr(f'results/{prev_step.id}/{binding.name}')
+                return _default_output_path(prev_step.id, out_name, True, prev_scatter)
+            return repr(f'results/{prev_step.id}/{out_name}')
+        return f'config["{port_name}"]'
 
     if isinstance(binding, Literal):
         if isinstance(binding.value, str):
@@ -406,10 +403,16 @@ def _binding_to_path(binding, port_name, is_mapped, scatter_ports, wrap_map=None
             'before Snakemake transpilation.'
         )
 
+    if isinstance(binding, Merge):
+        raise ValueError(
+            f'Merge bindings must be flattened before Snakemake transpilation. '
+            f'Found in binding {port_name}'
+        )
+
     raise ValueError(f'Unsupported binding for Snakemake: {type(binding).__name__}')
 
 
-def _interpolate_shell(body, step):
+def _interpolate_shell(body, step, dag=None):
     task = step.task or {}
     task_inputs = task.get('inputs', {})
     input_names = set()
@@ -417,15 +420,15 @@ def _interpolate_shell(body, step):
         if spec.get('type') not in ('str', 'int', 'float'):
             input_names.add(name)
     output_names = set(step.outputs)
-    param_names = {p[0] for p in _collect_params(step)}
+    param_names = {p[0] for p in _collect_params(step, dag)}
 
     def _resolve_var(var):
         if var in input_names:
-            return '{input.' + _san(var) + '}'
+            return _san(var)
         if var in output_names:
-            return '{output.' + _san(var) + '}'
+            return _san(var)
         if var in param_names:
-            return '{params.' + var + '}'
+            return var
         return None
 
     def var_fn(name):
@@ -442,7 +445,7 @@ def _interpolate_shell(body, step):
     return interp_script(body, var_fn, expr_fn, joiner='')
 
 
-def _collect_params(step):
+def _collect_params(step, dag=None):
     params = []
     task_inputs = (step.task or {}).get('inputs', {})
     for in_name, spec in task_inputs.items():
@@ -453,16 +456,14 @@ def _collect_params(step):
                 params.append((_san(in_name), json.dumps(binding.value)))
             elif isinstance(binding, Field) and isinstance(binding.source, StepCall):
                 prev_step = binding.source
-                prev_spec = (prev_step.task or {}).get('outputs', {}).get(binding.name, {})
-                default_spec = prev_spec.get('default')
-                if default_spec:
-                    rendered = _interp_to_smk(default_spec)
-                    if rendered is not None:
-                        params.append((_san(in_name), repr(rendered)))
-                    else:
-                        params.append((_san(in_name), repr(f'results/{prev_step.id}/{binding.name}')))
+                out_name = binding.name
+                prev_spec = (prev_step.task or {}).get('outputs', {}).get(out_name, {})
+                default = prev_spec.get('default')
+                if default:
+                    rendered = _interp_to_smk(default)
+                    params.append((_san(in_name), repr(rendered)) if rendered else (_san(in_name), repr(f'results/{prev_step.id}/{out_name}')))
                 else:
-                    params.append((_san(in_name), repr(f'results/{prev_step.id}/{binding.name}')))
+                    params.append((_san(in_name), repr(f'results/{prev_step.id}/{out_name}')))
             else:
                 params.append((_san(in_name), f'config["{in_name}"]'))
     run = (step.task or {}).get('run', {})
@@ -477,23 +478,19 @@ def _emit_resources(step):
     run = (step.task or {}).get('run', {})
     directives = []
 
-    cpu = run_value(run, 'cpu')
-    if cpu is not None:
-        directives.append(f'threads: {cpu}')
+    directives.extend(format_resource_directives(run, {
+        'cpu': lambda v: f'threads: {v}',
+        'image': lambda v: f'container: "docker://{v}"',
+    }))
 
     memory = run_value(run, 'memory')
     time_val = run_value(run, 'time')
-    has_resources = memory is not None or time_val is not None
-    if has_resources:
+    if memory is not None or time_val is not None:
         directives.append('resources:')
         if memory is not None:
             directives.append(f'    mem_mb={memory}')
         if time_val is not None:
             directives.append(f'    runtime_minutes={time_val}')
-
-    image = run_value(run, 'image')
-    if image is not None:
-        directives.append(f'container: "docker://{image}"')
 
     return directives
 
@@ -506,7 +503,7 @@ def _dag_to_smk(dag, workflow_id, rule_names):
 
     for name, output in dag.outputs.items():
         value = output.value if isinstance(output, OutputSpec) else output
-        mapped = _is_mapped_output(value)
+        mapped = _is_mapped_output(value, dag)
         if mapped:
             mapped_outputs[name] = (value, output)
         else:
@@ -521,7 +518,7 @@ def _dag_to_smk(dag, workflow_id, rule_names):
             lines.append(f'        {_san(name)}={path_expr},')
 
         for name, (value, output) in sorted(mapped_outputs.items()):
-            step = _step_for_output(value)
+            step = _step_for_output(value, dag)
             if step is not None:
                 lines.append(f'        {_mapped_output_expand(name, step)},')
 
@@ -530,13 +527,13 @@ def _dag_to_smk(dag, workflow_id, rule_names):
     return '\n'.join(lines)
 
 
-def _is_mapped_output(value):
+def _is_mapped_output(value, dag=None):
     if isinstance(value, Field) and isinstance(value.source, StepCall):
         return value.source.map is not None
     return False
 
 
-def _step_for_output(value):
+def _step_for_output(value, dag=None):
     if isinstance(value, Field) and isinstance(value.source, StepCall):
         return value.source
     return None
@@ -566,9 +563,9 @@ def _output_to_path(name, value, dag):
     if isinstance(value, Field):
         if isinstance(value.source, StepCall):
             prev = value.source
-            rendered = _render_output_path(value)
+            rendered = _render_output_path(value, dag)
             if rendered is not None:
-                params = _collect_params(prev)
+                params = _collect_params(prev, dag)
                 concrete = _resolve_concrete_path(rendered, params) if params else None
                 if concrete is not None:
                     return repr(concrete)

@@ -218,18 +218,13 @@ map call_variant
         )
         bad = {
             'inputs': {'a': {'type': None, 'desc': None}, 'b': {'type': None, 'desc': None}},
-            'steps': [
-                {
-                    'id': 'align',
-                    'path': '/tmp/align.sh',
-                    'deps': [],
-                    'inputs': {'x': {'type': 'str', 'desc': None}},
-                    'bindings': {'x': {'source': 'merge', 'left': {'source': 'input', 'name': 'a'}, 'right': {'source': 'input', 'name': 'b'}}},
-                    'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
-                    'run': {},
-                    'script': 'echo hi\n',
-                }
-            ],
+            'steps': [{
+                'id': 'align', 'path': '/tmp/align.sh', 'deps': [],
+                'inputs': {'x': {'type': 'str', 'desc': None}},
+                'bindings': {'x': {'source': 'merge', 'left': {'source': 'input', 'name': 'a'}, 'right': {'source': 'input', 'name': 'b'}}},
+                'outputs': {'bam': {'type': 'file', 'default': {'kind': 'word', 'parts': [{'kind': 'literal', 'text': 'x.bam'}]}, 'desc': None}},
+                'run': {}, 'script': 'echo hi\n',
+            }],
             'outputs': {'bam': {'type': 'file', 'desc': None, 'value': {'step': 'align', 'output': 'bam'}}},
         }
         with self.assertRaisesRegex(ValueError, 'contains a Merge value'):

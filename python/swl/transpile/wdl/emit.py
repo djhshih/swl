@@ -3,14 +3,15 @@ import json
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
 from swl.transpile.common import (
     column_input_name,
+    flatten_dag_outputs,
     interp_script,
     source_input_name,
     source_kind,
     step_name,
     table_columns,
+    validate_dag_for_transpile,
     workflow_name,
     word_interp,
-    _flatten_output_names,
 )
 from swl.types import to_wdl_type
 
@@ -56,11 +57,8 @@ def _build_output_rename_map(dag):
 def transpile_dag_dict(data, workflow_id='main', _top_level=True):
     dag = DAG.from_dict(data)
     dag.validate()
-    dag.outputs = _flatten_output_names(dag.outputs)
-    for name, output in dag.outputs.items():
-        value = output.value if isinstance(output, OutputSpec) else output
-        if isinstance(value, Literal):
-            raise ValueError(f'WDL does not support literal workflow outputs: {name}')
+    flatten_dag_outputs(dag)
+    validate_dag_for_transpile(dag, 'WDL')
 
     structs = _collect_structs(dag)
     output_renames = _build_output_rename_map(dag)
@@ -168,58 +166,51 @@ def _call_alias(step_id):
     return _sanitize_ident(step_name(step_id, 'step'))
 
 
-def _task_to_wdl(step, rename_map=None):
-    if rename_map is None:
-        rename_map = {}
-    task = step.task or {}
-    body = task.get('body', '')
-    lines = [f'task {_task_name(step.id)} {{', '']
+def _emit_task_body(name, body, inputs_dict, outputs_dict, run_dict, rename_map):
+    lines = [f'task {name} {{', '']
 
-    inputs = task.get('inputs', {})
-    run = task.get('run', {})
     run_var_names = set()
     for rv in ('cpu', 'memory', 'time'):
-        if run.get(rv, {}).get('value') is not None:
+        if run_dict.get(rv, {}).get('value') is not None:
             run_var_names.add(rv)
 
     array_input_names = set()
-    if inputs or run_var_names:
+    if inputs_dict or run_var_names:
         lines.append('    input {')
-        for name, spec in inputs.items():
+        for in_name, spec in inputs_dict.items():
             t = to_wdl_type(spec.get('type'))
             if t.startswith('Array['):
-                array_input_names.add(name)
-            lines.append(f'        {t} {name}')
+                array_input_names.add(in_name)
+            lines.append(f'        {t} {in_name}')
         for rv in sorted(run_var_names):
             t = _RUN_VAR_TYPE[rv]
-            val = run[rv]['value']
+            val = run_dict[rv]['value']
             lines.append(f'        {t} {rv} = {val}')
         lines.append('    }')
         lines.append('')
 
     lines.append('    command <<<')
     for line in body.split('\n'):
-        interp_line = _interpolate_bash_vars(line, set(inputs.keys()) | run_var_names, array_input_names)
+        interp_line = _interpolate_bash_vars(line, set(inputs_dict.keys()) | run_var_names, array_input_names)
         lines.append(f'        {interp_line}')
     lines.append('    >>>')
     lines.append('')
 
-    outputs = task.get('outputs', {})
-    if outputs:
+    if outputs_dict:
         lines.append('    output {')
-        for name, spec in outputs.items():
-            emit_name = rename_map.get(name, name)
+        for out_name, spec in outputs_dict.items():
+            emit_name = rename_map.get(out_name, out_name)
             t = to_wdl_type(spec.get('type'))
             default = spec.get('default')
             if default:
                 path_expr = _interp_to_wdl(default)
                 lines.append(f'        {t} {emit_name} = "{path_expr}"')
             else:
-                lines.append(f'        {t} {emit_name} = "*.{name}"')
+                lines.append(f'        {t} {emit_name} = "*.{out_name}"')
         lines.append('    }')
         lines.append('')
 
-    req = _emit_requirements(step)
+    req = _emit_resource_requirements(run_dict)
     if req:
         lines.append(req)
         lines.append('')
@@ -228,78 +219,30 @@ def _task_to_wdl(step, rename_map=None):
     return '\n'.join(lines)
 
 
+def _task_to_wdl(step, rename_map=None):
+    if rename_map is None:
+        rename_map = {}
+    task = step.task or {}
+    return _emit_task_body(
+        _task_name(step.id),
+        task.get('body', ''),
+        task.get('inputs', {}),
+        task.get('outputs', {}),
+        task.get('run', {}),
+        rename_map,
+    )
+
+
 def _task_to_wdl_from_data(step_id, step_data):
     rename_map = _conflicting_outputs_from_data(step_data)
-    body = step_data.get('script', '')
-    lines = [f'task {_task_name(step_id)} {{', '']
-
-    inputs = step_data.get('inputs', {})
-    run = step_data.get('run', {})
-    run_var_names = set()
-    for rv in ('cpu', 'memory', 'time'):
-        if run.get(rv, {}).get('value') is not None:
-            run_var_names.add(rv)
-
-    array_input_names = set()
-    if inputs or run_var_names:
-        lines.append('    input {')
-        for name, spec in inputs.items():
-            t = to_wdl_type(spec.get('type'))
-            if t.startswith('Array['):
-                array_input_names.add(name)
-            lines.append(f'        {t} {name}')
-        for rv in sorted(run_var_names):
-            t = _RUN_VAR_TYPE[rv]
-            val = run[rv]['value']
-            lines.append(f'        {t} {rv} = {val}')
-        lines.append('    }')
-        lines.append('')
-
-    lines.append('    command <<<')
-    for line in body.split('\n'):
-        interp_line = _interpolate_bash_vars(line, set(inputs.keys()) | run_var_names, array_input_names)
-        lines.append(f'        {interp_line}')
-    lines.append('    >>>')
-    lines.append('')
-
-    outputs = step_data.get('outputs', {})
-    if outputs:
-        lines.append('    output {')
-        for name, spec in outputs.items():
-            emit_name = rename_map.get(name, name)
-            t = to_wdl_type(spec.get('type'))
-            default = spec.get('default')
-            if default:
-                path_expr = _interp_to_wdl(default)
-                lines.append(f'        {t} {emit_name} = "{path_expr}"')
-            else:
-                lines.append(f'        {t} {emit_name} = "*.{name}"')
-        lines.append('    }')
-        lines.append('')
-
-    attrs = []
-    for name, spec in run.items():
-        if not isinstance(spec, dict):
-            continue
-        value = spec.get('value')
-        if value is None:
-            continue
-        if name == 'cpu':
-            attrs.append(f'        cpu: {value}')
-        elif name == 'memory':
-            attrs.append(f'        memory: "{_format_memory(value)}"')
-        elif name == 'image':
-            attrs.append(f'        container: "{value}"')
-        elif name == 'time':
-            attrs.append(f'        time_minutes: {value}')
-    if attrs:
-        lines.append('    requirements {')
-        lines.extend(attrs)
-        lines.append('    }')
-        lines.append('')
-
-    lines.append('}')
-    return '\n'.join(lines)
+    return _emit_task_body(
+        _task_name(step_id),
+        step_data.get('script', ''),
+        step_data.get('inputs', {}),
+        step_data.get('outputs', {}),
+        step_data.get('run', {}),
+        rename_map,
+    )
 
 
 def _interpolate_bash_vars(body, known_vars, array_vars=None):
@@ -309,21 +252,18 @@ def _interpolate_bash_vars(body, known_vars, array_vars=None):
     def var_fn(name):
         if name in known_vars:
             if name in array_vars:
-                return '~{sep=" " ' + name + '}'
-            return '~{' + name + '}'
+                return f'~{{sep=" " {name}}}'
+            return f'~{{{name}}}'
         return None
 
     def expr_fn(text):
-        return '~{' + text + '}'
+        return f'~{{{text}}}'
 
     return interp_script(body, var_fn, expr_fn, joiner='')
 
 
-def _emit_requirements(step):
+def _emit_resource_requirements(run):
     attrs = []
-    task = step.task or {}
-    run = task.get('run', {})
-
     for name, spec in run.items():
         if not isinstance(spec, dict):
             continue
@@ -344,6 +284,9 @@ def _emit_requirements(step):
     if not attrs:
         return ''
     return '    requirements {\n' + '\n'.join(attrs) + '\n    }'
+
+
+
 
 
 def _format_memory(value):
@@ -429,7 +372,7 @@ def _dag_to_wdl(dag, workflow_id, tasks, input_struct_map=None, output_renames=N
                     lines.append(f'    call {tname} as {alias} {{')
                 lines.append('        input:')
                 sub_inputs = sd.get('inputs', {})
-                sub_bindings = sd.get('bindings', {})
+                sub_bindings = sd.get('all_bindings') or sd.get('resolved_bindings') or sd.get('bindings', {})
                 for in_name in sub_inputs:
                     binding = sub_bindings.get(in_name)
                     if binding is None:
@@ -478,27 +421,21 @@ def _binding_to_wdl_expr(binding, current_step_id, dag, output_renames=None, inl
 
     if isinstance(binding, Input):
         return binding.name
-
     if isinstance(binding, Literal):
         return _literal_to_wdl(binding.value)
-
+    if isinstance(binding, StepCall):
+        return _call_alias(binding.id)
     if isinstance(binding, Field):
-        source_expr = _binding_to_wdl_expr(binding.source, current_step_id, dag, output_renames, inline_output_map)
-        field_name = binding.name
         if isinstance(binding.source, StepCall):
             step_id = binding.source.id
+            field_name = binding.name
             if step_id in inline_output_map and field_name in inline_output_map[step_id]:
                 alias, out_name = inline_output_map[step_id][field_name]
                 return f'{alias}.{out_name}'
             step_renames = output_renames.get(step_id, {})
             field_name = step_renames.get(field_name, field_name)
-        return f'{source_expr}.{field_name}'
-
-    if isinstance(binding, Merge):
-        raise ValueError(
-            f'Merge bindings must be flattened before WDL transpilation'
-        )
-
+            return f'{_call_alias(step_id)}.{field_name}'
+        return binding.name
     if isinstance(binding, Record):
         struct_name = _struct_name_for(binding)
         fields = []
@@ -506,14 +443,11 @@ def _binding_to_wdl_expr(binding, current_step_id, dag, output_renames=None, inl
             fexpr = _binding_to_wdl_expr(fbinding, current_step_id, dag, output_renames, inline_output_map)
             fields.append(f'{fname}: {fexpr}')
         return f'{struct_name} {{{", ".join(fields)}}}'
-
-    if isinstance(binding, StepCall):
-        step_id = binding.id
-        if step_id in inline_output_map:
-            return _call_alias(step_id)
-        return _call_alias(binding.id)
-
-    raise ValueError(f'Unsupported binding for WDL: {type(binding).__name__}')
+    if isinstance(binding, Merge):
+        raise ValueError(
+            f'Merge bindings must be flattened before WDL transpilation.'
+        )
+    raise ValueError(f'Unsupported binding for WDL expression: {type(binding).__name__}')
 
 
 def _literal_to_wdl(value):
@@ -529,17 +463,19 @@ def _literal_to_wdl(value):
 def _sub_step_binding_to_expr(binding, output_renames=None):
     if output_renames is None:
         output_renames = {}
-    src = binding.get('source')
-    if src == 'input':
+    source = binding.get('source') if isinstance(binding, dict) else None
+    if source == 'input':
         return binding['name']
-    if src == 'step_output':
+    if source == 'step_output':
         step_id = binding['step']
         out_name = binding['output']
         step_renames = output_renames.get(step_id, {})
         renamed = step_renames.get(out_name, out_name)
         return f'{_call_alias(step_id)}.{renamed}'
-    if src == 'literal':
+    if source == 'literal':
         return json.dumps(binding['value'])
+    if source == 'field':
+        return binding['name']
     return binding.get('name', '???')
 
 
@@ -570,7 +506,7 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
             lines.append(call_line + ' {')
             lines.append('            input:')
             sub_inputs = sd.get('inputs', {})
-            sub_bindings = sd.get('bindings', {})
+            sub_bindings = sd.get('all_bindings') or sd.get('resolved_bindings') or sd.get('bindings', {})
             for in_name in sub_inputs:
                 binding = sub_bindings.get(in_name)
                 if binding is None:
@@ -580,13 +516,13 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
                         expr = f'{_column_input_name(source, in_name)}[{s_var}]'
                     else:
                         expr = in_name
-                elif binding.get('source') == 'step_output':
+                elif isinstance(binding, dict) and binding.get('source') == 'step_output':
                     step_id = binding['step']
                     out_name = binding['output']
                     step_renames = output_renames.get(step_id, {})
                     renamed = step_renames.get(out_name, out_name)
                     expr = f'{_call_alias(step_id)}.{renamed}'
-                elif binding.get('source') == 'input':
+                elif isinstance(binding, dict) and binding.get('source') == 'input':
                     bname = binding['name']
                     if input_name:
                         expr = f'{input_name}[{s_var}].{bname}'
@@ -594,7 +530,7 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
                         expr = f'{_column_input_name(source, bname)}[{s_var}]'
                     else:
                         expr = bname
-                elif binding.get('source') == 'literal':
+                elif isinstance(binding, dict) and binding.get('source') == 'literal':
                     expr = json.dumps(binding['value'])
                 else:
                     expr = in_name
@@ -623,14 +559,12 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
                     expr = f'{binding.name}[{s_var}]' if binding.name in table_columns else binding.name
                 elif isinstance(binding, Literal):
                     expr = _literal_to_wdl(binding.value)
+                elif isinstance(binding, Field) and isinstance(binding.source, StepCall):
+                    step_renames = output_renames.get(binding.source.id, {})
+                    out_name = step_renames.get(binding.name, binding.name)
+                    expr = f'{_call_alias(binding.source.id)}.{out_name}[{s_var}]'
                 elif isinstance(binding, Field):
-                    base = _binding_to_wdl_expr(binding.source, step.id, None, output_renames)
-                    if isinstance(binding.source, StepCall):
-                        step_renames = output_renames.get(binding.source.id, {})
-                        out_name = step_renames.get(binding.name, binding.name)
-                        expr = f'{base}.{out_name}[{s_var}]'
-                    else:
-                        expr = f'{base}.{binding.name}'
+                    expr = f'{binding.name}[{s_var}]'
                 else:
                     expr = _binding_to_wdl_expr(binding, step.id, None, output_renames)
             lines.append(f'                {in_name} = {expr},')
@@ -658,10 +592,10 @@ def _derive_length_expr(source, bindings, table_column_names):
         col_names = list(columns.keys())
         if col_names:
             col = columns[col_names[0]]
-            if isinstance(col, Input):
-                return f'length({col.name})'
-            if isinstance(col, Field) and isinstance(col.source, StepCall):
-                return f'length({_call_alias(col.source.id)}.{col.name})'
+            if isinstance(col, dict) and col.get('source') == 'input':
+                return f'length({col["name"]})'
+            if isinstance(col, dict) and col.get('source') == 'step_output':
+                return f'length({_call_alias(col["step"])}.{col["output"]})'
     for _, binding in bindings.items():
         if isinstance(binding, Input):
             return f'length({binding.name})'
@@ -700,20 +634,20 @@ def _mapped_by_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
             lines.append(call_line + ' {')
             lines.append('            input:')
             sub_inputs = sd.get('inputs', {})
-            sub_bindings = sd.get('bindings', {})
+            sub_bindings = sd.get('all_bindings') or sd.get('resolved_bindings') or sd.get('bindings', {})
             for in_name in sub_inputs:
                 binding = sub_bindings.get(in_name)
                 if binding is None:
                     expr = f'{in_name}[{s_var}]'
-                elif binding.get('source') == 'step_output':
+                elif isinstance(binding, dict) and binding.get('source') == 'step_output':
                     step_id_ref = binding['step']
                     out_name = binding['output']
                     step_renames = output_renames.get(step_id_ref, {})
                     renamed = step_renames.get(out_name, out_name)
                     expr = f'{_call_alias(step_id_ref)}.{renamed}'
-                elif binding.get('source') == 'input':
+                elif isinstance(binding, dict) and binding.get('source') == 'input':
                     expr = f'{binding["name"]}[{s_var}]'
-                elif binding.get('source') == 'literal':
+                elif isinstance(binding, dict) and binding.get('source') == 'literal':
                     expr = json.dumps(binding['value'])
                 else:
                     expr = f'{in_name}[{s_var}]'
@@ -824,15 +758,6 @@ def _col_access_path(col, col_names):
     return path
 
 
-def _subworkflow_to_wdl(step, parent_id):
-    definition = step.task or {}
-    dag_data = definition.get('dag', {})
-    if not dag_data:
-        return ''
-    wf_id = f'{parent_id}_{step.id}'
-    return transpile_dag_dict(dag_data, workflow_id=wf_id, _top_level=False)
-
-
 def _collect_structs(dag):
     structs = []
     seen = set()
@@ -842,34 +767,37 @@ def _collect_structs(dag):
                 shape = tuple(sorted(binding.fields.keys()))
                 if shape and shape not in seen:
                     seen.add(shape)
-                    structs.append(_emit_struct(binding))
+                    structs.append(_emit_struct(binding, dag))
     return structs
 
 
-def _struct_name_for(binding):
-    keys = tuple(sorted(binding.fields.keys()))
+def _struct_name_for(record):
+    keys = tuple(sorted(record.fields.keys()))
     return '_Rec_' + '_'.join(k.capitalize() for k in keys)
 
 
-def _infer_fieldto_wdl_type(fbinding):
+def _infer_fieldto_wdl_type(fbinding, dag):
     if isinstance(fbinding, Input):
-        return to_wdl_type(fbinding.type or 'str')
+        spec = dag.inputs.get(fbinding.name)
+        return to_wdl_type(spec.type) if spec else 'String'
     if isinstance(fbinding, Literal):
         return _infer_literal_type(fbinding.value)
-    if isinstance(fbinding, Field):
-        if isinstance(fbinding.source, StepCall):
-            out_type = (fbinding.source.task or {}).get('outputs', {}).get(fbinding.name, {}).get('type', 'str')
-            return to_wdl_type(out_type)
-        if isinstance(fbinding.source, Input):
-            return to_wdl_type(fbinding.source.type or 'str')
+    if isinstance(fbinding, Field) and isinstance(fbinding.source, StepCall):
+        spec = (fbinding.source.task or {}).get('outputs', {}).get(fbinding.name, {})
+        out_type = spec.get('type')
+        return to_wdl_type(out_type) if out_type else 'String'
+    if isinstance(fbinding, (Field, StepCall)):
+        return 'String'
+    if isinstance(fbinding, Record):
+        return _struct_name_for(fbinding)
     return 'String'
 
 
-def _emit_struct(record):
+def _emit_struct(record, dag):
     name = _struct_name_for(record)
     lines = [f'struct {name} {{']
     for fname in sorted(record.fields.keys()):
-        typ = _infer_fieldto_wdl_type(record.fields[fname])
+        typ = _infer_fieldto_wdl_type(record.fields[fname], dag)
         lines.append(f'    {typ} {fname}')
     lines.append('}')
     return '\n'.join(lines)
