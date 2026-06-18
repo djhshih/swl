@@ -365,16 +365,13 @@ def eval_lambda_in_mode(checker, fn, imports, scope, mode, inferred_inputs=None)
 
 
 def eval_prefix_bindings(checker, exprs, imports, demanded=None, issues=None):
-    '''Evaluate prefix bindings at top-level scope.
-    Import bindings are pre-resolved and skipped.
-    Only safe to call for top-level prefix bindings.'''
+    '''Evaluate prefix bindings.
+    All bindings including imports are evaluated uniformly.'''
     scope = Scope()
     local_demanded = demanded if demanded is not None else set()
     local_issues = issues if issues is not None else []
     for expr in exprs:
         if expr.type != wf_node.NodeType.bind:
-            continue
-        if builtins.match_import(expr.value) is not None:
             continue
         value = eval_expr(checker, expr.value, imports, scope, local_demanded, local_issues)
         scope.set_local(expr.id.name, value=value)
