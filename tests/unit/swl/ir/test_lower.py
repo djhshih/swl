@@ -1,4 +1,6 @@
 import os
+import shutil
+import tempfile
 import unittest as ut
 
 import swl.ir.node as ir
@@ -164,6 +166,36 @@ call = import "call.sh"
     _s1 // _s2 // _s3
 ''', root, files)
         self.assertEqual(_strip_ids(chain), _strip_ids(explicit))
+
+
+    @ut.expectedFailure
+    def test_gap1_import_shadowing_in_lambda_body(self):
+        tmpdir = tempfile.mkdtemp()
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            task_b = '''# @ Sort
+# in
+#   bam file
+# out
+#   bam file = out.bam
+echo sort
+'''
+            for name, content in [('a.sh', _ALIGN), ('b.sh', task_b)]:
+                with open(os.path.join(tmpdir, name), 'w') as f:
+                    f.write(content)
+            src = 't = import "a.sh"\n\\x ->\n    t = import "b.sh"\n    t { bam: "x" }\n'
+            tree = parse_and_lower(src, tmpdir, {})
+            self.assertIsInstance(tree.body, ir.Block)
+            self.assertGreater(len(tree.body.bindings), 0)
+            binding = tree.body.bindings[0]
+            self.assertIsInstance(binding, ir.Variable)
+            self.assertEqual(binding.name, 't')
+            self.assertIsInstance(binding.value, ir.Function)
+            self.assertEqual(binding.value.name, 'b')
+        finally:
+            os.chdir(old_cwd)
+            shutil.rmtree(tmpdir)
 
 
 if __name__ == '__main__':

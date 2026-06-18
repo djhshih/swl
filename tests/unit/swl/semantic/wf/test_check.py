@@ -661,5 +661,455 @@ class TestWorkflowCheck(ut.TestCase):
         self.assertTrue(any('map_by output must preserve grouping key: sample' in err for err in result.errors))
 
 
+    # ====================================================================
+    # Category 1: Basic binding and scope isolation
+    # ====================================================================
+
+    def test_1_1_single_binding_resolves(self):
+        r = Checker().load_content('x = 1\n\\y -> y', '/tmp/test_1_1.swl')
+        self.assertEqual(r.errors, [])
+
+    def test_1_2_multiple_bindings_same_scope(self):
+        r = Checker().load_content('x = 1\ny = 2\n\\z -> z', '/tmp/test_1_2.swl')
+        self.assertEqual(r.errors, [])
+
+    def test_1_3_binding_refers_to_prior_binding(self):
+        r = Checker().load_content('x = 1\ny = x\n\\z -> z', '/tmp/test_1_3.swl')
+        self.assertEqual(r.errors, [])
+
+    def test_1_4_binding_refers_to_outer_scope(self):
+        r = Checker().load_content('x = 1\n\\y -> x', '/tmp/test_1_4.swl')
+        self.assertEqual(r.errors, [])
+
+    def test_1_5_final_expr_is_binding_raises_parse_error(self):
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load_content('x = 1\ny = 2', '/tmp/test_1_5.swl')
+        self.assertIn('Final line in a block must be an expr', str(ctx.exception))
+
+    # ====================================================================
+    # Category 2: Duplicate detection
+    # ====================================================================
+
+    def test_2_1_duplicate_binding(self):
+        r = Checker().load_content('x = 1\nx = 2\n\\y -> y', '/tmp/test_2_1.swl')
+        self.assertIn('Duplicate binding in scope: x', r.errors)
+
+    def test_2_3_duplicate_binding_import_then_scalar(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'a.sh', _ALIGN)
+        path = self._write(root, 'test_2_3.swl', 'x = import "a.sh"\nx = 1\n\\y -> y')
+        r = Checker().load(path)
+        self.assertIn('Duplicate binding in scope: x', r.errors)
+
+    @ut.expectedFailure
+    def test_2_4_block_inside_lambda_shadowing_allowed(self):
+        # Gap: scope checker copies parent scope into blocks, preventing
+        # block-level shadowing of lambda params. Per spec, nested scopes
+        # may shadow outer names - this should pass without error.
+        r = Checker().load_content('\\x ->\n    x = 1\n    x', '/tmp/test_2_4.swl')
+        self.assertEqual(r.errors, [])
+
+    # ====================================================================
+    # Category 3: Shadowing
+    # ====================================================================
+
+    def test_3_1_lambda_param_shadows_outer_binding(self):
+        r = Checker().load_content('x = 1\n\\x -> x', '/tmp/test_3_1.swl')
+        self.assertEqual(r.errors, [])
+
+    def test_3_2_lambda_body_binding_shadows_outer_binding(self):
+        r = Checker().load_content('x = 1\n\\y ->\n    x = 2\n    x', '/tmp/test_3_2.swl')
+        self.assertEqual(r.errors, [])
+
+    def test_3_3_deeply_nested_shadowing(self):
+        r = Checker().load_content('a = 1\n\\b ->\n    a = 2\n    \\c ->\n        a = 3\n        a', '/tmp/test_3_3.swl')
+        self.assertEqual(r.errors, [])
+
+    def test_3_4_chain_desugaring_does_not_leak_generated_names(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'chainable.sh',
+                    '# @ Chainable\n# in\n#   x file\n# out\n#   y file = out.y\necho chain')
+        path = self._write(root, 'test_3_4.swl',
+                           'a = import "chainable.sh"\nb = import "chainable.sh"\na | b')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    @ut.expectedFailure
+    def test_3_5_block_inside_lambda_shadows_outer(self):
+        # Gap: same as 2.4 - scope checker copies parent into block scope.
+        # Per spec, block-level shadowing of lambda params should be allowed.
+        r = Checker().load_content('\\x ->\n    x = 42\n    x', '/tmp/test_3_5.swl')
+        self.assertEqual(r.errors, [])
+
+    # ====================================================================
+    # Category 4: Import scope
+    # ====================================================================
+
+    def _scope_fixture_dir(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        root = td.name
+        self._write(root, 'a.sh',
+                    '# @ A\n# in\n#   x file\n# out\n#   y file = out.y\necho a')
+        self._write(root, 'b.sh',
+                    '# @ B\n# in\n#   x file\n# out\n#   y file = out.y\necho b')
+        return root
+
+    def test_4_1_import_inside_lambda_new_name(self):
+        root = self._scope_fixture_dir()
+        path = self._write(root, 'test_4_1.swl', '\\x ->\n    t = import "a.sh"\n    t x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_4_2_import_inside_lambda_direct_apply(self):
+        root = self._scope_fixture_dir()
+        path = self._write(root, 'test_4_2.swl', '\\x -> import "a.sh" x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_4_3_import_inside_lambda_shadows_top_level_import(self):
+        root = self._scope_fixture_dir()
+        path = self._write(root, 'test_4_3.swl',
+                           't = import "a.sh"\n\\x ->\n    t = import "b.sh"\n    t x')
+        r = Checker().load(path)
+        # Scope allows shadowing; lowerer has a bug (Gap 1) but checker should pass
+        self.assertNotIn('Duplicate binding in scope: t', r.errors)
+
+    def test_4_4_import_inside_lambda_shadows_nonimport_outer(self):
+        root = self._scope_fixture_dir()
+        path = self._write(root, 'test_4_4.swl',
+                           'x = 42\n\\y ->\n    x = import "a.sh"\n    x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_4_5_multiple_imports_same_file_different_names(self):
+        root = self._scope_fixture_dir()
+        path = self._write(root, 'test_4_5.swl',
+                           'a = import "a.sh"\nb = import "a.sh"\n\\x -> x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_4_6_import_inside_lambda_same_name_as_top_level_nonimport(self):
+        root = self._scope_fixture_dir()
+        path = self._write(root, 'test_4_6.swl',
+                           'x = 42\n\\y ->\n    x = import "a.sh"\n    x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    # ====================================================================
+    # Category 5: Forward and self references
+    # ====================================================================
+
+    def test_5_1_forward_reference_across_bindings(self):
+        r = Checker().load_content('x = y\ny = 1\n\\z -> z', '/tmp/test_5_1.swl')
+        self.assertTrue(
+            any('Forward reference' in err for err in r.errors),
+        )
+
+    def test_5_2_self_reference(self):
+        r = Checker().load_content('x = x\n\\y -> y', '/tmp/test_5_2.swl')
+        self.assertTrue(
+            any('references itself' in err for err in r.errors),
+        )
+
+    def test_5_3_valid_cross_reference(self):
+        r = Checker().load_content('x = 1\ny = x\n\\z -> z', '/tmp/test_5_3.swl')
+        self.assertEqual(r.errors, [])
+
+    def test_5_4_forward_reference_inside_lambda_body(self):
+        r = Checker().load_content('\\a ->\n    x = y\n    y = 1\n    x', '/tmp/test_5_4.swl')
+        self.assertTrue(
+            any('Forward reference' in err for err in r.errors),
+        )
+
+    def test_5_5_self_reference_inside_lambda_body(self):
+        r = Checker().load_content('\\a ->\n    x = x\n    x', '/tmp/test_5_5.swl')
+        self.assertTrue(
+            any('references itself' in err for err in r.errors),
+        )
+
+    # ====================================================================
+    # Category 6: Annotation language scope (flat single scope, no shadowing)
+    # ====================================================================
+
+    def test_6_1_duplicate_name_in_in_section(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'bad.sh',
+                    '# @ Bad\n# in\n#   x file\n#   x str\necho test')
+        path = self._write(root, 'test_6_1.swl', 't = import "bad.sh"\n\\x -> x')
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load(path)
+        self.assertIn('Duplicate input parameter: x', str(ctx.exception))
+
+    @ut.expectedFailure
+    def test_6_2_cross_section_in_out_duplicate_must_error(self):
+        # Gap: signature_from_task uses separate dicts per section,
+        # so cross-section duplicates are not detected.
+        root = tempfile.mkdtemp()
+        self._write(root, 'bad.sh',
+                    '# @ Bad\n# in\n#   x file\n# out\n#   x file = out.txt\necho test')
+        path = self._write(root, 'test_6_2.swl', 't = import "bad.sh"\n\\x -> x')
+        with self.assertRaises(ValueError):
+            Checker().load(path)
+
+    @ut.expectedFailure
+    def test_6_3_cross_section_in_run_duplicate_must_error(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'bad.sh',
+                    '# @ Bad\n# in\n#   x file\n# run\n#   x = 2\necho test')
+        path = self._write(root, 'test_6_3.swl', 't = import "bad.sh"\n\\x -> x')
+        with self.assertRaises(ValueError):
+            Checker().load(path)
+
+    @ut.expectedFailure
+    def test_6_4_cross_section_out_run_duplicate_must_error(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'bad.sh',
+                    '# @ Bad\n# out\n#   x file = out.txt\n# run\n#   x = 2\necho test')
+        path = self._write(root, 'test_6_4.swl', 't = import "bad.sh"\n\\x -> x')
+        with self.assertRaises(ValueError):
+            Checker().load(path)
+
+    def test_6_5_duplicate_in_run_section_errors(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'bad.sh',
+                    '# @ Bad\n# run\n#   cpu = 2\n#   cpu = 4\necho test\necho $cpu')
+        path = self._write(root, 'test_6_5.swl', 't = import "bad.sh"\n\\x -> x')
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load(path)
+        self.assertIn('Duplicate run parameter: cpu', str(ctx.exception))
+
+    def test_6_6_missing_type_on_in_param(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'bad.sh',
+                    '# @ Bad\n# in\n#   x\necho test')
+        path = self._write(root, 'test_6_6.swl', 't = import "bad.sh"\n\\x -> x')
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load(path)
+        self.assertIn('must have a type annotation', str(ctx.exception))
+
+    @ut.expectedFailure
+    def test_6_7_run_name_duplicates_in_must_error(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'bad.sh',
+                    '# @ Bad\n# in\n#   cpu int\n# run\n#   cpu = 4\necho test')
+        path = self._write(root, 'test_6_7.swl', 't = import "bad.sh"\n\\x -> x')
+        with self.assertRaises(ValueError):
+            Checker().load(path)
+
+    # ====================================================================
+    # Category 7: Interpolation scope
+    # ====================================================================
+
+    def test_7_1_output_default_references_input_param(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# in\n#   outbase str\n# out\n#   bam file = ${outbase}.bam\necho test')
+        path = self._write(root, 'test_7_1.swl', 't = import "task.sh"\n\\x -> x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_7_2_output_default_references_run_param(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# run\n#   cpu = 2\n# out\n#   log file = out_${cpu}.log\necho test')
+        path = self._write(root, 'test_7_2.swl', 't = import "task.sh"\n\\x -> x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_7_3_output_default_references_nonexistent_var(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# out\n#   bam file = ${nonexistent}.bam\necho test')
+        path = self._write(root, 'test_7_3.swl', 't = import "task.sh"\n\\x -> x')
+        # Gap: output default interpolations are not validated by the bash
+        # variable checker (only command body is checked). Loads without error.
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_7_4_command_block_references_assignment_lhs(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# out\n#   result file = out.txt\nx=foo\necho ${x}')
+        path = self._write(root, 'test_7_4.swl', 't = import "task.sh"\n\\x -> x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_7_5_command_block_references_shell_builtin(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# out\n#   result file = out.txt\necho ${HOME}')
+        path = self._write(root, 'test_7_5.swl', 't = import "task.sh"\n\\x -> x')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_7_6_command_block_references_unknown_var(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# out\n#   result file = out.txt\necho ${nonexistent}')
+        path = self._write(root, 'test_7_6.swl', 't = import "task.sh"\n\\x -> x')
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load(path)
+        self.assertIn('Unresolved variable', str(ctx.exception))
+
+    def test_7_7_run_param_default_references_input(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# in\n#   threads int\n# run\n#   cpu = ${threads}\necho test')
+        path = self._write(root, 'test_7_7.swl', 't = import "task.sh"\n\\x -> x')
+        # Gap 2: the run-param normalizer (_normalize_run_param) requires literal
+        # defaults for run parameters, so non-literal interpolations are rejected
+        # at annotation parse time, not just unvalidated.
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load(path)
+        self.assertIn('must have a literal default', str(ctx.exception))
+
+    # ====================================================================
+    # Gap 2: Run-param default interpolation rejected despite valid ref
+    # ====================================================================
+
+    @ut.expectedFailure
+    def test_gap2_run_param_interpolation_rejected_for_valid_ref(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# in\n#   threads int\n# run\n#   cpu = ${threads}\necho test')
+        path = self._write(root, 'test_gap2.swl', 't = import "task.sh"\n\\x -> x')
+        # The spec says run-param defaults may use interpolation; references
+        # should resolve against known params. Currently _normalize_run_param
+        # rejects ALL non-literal defaults, so a valid ${threads} ref is
+        # rejected before validation even runs.
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    # ====================================================================
+    # Category 8: Workflow well-formedness (final expr must be a function)
+    # ====================================================================
+
+    def test_8_1_scalar_as_final_expression(self):
+        r = Checker().load_content('42', '/tmp/test_8_1.swl')
+        self.assertIn('Workflow must evaluate to a function', r.errors)
+
+    def test_8_2_record_as_final_expression(self):
+        r = Checker().load_content('{ foo: 1 }', '/tmp/test_8_2.swl')
+        self.assertIn('Workflow must evaluate to a function', r.errors)
+
+    def test_8_3_saturated_task_application_as_final_expression(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'align.sh', _ALIGN)
+        path = self._write(root, 'test_8_3.swl',
+                           't = import "align.sh"\nt { fastq1: "a", fastq2: "b", ref: "r", ref_fai: "r.fai", outbase: "o" }')
+        r = Checker().load(path)
+        self.assertIsNone(r.signature)
+        self.assertIn('Workflow must evaluate to a function', r.errors)
+
+    def test_8_4_lambda_as_final_expression(self):
+        r = Checker().load_content('\\x -> x', '/tmp/test_8_4.swl')
+        self.assertIsNotNone(r.signature)
+        self.assertEqual(r.errors, [])
+
+    def test_8_5_imported_workflow_as_final_expression(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'sub.swl', '\\x ->\n    { y: x.a }')
+        path = self._write(root, 'test_8_5.swl', 'w = import "sub.swl"\nw')
+        r = Checker().load(path)
+        self.assertIsNotNone(r.signature)
+        self.assertEqual(r.errors, [])
+
+    def test_8_6_partially_applied_task_as_final_expression(self):
+        root = self._make_fixture_dir()
+        path = self._write(root, 'test_8_6.swl',
+                           't = import "align.sh"\nt { ref: "r", ref_fai: "r.fai" }')
+        r = Checker().load(path)
+        self.assertIsNotNone(r.signature)
+        self.assertEqual(r.errors, [])
+
+    # ====================================================================
+    # Category 9: Edge cases with chains and updates
+    # ====================================================================
+
+    def test_9_1_chain_with_non_imported_tasks_evaluates(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'a.sh',
+                    '# @ A\n# in\n#   x file\n# out\n#   y file = out.y\necho a')
+        self._write(root, 'b.sh',
+                    '# @ B\n# in\n#   x file\n# out\n#   y file = out.y\necho b')
+        path = self._write(root, 'test_9_1.swl',
+                           'a = import "a.sh"\nb = import "b.sh"\na | b')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_9_2_chain_respects_binding_order(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'a.sh',
+                    '# @ A\n# in\n#   x file\n# out\n#   y file = out.y\necho a')
+        self._write(root, 'b.sh',
+                    '# @ B\n# in\n#   x file\n# out\n#   y file = out.y\necho b')
+        self._write(root, 'c.sh',
+                    '# @ C\n# in\n#   x file\n# out\n#   y file = out.y\necho c')
+        path = self._write(root, 'test_9_2.swl',
+                           'a = import "a.sh"\nb = import "b.sh"\nc = import "c.sh"\na | b | c')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    # ====================================================================
+    # Category 10: Type-level scope
+    # ====================================================================
+
+    def test_10_1_chain_type_check_compatible(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'a.sh',
+                    '# @ A\n# in\n#   x file\n# out\n#   y file = out.y\necho a')
+        self._write(root, 'b.sh',
+                    '# @ B\n# in\n#   x file\n# out\n#   y file = out.y\necho b')
+        path = self._write(root, 'test_10_1.swl',
+                           'a = import "a.sh"\nb = import "b.sh"\na | b')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    def test_10_2_chain_type_check_mismatch(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'a.sh',
+                    '# @ A\n# in\n#   x file\n# out\n#   x int = 42\necho a')
+        self._write(root, 'b.sh',
+                    '# @ B\n# in\n#   x file\n# out\n#   y file = out.y\necho b')
+        path = self._write(root, 'test_10_2.swl',
+                           'a = import "a.sh"\nb = import "b.sh"\na | b')
+        r = Checker().load(path)
+        self.assertTrue(
+            any('type' in err.lower() for err in r.errors),
+            f'Expected type error, got: {r.errors}',
+        )
+
+    def test_10_3_type_resolution_for_imported_task_chain(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'align.sh', _ALIGN)
+        self._write(root, 'sort.sh', _SORT)
+        path = self._write(root, 'test_10_3.swl',
+                           'align = import "align.sh"\nsort = import "sort.sh"\nalign | sort')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+    # ====================================================================
+    # Gap 3: import as standalone expression (not bound to a name)
+    # ====================================================================
+
+    def test_gap3_standalone_import_as_final_expression(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'align.sh', _ALIGN)
+        path = self._write(root, 'test_gap3.swl',
+                           'import "align.sh"')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+        self.assertIsNotNone(r.signature)
+
+    def test_gap3_standalone_import_applied_directly(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'align.sh', _ALIGN)
+        path = self._write(root, 'test_gap3b.swl',
+                           '\\x -> import "align.sh" { fastq1: x }')
+        r = Checker().load(path)
+        self.assertEqual(r.errors, [])
+
+
 if __name__ == '__main__':
     ut.main()
