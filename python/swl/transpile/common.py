@@ -155,7 +155,7 @@ def field_chain_parts(value):
     while isinstance(current, Field):
         chain.append(current.name)
         current = current.source
-    return current, chain[-1] if chain else None, None
+    return current, chain[-1] if chain else None
 
 
 

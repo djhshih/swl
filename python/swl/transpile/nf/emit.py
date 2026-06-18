@@ -51,9 +51,6 @@ def _process_name(step_id):
     return step_name(step_id, 'PROCESS', upper=True)
 
 
-def _nf_emit_name(name):
-    return emit_name(name)
-
 
 def _task_to_process(step):
     task = step.task_def
@@ -99,15 +96,15 @@ def _task_to_process(step):
             qual, _ = to_nf_qualifier(spec.get('type'))
             default = spec.get('default')
             if default:
-                path_expr = _interp_to_nf(default)
+                path_expr = word_interp(default, lambda text: text, lambda name: f"${{{name}}}", lambda text: f"${{{text}}}")
                 if qual == 'path':
-                    lines.append(f'    path "{path_expr}", emit: {_nf_emit_name(out_name)}')
+                    lines.append(f'    path "{path_expr}", emit: {emit_name(out_name)}')
                 else:
-                    lines.append(f'    val "{path_expr}", emit: {_nf_emit_name(out_name)}')
+                    lines.append(f'    val "{path_expr}", emit: {emit_name(out_name)}')
             else:
                 qualifier = 'path' if qual == 'path' else 'val'
                 glob_pattern = f'*.{out_name}' if qual == 'path' else out_name
-                lines.append(f'    {qualifier} "{glob_pattern}", emit: {_nf_emit_name(out_name)}')
+                lines.append(f'    {qualifier} "{glob_pattern}", emit: {emit_name(out_name)}')
         lines.append('')
 
     if body.strip():
@@ -134,9 +131,6 @@ def _emit_directives(step):
     return '\n'.join(directives)
 
 
-def _interp_to_nf(value):
-    return word_interp(value, lambda text: text, lambda name: f"${{{name}}}", lambda text: f"${{{text}}}")
-
 
 _NF_RUN_MAP = {'cpu': 'cpus', 'memory': 'memory', 'time': 'time'}
 
@@ -150,7 +144,6 @@ def _interpolate_shell(body, step):
     for rv in ('cpu', 'memory', 'time'):
         if run.get(rv, {}).get('value') is not None:
             run_names.add(rv)
-    _NF_RUN_MAP = {'cpu': 'cpus', 'memory': 'memory', 'time': 'time'}
 
     def var_fn(name):
         if name in input_names:
@@ -214,7 +207,7 @@ def _inline_dag_steps(inner_dag, channels, lines, processes):
             lines.append(f'    {pname}()')
 
         for out_name in step.outputs:
-            channels[f'{step.id}.{out_name}'] = f'{pname}.out.{_nf_emit_name(out_name)}'
+            channels[f'{step.id}.{out_name}'] = f'{pname}.out.{emit_name(out_name)}'
 
 
 def _inline_workflow_step(step, channels, lines, processes):
@@ -307,7 +300,7 @@ def _binding_to_channel(binding, channels, current_step):
             if step_key in channels:
                 return channels[step_key]
             pname = _process_name(binding.source.id)
-            return f'{pname}.out.{_nf_emit_name(binding.name)}'
+            return f'{pname}.out.{emit_name(binding.name)}'
         return channels.get(binding.name, _channel_name(binding.name))
     if isinstance(binding, Record):
         raise ValueError(
@@ -373,7 +366,7 @@ def _mapped_workflow_step_to_call(step, channels, processes):
             binding = inner_output_binding.value if isinstance(inner_output_binding, OutputSpec) else inner_output_binding
             ch = _binding_to_channel(binding, inner_channels, None)
         else:
-            ch = f'{_process_name(step.id)}.out.{_nf_emit_name(out_name)}'
+            ch = f'{_process_name(step.id)}.out.{emit_name(out_name)}'
         channels[f'{step.id}.{out_name}'] = f'{ch}.toList()'
 
     return lines
@@ -434,7 +427,7 @@ def _mapped_step_to_call(step, channels, processes):
             lines.append(f'    {pname}()')
 
     for out_name in step.outputs:
-        channels[f'{step.id}.{out_name}'] = f'{pname}.out.{_nf_emit_name(out_name)}'
+        channels[f'{step.id}.{out_name}'] = f'{pname}.out.{emit_name(out_name)}'
 
     return lines
 
@@ -504,7 +497,7 @@ def _mapped_by_step_to_call(step, channels, processes):
     lines.append(f'    {pname}({grouped_var})')
 
     for out_name in step.outputs:
-        channels[f'{step.id}.{out_name}'] = f'{pname}.out.{_nf_emit_name(out_name)}'
+        channels[f'{step.id}.{out_name}'] = f'{pname}.out.{emit_name(out_name)}'
 
     return lines
 
@@ -589,7 +582,7 @@ def _mapped_by_workflow_step(step, channels, processes, source, group_key):
             binding = inner_output_binding.value if isinstance(inner_output_binding, OutputSpec) else inner_output_binding
             ch = _binding_to_channel(binding, inner_channels, None)
         else:
-            ch = f'{_process_name(step.id)}.out.{_nf_emit_name(out_name)}'
+            ch = f'{_process_name(step.id)}.out.{emit_name(out_name)}'
         channels[f'{step.id}.{out_name}'] = f'{ch}.toList()'
 
     return lines

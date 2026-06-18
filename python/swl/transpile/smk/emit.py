@@ -189,9 +189,6 @@ def _rule_name(step_id):
     return step_name(step_id, 'rule')
 
 
-def _san(name):
-    return emit_name(name)
-
 
 def _interp_preview(value):
     if isinstance(value, str):
@@ -265,7 +262,7 @@ def _task_to_rule(step, dag, wrap_map=None):
         for in_name in file_inputs:
             binding = step.bindings.get(in_name)
             path_expr = _binding_to_path(binding, in_name, is_mapped, scatter_ports, wrap_map, dag)
-            lines.append(f'        {_san(in_name)}={path_expr},')
+            lines.append(f'        {emit_name(in_name)}={path_expr},')
         lines.append('')
 
     task_outputs = task.get('outputs', {})
@@ -282,7 +279,7 @@ def _task_to_rule(step, dag, wrap_map=None):
                     path_expr = repr(_output_path(step.id, rendered, scatter_ports))
             else:
                 path_expr = repr(_output_path(step.id, out_name, scatter_ports))
-            lines.append(f'        {_san(out_name)}={path_expr},')
+            lines.append(f'        {emit_name(out_name)}={path_expr},')
         lines.append('')
 
     params = _collect_params(step, dag)
@@ -308,7 +305,7 @@ def _task_to_rule(step, dag, wrap_map=None):
                     var_name = m.group(1)
                     suffix = m.group(2)
                     param_ref = f'{{params.{var_name}}}{suffix}'
-                    output_ref = f'{{output.{_san(out_name)}}}'
+                    output_ref = f'{{output.{emit_name(out_name)}}}'
                     interp_body = interp_body.replace(param_ref, output_ref)
         lines.append('    shell:')
         lines.append('        """')
@@ -387,9 +384,9 @@ def _interpolate_shell(body, step, dag=None):
 
     def _resolve_var(var):
         if var in input_names:
-            return _san(var)
+            return emit_name(var)
         if var in output_names:
-            return _san(var)
+            return emit_name(var)
         if var in param_names:
             return var
         return None
@@ -416,7 +413,7 @@ def _collect_params(step, dag=None):
         if typ in ('str', 'int', 'float'):
             binding = step.bindings.get(in_name)
             if isinstance(binding, Literal):
-                params.append((_san(in_name), json.dumps(binding.value)))
+                params.append((emit_name(in_name), json.dumps(binding.value)))
             elif isinstance(binding, Field) and isinstance(binding.source, StepCall):
                 prev_step = binding.source
                 out_name = binding.name
@@ -424,16 +421,16 @@ def _collect_params(step, dag=None):
                 default = prev_spec.get('default')
                 if default:
                     rendered = _interp_to_smk(default)
-                    params.append((_san(in_name), repr(rendered)) if rendered else (_san(in_name), repr(f'results/{prev_step.id}/{out_name}')))
+                    params.append((emit_name(in_name), repr(rendered)) if rendered else (emit_name(in_name), repr(f'results/{prev_step.id}/{out_name}')))
                 else:
-                    params.append((_san(in_name), repr(f'results/{prev_step.id}/{out_name}')))
+                    params.append((emit_name(in_name), repr(f'results/{prev_step.id}/{out_name}')))
             else:
-                params.append((_san(in_name), f'config["{in_name}"]'))
+                params.append((emit_name(in_name), f'config["{in_name}"]'))
     run = step.task_def.get('run', {})
     for name in ('cpu', 'memory', 'time'):
         spec = run.get(name, {})
         if isinstance(spec, dict) and spec.get('type') in ('int', 'str', 'float', 'memory', 'time'):
-            params.append((_san(name), json.dumps(spec['value'])))
+            params.append((emit_name(name), json.dumps(spec['value'])))
     return params
 
 
@@ -478,7 +475,7 @@ def _dag_to_smk(dag, workflow_id, rule_names):
 
         for name, (value, output) in sorted(simple_outputs.items()):
             path_expr = _output_to_path(name, value, dag)
-            lines.append(f'        {_san(name)}={path_expr},')
+            lines.append(f'        {emit_name(name)}={path_expr},')
 
         for name, (value, output) in sorted(mapped_outputs.items()):
             step = _step_for_output(value, dag)

@@ -273,9 +273,6 @@ def _emit_resource_requirements(run):
     return '    requirements {\n' + '\n'.join(directives) + '\n    }'
 
 
-
-
-
 def _format_memory(value):
     if isinstance(value, str):
         return value
@@ -474,8 +471,8 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
     s_var = f'{step.id}_i'
 
     source = step.map_source
-    table_columns = _get_table_columns(source)
-    len_expr = _derive_length_expr(source, step.bindings, table_columns)
+    cols = set(table_columns(source))
+    len_expr = _derive_length_expr(source, step.bindings, cols)
     input_name = source_input_name(source)
     lines.append(f'    scatter ({s_var} in range({len_expr})) {{')
 
@@ -497,8 +494,8 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
                 if binding is None:
                     if input_name:
                         expr = f'{input_name}[{s_var}].{in_name}'
-                    elif in_name in table_columns:
-                        expr = f'{_column_input_name(source, in_name)}[{s_var}]'
+                    elif in_name in cols:
+                        expr = f'{column_input_name(source, in_name)}[{s_var}]'
                     else:
                         expr = in_name
                 elif isinstance(binding, dict) and binding.get('source') == 'step_output':
@@ -511,8 +508,8 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
                     bname = binding['name']
                     if input_name:
                         expr = f'{input_name}[{s_var}].{bname}'
-                    elif bname in table_columns:
-                        expr = f'{_column_input_name(source, bname)}[{s_var}]'
+                    elif bname in cols:
+                        expr = f'{column_input_name(source, bname)}[{s_var}]'
                     else:
                         expr = bname
                 elif isinstance(binding, dict) and binding.get('source') == 'literal':
@@ -536,12 +533,12 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
             else:
                 binding = step.bindings.get(in_name)
                 if binding is None:
-                    if in_name in table_columns:
-                        expr = f'{_column_input_name(source, in_name)}[{s_var}]'
+                    if in_name in cols:
+                        expr = f'{column_input_name(source, in_name)}[{s_var}]'
                     else:
                         expr = in_name
                 elif isinstance(binding, Input):
-                    expr = f'{binding.name}[{s_var}]' if binding.name in table_columns else binding.name
+                    expr = f'{binding.name}[{s_var}]' if binding.name in cols else binding.name
                 elif isinstance(binding, Literal):
                     expr = _literal_to_wdl(binding.value)
                 elif isinstance(binding, Field) and isinstance(binding.source, StepCall):
@@ -559,13 +556,6 @@ def _mapped_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
 
     return lines
 
-
-def _get_table_columns(source):
-    return set(table_columns(source).keys())
-
-
-def _column_input_name(source, col_name):
-    return column_input_name(source, col_name)
 
 
 def _derive_length_expr(source, bindings, table_column_names):
@@ -700,9 +690,9 @@ def _mapped_by_step_to_wdl(step, tasks, output_renames=None, inline_map=None):
 def _build_zip_chain(col_names, source):
     if not col_names:
         return '[]'
-    inner = _column_expr(col_names[-1], source)
+    inner = column_input_name(col_names[-1], source)
     for col in reversed(col_names[:-1]):
-        col_expr = _column_expr(col, source)
+        col_expr = column_input_name(col, source)
         inner = f'zip({col_expr}, {inner})'
     return inner
 
@@ -715,9 +705,6 @@ def _build_zip_chain_from_names(col_names):
         inner = f'zip({col}, {inner})'
     return inner
 
-
-def _column_expr(col, source):
-    return column_input_name(source, col)
 
 
 def _val_type(col_names, schema):

@@ -61,7 +61,10 @@ def transpile_dag_dict(data, workflow_id='main'):
             tool_ids[tool_id] = f'#{tool_id}'
             tools.extend(_tool_to_cwl(step, tool_ids[tool_id]))
 
-    workflow_inputs = dict(dag.inputs)
+    workflow_inputs = {
+        name: {'type': spec.type, 'desc': spec.desc}
+        for name, spec in dag.inputs.items()
+    }
     for step in dag.steps:
         if not step.is_mapped:
             continue
@@ -182,12 +185,10 @@ def _tool_to_cwl(step, tool_id):
 
 
 def _workflow_input_to_cwl(workflow_id, name, spec):
-    typ = spec.type if hasattr(spec, 'type') else spec.get('type')
-    desc = spec.desc if hasattr(spec, 'desc') else spec.get('desc')
     return {
         'id': f'#{workflow_id}/{name}',
-        'type': to_cwl_type(typ),
-        **({'doc': desc} if desc else {}),
+        'type': to_cwl_type(spec['type']),
+        **({'doc': spec['desc']} if spec['desc'] else {}),
     }
 
 
@@ -299,7 +300,7 @@ def _binding_source(value, workflow_id='main'):
         if isinstance(src, StepCall):
             return f'#{workflow_id}/{src.id}/{value.name}'
         if isinstance(src, Field):
-            root, root_name, _ = field_chain_parts(value)
+            root, root_name = field_chain_parts(value)
             if isinstance(root, Input):
                 return f'#{workflow_id}/{root.name}'
             if isinstance(root, StepCall):
