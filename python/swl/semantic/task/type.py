@@ -172,34 +172,51 @@ def signature_from_task(task: task_node.Task) -> TaskSignature:
     inputs = {}
     outputs = {}
     run = {}
+    in_names = set()
+    out_names = set()
+    run_names = set()
 
     for section in task.annotation.sections:
         for parsed in section.params:
             typ = parse_type(parsed.type) if parsed.type else None
             for name in parsed.names:
+                if section.kind == task_node.SectionType.IN:
+                    if name in in_names:
+                        raise ValueError(f'Duplicate input parameter: {name}')
+                    if name in run_names:
+                        raise ValueError(f'Duplicate parameter: {name}')
+                    in_names.add(name)
+                elif section.kind == task_node.SectionType.OUT:
+                    if name in out_names:
+                        raise ValueError(f'Duplicate output parameter: {name}')
+                    if name in run_names:
+                        raise ValueError(f'Duplicate parameter: {name}')
+                    out_names.add(name)
+                elif section.kind == task_node.SectionType.RUN:
+                    if name in run_names:
+                        raise ValueError(f'Duplicate run parameter: {name}')
+                    if name in in_names or name in out_names:
+                        raise ValueError(f'Duplicate parameter: {name}')
+                    run_names.add(name)
+                else:
+                    raise ValueError(f'Unrecognized section kind: {section.kind}')
                 parsed_default = None
                 effective_type = typ
                 if section.kind == task_node.SectionType.RUN:
                     effective_type, parsed_default = _normalize_run_param(name, typ, parsed.default)
                 param = Param(name, effective_type, parsed.default, parsed.desc, parsed_default)
                 if section.kind == task_node.SectionType.IN:
-                    _add_param(inputs, param, 'input')
+                    inputs[param.name] = param
                 elif section.kind == task_node.SectionType.OUT:
                     if param.default is None:
                         raise ValueError(f'Output parameter must have a default: {param.name}')
-                    _add_param(outputs, param, 'output')
+                    outputs[param.name] = param
                 elif section.kind == task_node.SectionType.RUN:
-                    _add_param(run, param, 'run')
+                    run[param.name] = param
                 else:
                     raise ValueError(f'Unrecognized section kind: {section.kind}')
 
     return TaskSignature(inputs, outputs, run)
-
-
-def _add_param(params: Dict[str, Param], param: Param, kind: str):
-    if param.name in params:
-        raise ValueError(f'Duplicate {kind} parameter: {param.name}')
-    params[param.name] = param
 
 
 def _normalize_run_param(name: str, typ: TypeKind, default):
@@ -219,10 +236,12 @@ def _normalize_run_param(name: str, typ: TypeKind, default):
     if default is None:
         return typ, None
     text = _literal_default_text(default)
-    if text is None:
-        raise ValueError(f'Run parameter {name} must have a literal default')
-    value = text if parser is None else parser(text)
-    return typ, value
+    if text is not None:
+        value = text if parser is None else parser(text)
+        return typ, value
+    if _has_interpolation(default):
+        return typ, None
+    raise ValueError(f'Run parameter {name} must have a literal default')
 
 
 def _literal_default_text(default):
@@ -234,6 +253,12 @@ def _literal_default_text(default):
     if not isinstance(part, interp.Literal):
         return None
     return part.text.strip()
+
+
+def _has_interpolation(default):
+    if not isinstance(default, interp.Word):
+        return False
+    return any(isinstance(part, interp.Var) for part in default.parts)
 
 
 def _parse_cpu_literal(text: str) -> int:

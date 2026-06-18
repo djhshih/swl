@@ -701,11 +701,7 @@ class TestWorkflowCheck(ut.TestCase):
         r = Checker().load(path)
         self.assertIn('Duplicate binding in scope: x', r.errors)
 
-    @ut.expectedFailure
     def test_2_4_block_inside_lambda_shadowing_allowed(self):
-        # Gap: scope checker copies parent scope into blocks, preventing
-        # block-level shadowing of lambda params. Per spec, nested scopes
-        # may shadow outer names - this should pass without error.
         r = Checker().load_content('\\x ->\n    x = 1\n    x', '/tmp/test_2_4.swl')
         self.assertEqual(r.errors, [])
 
@@ -734,10 +730,7 @@ class TestWorkflowCheck(ut.TestCase):
         r = Checker().load(path)
         self.assertEqual(r.errors, [])
 
-    @ut.expectedFailure
     def test_3_5_block_inside_lambda_shadows_outer(self):
-        # Gap: same as 2.4 - scope checker copies parent into block scope.
-        # Per spec, block-level shadowing of lambda params should be allowed.
         r = Checker().load_content('\\x ->\n    x = 42\n    x', '/tmp/test_3_5.swl')
         self.assertEqual(r.errors, [])
 
@@ -841,18 +834,16 @@ class TestWorkflowCheck(ut.TestCase):
             Checker().load(path)
         self.assertIn('Duplicate input parameter: x', str(ctx.exception))
 
-    @ut.expectedFailure
-    def test_6_2_cross_section_in_out_duplicate_must_error(self):
-        # Gap: signature_from_task uses separate dicts per section,
-        # so cross-section duplicates are not detected.
+    def test_6_2_cross_section_in_out_allowed(self):
         root = tempfile.mkdtemp()
         self._write(root, 'bad.sh',
                     '# @ Bad\n# in\n#   x file\n# out\n#   x file = out.txt\necho test')
         path = self._write(root, 'test_6_2.swl', 't = import "bad.sh"\n\\x -> x')
-        with self.assertRaises(ValueError):
-            Checker().load(path)
+        # Allowed: many tasks share names between input and output
+        # (e.g. sort takes bam, produces bam). Only in/run and out/run
+        # cross-section duplicates are errors.
+        Checker().load(path)
 
-    @ut.expectedFailure
     def test_6_3_cross_section_in_run_duplicate_must_error(self):
         root = tempfile.mkdtemp()
         self._write(root, 'bad.sh',
@@ -861,7 +852,6 @@ class TestWorkflowCheck(ut.TestCase):
         with self.assertRaises(ValueError):
             Checker().load(path)
 
-    @ut.expectedFailure
     def test_6_4_cross_section_out_run_duplicate_must_error(self):
         root = tempfile.mkdtemp()
         self._write(root, 'bad.sh',
@@ -888,7 +878,6 @@ class TestWorkflowCheck(ut.TestCase):
             Checker().load(path)
         self.assertIn('must have a type annotation', str(ctx.exception))
 
-    @ut.expectedFailure
     def test_6_7_run_name_duplicates_in_must_error(self):
         root = tempfile.mkdtemp()
         self._write(root, 'bad.sh',
@@ -922,10 +911,9 @@ class TestWorkflowCheck(ut.TestCase):
         self._write(root, 'task.sh',
                     '# @ Test\n# out\n#   bam file = ${nonexistent}.bam\necho test')
         path = self._write(root, 'test_7_3.swl', 't = import "task.sh"\n\\x -> x')
-        # Gap: output default interpolations are not validated by the bash
-        # variable checker (only command body is checked). Loads without error.
-        r = Checker().load(path)
-        self.assertEqual(r.errors, [])
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load(path)
+        self.assertIn('Unresolved variable', str(ctx.exception))
 
     def test_7_4_command_block_references_assignment_lhs(self):
         root = tempfile.mkdtemp()
@@ -957,32 +945,35 @@ class TestWorkflowCheck(ut.TestCase):
         self._write(root, 'task.sh',
                     '# @ Test\n# in\n#   threads int\n# run\n#   cpu = ${threads}\necho test')
         path = self._write(root, 'test_7_7.swl', 't = import "task.sh"\n\\x -> x')
-        # Gap 2: the run-param normalizer (_normalize_run_param) requires literal
-        # defaults for run parameters, so non-literal interpolations are rejected
-        # at annotation parse time, not just unvalidated.
-        with self.assertRaises(ValueError) as ctx:
-            Checker().load(path)
-        self.assertIn('must have a literal default', str(ctx.exception))
-
-    # ====================================================================
-    # Gap 2: Run-param default interpolation rejected despite valid ref
-    # ====================================================================
-
-    @ut.expectedFailure
-    def test_gap2_run_param_interpolation_rejected_for_valid_ref(self):
-        root = tempfile.mkdtemp()
-        self._write(root, 'task.sh',
-                    '# @ Test\n# in\n#   threads int\n# run\n#   cpu = ${threads}\necho test')
-        path = self._write(root, 'test_gap2.swl', 't = import "task.sh"\n\\x -> x')
-        # The spec says run-param defaults may use interpolation; references
-        # should resolve against known params. Currently _normalize_run_param
-        # rejects ALL non-literal defaults, so a valid ${threads} ref is
-        # rejected before validation even runs.
         r = Checker().load(path)
         self.assertEqual(r.errors, [])
 
     # ====================================================================
     # Category 8: Workflow well-formedness (final expr must be a function)
+    # ====================================================================
+    # Gap 2: Run-param and output default variable validation
+    # ====================================================================
+
+    def test_run_param_default_nonexistent_var(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# run\n#   cpu = ${nonexistent}\necho test')
+        path = self._write(root, 'test_run_param_default_nonexistent_var.swl',
+                           't = import "task.sh"\n\\x -> x')
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load(path)
+        self.assertIn('Unresolved variable', str(ctx.exception))
+
+    def test_output_default_nonexistent_var_errors(self):
+        root = tempfile.mkdtemp()
+        self._write(root, 'task.sh',
+                    '# @ Test\n# out\n#   bam file = ${nonexistent}.bam\necho test')
+        path = self._write(root, 'test_output_default_nonexistent_var_errors.swl',
+                           't = import "task.sh"\n\\x -> x')
+        with self.assertRaises(ValueError) as ctx:
+            Checker().load(path)
+        self.assertIn('Unresolved variable', str(ctx.exception))
+
     # ====================================================================
 
     def test_8_1_scalar_as_final_expression(self):

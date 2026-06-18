@@ -1,3 +1,4 @@
+from swl.semantic.scope import Scope
 from swl.semantic.task.type import Param, TaskSignature
 from swl.semantic.wf import type as wf_type
 from swl.semantic.wf.infer import (
@@ -62,9 +63,9 @@ def build_workflow_signature(checker, tree, imports, inferred_inputs, issues):
             signature = TaskSignature(inputs, outputs, {})
             return signature, True, wf_type.FunctionType(root_input_type, root_output_type), root_input_type, root_output_type
 
-        record_env = dict(env)
-        record_env[final.param.name] = initial_param_value('record', inferred_inputs)
-        chosen_result = eval_function_body(checker, final, imports, record_env, set(), list(issues))
+        record_scope = Scope(parent=env)
+        record_scope.declare(final.param.name).value = initial_param_value('record', inferred_inputs)
+        chosen_result = eval_function_body(checker, final, imports, record_scope, set(), list(issues))
         root_output_type = wf_output_type(checker, chosen_result, table_context=False)
         partial_inputs = inner_partial_remaining_inputs(checker, final, imports, env)
         if isinstance(chosen_result, ClosureValue):
@@ -86,15 +87,15 @@ def build_workflow_signature(checker, tree, imports, inferred_inputs, issues):
         signature = TaskSignature(inputs, outputs, {})
         return signature, False, wf_type.FunctionType(root_input_type, root_output_type), root_input_type, root_output_type
 
-    env = {}
+    scope = Scope()
     for expr in tree.body[:-1]:
         if expr.type == wf_node.NodeType.bind:
             if builtins.match_import(expr.value) is not None:
                 continue
             from swl.semantic.wf.infer import eval_expr
-            env[expr.id.name] = eval_expr(checker, expr.value, imports, env, set(), issues)
+            scope.set_local(expr.id.name, value=eval_expr(checker, expr.value, imports, scope, set(), issues))
     from swl.semantic.wf.infer import eval_expr
-    result = eval_expr(checker, final, imports, env, set(), issues)
+    result = eval_expr(checker, final, imports, scope, set(), issues)
     if isinstance(result, FunctionValue):
         wft = wf_function_type_from_signature(checker, result.signature, result.batch)
         return result.signature, result.batch, wft, getattr(wft, 'input', None), getattr(wft, 'output', None)

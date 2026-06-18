@@ -3,7 +3,7 @@ import unittest as ut
 
 import swl.ir.node as ir
 from swl.dag.node import DAG, Field, Input, Literal, Merge, OutputSpec, Record, StepCall
-from swl.dag.context import ForceEnv
+from swl.semantic.scope import Scope
 from swl.dag.finalize import (
     _build_output_specs,
     _final_outputs,
@@ -387,7 +387,7 @@ class TestForce(ut.TestCase):
     def test_map_partial_task_application_produces_mapped_step(self):
         files, root = self._files()
         lowered = lower_file(os.path.join(root, 'map_partial.swl'), files)
-        mapped = lowered.body.bindings[1].value
+        mapped = lowered.result.body.bindings[-1].value
         self.assertIsInstance(mapped.function, ir.Function)
         self.assertEqual(mapped.function.kind, 'workflow')
         data = force_file(os.path.join(root, 'map_partial.swl'), files).to_dict()
@@ -437,8 +437,8 @@ class TestForce(ut.TestCase):
         self.assertEqual(data['steps'][0]['map']['source']['source'], 'table')
 
     def test_force_rejects_unnormalized_map_callable(self):
-        env = ForceEnv()
-        env.bind('xs', Literal(42))
+        env = Scope()
+        env.set_local('xs', value=Literal(42))
         with self.assertRaisesRegex(ValueError, 'map requires normalized executable callable during forcing'):
             force_value(
                 _forcer(),
@@ -480,19 +480,23 @@ class TestForce(ut.TestCase):
         self.assertEqual(value.value, 2)
 
     def test_table_update_on_step_call_raises_error(self):
+        env = Scope()
+        env.set_local('align', value=StepCall('align', '/align.sh', {}, ['out']))
         with self.assertRaisesRegex(ValueError, 'Record update.*task/workflow call result'):
             force_value(
                 _forcer(),
                 ir.Update(ir.Name('align'), ir.Record({'ref': ir.Literal('hg38.fa')})),
-                ForceEnv(values={'align': StepCall('align', '/align.sh', {}, ['out'])}),
+                env,
             )
 
     def test_table_update_right_side_step_call_raises_error(self):
+        env = Scope()
+        env.set_local('align', value=StepCall('align', '/align.sh', {}, ['out']))
         with self.assertRaisesRegex(ValueError, 'Record update.*task/workflow call result'):
             force_value(
                 _forcer(),
                 ir.Update(ir.Record({'ref': ir.Literal('hg38.fa')}), ir.Name('align')),
-                ForceEnv(values={'align': StepCall('align', '/align.sh', {}, ['out'])}),
+                env,
             )
 
     def test_table_update_input_record_raises_error(self):
@@ -502,7 +506,7 @@ class TestForce(ut.TestCase):
             force_value(
                 forcer,
                 ir.Update(ir.Input('xs'), ir.Record({'ref': ir.Literal('hg38.fa')})),
-                ForceEnv(),
+                Scope(),
             )
 
     def test_table_update_record_input_raises_error(self):
@@ -512,13 +516,13 @@ class TestForce(ut.TestCase):
             force_value(
                 forcer,
                 ir.Update(ir.Record({'ref': ir.Literal('hg38.fa')}), ir.Input('xs')),
-                ForceEnv(),
+                Scope(),
             )
 
     def test_table_update_right_side_step_call_raises_error_via_name(self):
-        env = ForceEnv()
+        env = Scope()
         step = StepCall(id='align', path='/a.sh', bindings={}, outputs=['bam'])
-        env.bind('ys', step)
+        env.set_local('ys', value=step)
         with self.assertRaisesRegex(ValueError, 'Record update.*on a task/workflow call result'):
             force_value(
                 _forcer(),

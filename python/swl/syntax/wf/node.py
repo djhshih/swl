@@ -40,6 +40,7 @@ class Identifier(Expr):
     type = NodeType.id
     def __init__(self, name):
         self.name = name
+        self.binding = None
 
 class String(Expr):
     type = NodeType.str

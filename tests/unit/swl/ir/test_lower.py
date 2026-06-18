@@ -88,42 +88,51 @@ class TestLower(ut.TestCase):
     def test_lower_lambda_workflow(self):
         files, root = self._files()
         tree = parse_and_lower(_MAIN, root, files)
-        self.assertIsInstance(tree, ir.Lambda)
-        self.assertEqual(tree.param, 'x')
-        self.assertIsInstance(tree.body, ir.Block)
+        self.assertIsInstance(tree, ir.Block)
+        inner = tree.result
+        self.assertIsInstance(inner, ir.Lambda)
+        self.assertEqual(inner.param, 'x')
+        self.assertIsInstance(inner.body, ir.Block)
 
     def test_lower_imports_to_functions(self):
         files, root = self._files()
         tree = parse_and_lower(_MAIN, root, files)
-        self.assertIsInstance(tree, ir.Lambda)
-        body = tree.body
-        self.assertIsInstance(body, ir.Block)
-        self.assertEqual(len(body.bindings), 2)
+        self.assertIsInstance(tree, ir.Block)
+        self.assertEqual(len(tree.bindings), 2)
+        self.assertIsInstance(tree.result, ir.Lambda)
 
     def test_lower_bindings_produce_variables_and_refs(self):
         files, root = self._files()
         tree = parse_and_lower(_MAIN, root, files)
-        body = tree.body
-        self.assertIsInstance(body.bindings[0], ir.Variable)
-        self.assertIsInstance(body.bindings[1], ir.Variable)
+        # Top-level import bindings wrap the main lambda
+        self.assertIsInstance(tree.bindings[0], ir.Variable)
+        self.assertIsInstance(tree.bindings[1], ir.Variable)
+        inner = tree.result
+        self.assertIsInstance(inner, ir.Lambda)
+        body = inner.body
+        self.assertIsInstance(body, ir.Block)
         self.assertIn('bam', body.result.fields)
         self.assertIn('sbam', body.result.fields)
 
     def test_lower_chain_normalizes_to_lambda_block(self):
         files, root = self._files()
         tree = parse_and_lower(_CHAIN, root, files)
-        self.assertIsInstance(tree, ir.Lambda)
-        self.assertEqual(tree.param, '_input')
-        self.assertIsInstance(tree.body, ir.Block)
-        self.assertEqual([bind.name for bind in tree.body.bindings], ['_s1', '_s2'])
+        self.assertIsInstance(tree, ir.Block)
+        inner = tree.result
+        self.assertIsInstance(inner, ir.Lambda)
+        self.assertEqual(inner.param, '_input')
+        self.assertIsInstance(inner.body, ir.Block)
+        self.assertEqual([bind.name for bind in inner.body.bindings], ['_s1', '_s2'])
 
     def test_lower_explicit_compose_normalizes_to_lambda_block(self):
         files, root = self._files()
         tree = parse_and_lower(_COMPOSE, root, files)
-        self.assertIsInstance(tree, ir.Lambda)
-        self.assertEqual(tree.param, 'x')
-        self.assertIsInstance(tree.body, ir.Block)
-        self.assertEqual([bind.name for bind in tree.body.bindings], ['a', 'b'])
+        self.assertIsInstance(tree, ir.Block)
+        inner = tree.result
+        self.assertIsInstance(inner, ir.Lambda)
+        self.assertEqual(inner.param, 'x')
+        self.assertIsInstance(inner.body, ir.Block)
+        self.assertEqual([bind.name for bind in inner.body.bindings], ['a', 'b'])
 
     def test_chain_and_explicit_have_equivalent_lowered_shape(self):
         root = os.path.abspath('/virtual-equivalent')
@@ -168,7 +177,6 @@ call = import "call.sh"
         self.assertEqual(_strip_ids(chain), _strip_ids(explicit))
 
 
-    @ut.expectedFailure
     def test_gap1_import_shadowing_in_lambda_body(self):
         tmpdir = tempfile.mkdtemp()
         old_cwd = os.getcwd()
@@ -186,13 +194,24 @@ echo sort
                     f.write(content)
             src = 't = import "a.sh"\n\\x ->\n    t = import "b.sh"\n    t { bam: "x" }\n'
             tree = parse_and_lower(src, tmpdir, {})
-            self.assertIsInstance(tree.body, ir.Block)
-            self.assertGreater(len(tree.body.bindings), 0)
-            binding = tree.body.bindings[0]
-            self.assertIsInstance(binding, ir.Variable)
-            self.assertEqual(binding.name, 't')
-            self.assertIsInstance(binding.value, ir.Function)
-            self.assertEqual(binding.value.name, 'b')
+            # Top-level: Block with outer t binding wrapping a Lambda
+            self.assertIsInstance(tree, ir.Block)
+            self.assertGreater(len(tree.bindings), 0)
+            outer_binding = tree.bindings[0]
+            self.assertIsInstance(outer_binding, ir.Variable)
+            self.assertEqual(outer_binding.name, 't')
+            self.assertIsInstance(outer_binding.value, ir.Function)
+            self.assertEqual(outer_binding.value.name, 't')
+            # Lambda body: inner t shadows with import "b.sh"
+            block = tree.result
+            self.assertIsInstance(block, ir.Lambda)
+            body = block.body
+            self.assertIsInstance(body, ir.Block)
+            inner_binding = body.bindings[0]
+            self.assertIsInstance(inner_binding, ir.Variable)
+            self.assertEqual(inner_binding.name, 't')
+            self.assertIsInstance(inner_binding.value, ir.Function)
+            self.assertEqual(inner_binding.value.name, 'b')
         finally:
             os.chdir(old_cwd)
             shutil.rmtree(tmpdir)

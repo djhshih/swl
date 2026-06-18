@@ -1,5 +1,6 @@
 import swl.ir.node as ir
-from swl.dag.context import ForceEnv, _SENTINEL
+from swl.dag.context import _SENTINEL
+from swl.semantic.scope import Scope
 from swl.dag.merge import _canonicalize_merges, _value_key
 from swl.dag.node import Field, ForcedFunction, Input, Literal, Merge, Record, StepCall
 
@@ -71,9 +72,9 @@ def _force_simple_value(forcer, node, env):
     if isinstance(node, ir.Input):
         return _force_input(forcer, node)
     if isinstance(node, ir.Name):
-        value = env.lookup(node.name)
-        if value is not None:
-            return value
+        binding = env.resolve(node.name)
+        if binding is not None:
+            return binding.value
         raise ValueError(f'Undefined variable during forcing: {node.name}')
     if isinstance(node, ir.Ref):
         return _force_ref(forcer, node, env)
@@ -140,10 +141,10 @@ def _validate_update_operands(left, right):
 
 
 def _force_block(forcer, node, env):
-    local = ForceEnv(env)
+    local = Scope(parent=env)
     _register_block(forcer, node.bindings)
     for bind in node.bindings:
-        local.bind(bind.name, ir.Ref(bind.id, bind.name))
+        local.set_local(bind.name, value=ir.Ref(bind.id, bind.name))
     return force_value(forcer, node.result, local)
 
 
@@ -244,8 +245,8 @@ def _apply_emittable_function(forcer, function, bound, accumulated):
 
 
 def _force_lambda(forcer, function, bound):
-    local = ForceEnv()
-    local.bind(function.param, bound)
+    local = Scope()
+    local.set_local(function.param, value=bound)
     return force_value(forcer, function.body, local)
 
 

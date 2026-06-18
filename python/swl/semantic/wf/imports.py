@@ -2,7 +2,7 @@ import os
 
 from swl.semantic.task.type import Param, TaskSignature, signature_from_task
 from swl.semantic.wf.bashvars import _validate_bash_variables
-from swl.syntax.task import bash as task_bash
+from swl.syntax.task import bash as task_bash, interpolation as interp
 from swl.syntax.task.parser import Parser as TaskParser
 from swl.syntax.wf import builtins, node as wf_node
 
@@ -45,6 +45,9 @@ def load_import(checker, name: str, path: str) -> Import:
         signature = signature_from_task(task)
         known_vars = set(signature.inputs.keys()) | set(signature.run.keys())
         var_errors = _validate_bash_variables(parsed_body, known_vars, f'task "{name}" ({path})')
+        default_errors = _validate_param_defaults(signature.run, known_vars, f'task "{name}" ({path})')
+        default_errors.extend(_validate_param_defaults(signature.outputs, known_vars, f'task "{name}" ({path})'))
+        var_errors.extend(default_errors)
         if var_errors:
             raise ValueError('\n'.join(var_errors))
         checker.loader.cache_task(path, task, signature, parsed_body)
@@ -55,3 +58,27 @@ def load_import(checker, name: str, path: str) -> Import:
             raise ValueError(f'Imported workflow does not produce a signature: {path}')
         return Import(name, path, check.signature, 'workflow', check=check)
     raise ValueError(f'Unrecognized import path: {path}')
+
+
+def _validate_param_defaults(params, known_vars, context_name):
+    errors = []
+    for name, param in params.items():
+        if param.default is None:
+            continue
+        default_word = param.default
+        if isinstance(default_word, interp.Word):
+            for part in default_word.parts:
+                if isinstance(part, interp.Var):
+                    if part.name not in known_vars:
+                        errors.append(
+                            f'Unresolved variable "${{{part.name}}}" in {name} default '
+                            f'in {context_name}'
+                        )
+                elif isinstance(part, interp.Expr):
+                    for var_name in task_bash._extract_expr_vars(part.text):
+                        if var_name not in known_vars:
+                            errors.append(
+                                f'Unresolved variable "${var_name}" in {name} default '
+                                f'in {context_name}'
+                            )
+    return errors

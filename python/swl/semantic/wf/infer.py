@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass, field
 
+from swl.semantic.scope import Scope
 from swl.semantic.task.type import Param, TaskSignature
 from swl.semantic.wf import type as wf_type
 from swl.semantic.wf.imports import load_import
@@ -38,14 +39,14 @@ class FunctionValue:
     first_input: str = None
     param: str = None
     body: object = None
-    env: dict = field(default_factory=dict)
+    env: object = None
     imports: dict = field(default_factory=dict)
     imported_check: object = None
     batch: bool = False
 
     def __post_init__(self):
         self.first_input = self.first_input or next(iter(self.signature.inputs.keys()), None)
-        self.env = dict(self.env or {})
+        self.env = self.env if self.env is not None else Scope()
         self.imports = dict(self.imports or {})
 
 
@@ -112,20 +113,21 @@ def is_explicitly_bound_value(value):
 
 
 def _infer_lambda_inputs(checker, tree, final, imports, demanded, issues):
-    env = eval_prefix_bindings(checker, tree.body[:-1], imports, demanded, issues)
+    scope = eval_prefix_bindings(checker, tree.body[:-1], imports, demanded, issues)
     if uses_map(checker, final.body):
-        table_demanded, table_issues, _ = eval_lambda_in_mode(checker, final, imports, env, 'table')
+        table_demanded, table_issues, _ = eval_lambda_in_mode(checker, final, imports, scope, 'table')
         if looks_like_stale_record_errors(table_issues):
             return table_demanded, []
         return table_demanded, table_issues
-    env[final.param.name] = OpenRecord()
-    eval_function_body(checker, final, imports, env, demanded, issues)
+    lambda_scope = Scope(parent=scope)
+    lambda_scope.declare(final.param.name).value = OpenRecord()
+    eval_function_body(checker, final, imports, lambda_scope, demanded, issues)
     return demanded, issues
 
 
 def _infer_value_inputs(checker, tree, final, imports, demanded, issues):
-    env = eval_prefix_bindings(checker, tree.body[:-1], imports, demanded, issues)
-    value = eval_expr(checker, final, imports, env, demanded, issues)
+    scope = eval_prefix_bindings(checker, tree.body[:-1], imports, demanded, issues)
+    value = eval_expr(checker, final, imports, scope, demanded, issues)
     if not is_function_value(value):
         issues.append('Workflow must evaluate to a function')
     return demanded, issues
@@ -144,23 +146,23 @@ def infer_inputs(checker, tree, imports):
     return _infer_value_inputs(checker, tree, final, imports, demanded, issues)
 
 
-def _eval_block_items(checker, items, imports, env, demanded, issues):
-    local_env = dict(env)
+def _eval_block_items(checker, items, imports, scope, demanded, issues):
+    local_scope = Scope(parent=scope)
     result = UnknownValue()
     for expr in items:
         if expr.type == wf_node.NodeType.bind:
-            value = eval_expr(checker, expr.value, imports, local_env, demanded, issues)
-            local_env[expr.id.name] = value
+            value = eval_expr(checker, expr.value, imports, local_scope, demanded, issues)
+            local_scope.set_local(expr.id.name, value=value)
             result = value
         else:
-            result = eval_expr(checker, expr, imports, local_env, demanded, issues)
+            result = eval_expr(checker, expr, imports, local_scope, demanded, issues)
     return result
 
 
-def eval_function_body(checker, fn, imports, env, demanded, issues):
+def eval_function_body(checker, fn, imports, scope, demanded, issues):
     if fn.body.type != wf_node.NodeType.block:
-        return eval_expr(checker, fn.body, imports, dict(env), demanded, issues)
-    return _eval_block_items(checker, fn.body.body, imports, env, demanded, issues)
+        return eval_expr(checker, fn.body, imports, Scope(parent=scope), demanded, issues)
+    return _eval_block_items(checker, fn.body.body, imports, scope, demanded, issues)
 
 
 def _function_value_from_import(name, imported):
@@ -210,10 +212,11 @@ def _resolve_field_access(checker, rec, field, expr, demanded, issues):
     return UnknownValue()
 
 
-def eval_expr(checker, expr, imports, env, demanded, issues):
+def eval_expr(checker, expr, imports, scope, demanded, issues):
     if expr.type == wf_node.NodeType.id:
-        if expr.name in env:
-            return env[expr.name]
+        binding = scope.resolve(expr.name)
+        if binding is not None:
+            return binding.value
         if expr.name in imports:
             return _function_value_from_import(expr.name, imports[expr.name])
         return UnknownValue()
@@ -226,18 +229,18 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
 
     if expr.type == wf_node.NodeType.rec:
         fields = {
-            name: eval_expr(checker, value_expr, imports, env, demanded, issues)
+            name: eval_expr(checker, value_expr, imports, scope, demanded, issues)
             for name, value_expr in expr.value.items()
         }
         return ClosedRecord(fields)
 
     if expr.type == wf_node.NodeType.get:
-        rec = eval_expr(checker, expr.rec, imports, env, demanded, issues)
+        rec = eval_expr(checker, expr.rec, imports, scope, demanded, issues)
         return _resolve_field_access(checker, rec, expr.member.name, expr, demanded, issues)
 
     if expr.type == wf_node.NodeType.update:
-        left = eval_expr(checker, expr.left, imports, env, demanded, issues)
-        right = eval_expr(checker, expr.right, imports, env, demanded, issues)
+        left = eval_expr(checker, expr.left, imports, scope, demanded, issues)
+        right = eval_expr(checker, expr.right, imports, scope, demanded, issues)
         return merge_update_values(checker, left, right, issues)
 
     if expr.type == wf_node.NodeType.apply:
@@ -247,22 +250,22 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
         map_parts = builtins.match_map(expr)
         map_by_parts = builtins.match_map_by(expr)
         if map_by_parts is not None:
-            mapped_key = eval_expr(checker, map_by_parts[0], imports, env, demanded, issues)
-            mapped_fun = eval_expr(checker, map_by_parts[1], imports, env, demanded, issues)
-            mapped_arg = eval_expr(checker, map_by_parts[2], imports, env, demanded, issues)
+            mapped_key = eval_expr(checker, map_by_parts[0], imports, scope, demanded, issues)
+            mapped_fun = eval_expr(checker, map_by_parts[1], imports, scope, demanded, issues)
+            mapped_arg = eval_expr(checker, map_by_parts[2], imports, scope, demanded, issues)
             return apply_map_by(checker, mapped_fun, mapped_key, mapped_arg, issues)
         if map_parts is not None:
-            mapped_fun = eval_expr(checker, map_parts[0], imports, env, demanded, issues)
-            mapped_arg = eval_expr(checker, map_parts[1], imports, env, demanded, issues)
+            mapped_fun = eval_expr(checker, map_parts[0], imports, scope, demanded, issues)
+            mapped_arg = eval_expr(checker, map_parts[1], imports, scope, demanded, issues)
             return apply_map(checker, mapped_fun, mapped_arg, issues)
         if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map':
-            mapped_fun = eval_expr(checker, expr.arg, imports, env, demanded, issues)
+            mapped_fun = eval_expr(checker, expr.arg, imports, scope, demanded, issues)
             return apply_map_partial(checker, mapped_fun, issues)
         if expr.fun.type == wf_node.NodeType.id and expr.fun.name == 'map_by':
-            mapped_fun = eval_expr(checker, expr.arg, imports, env, demanded, issues)
+            mapped_fun = eval_expr(checker, expr.arg, imports, scope, demanded, issues)
             return apply_map_by_partial(checker, mapped_fun, issues)
-        fun = eval_expr(checker, expr.fun, imports, env, demanded, issues)
-        arg = eval_expr(checker, expr.arg, imports, env, demanded, issues)
+        fun = eval_expr(checker, expr.fun, imports, scope, demanded, issues)
+        arg = eval_expr(checker, expr.arg, imports, scope, demanded, issues)
         if isinstance(fun, FunctionValue) and isinstance(arg, FunctionValue):
             if hasattr(checker, '_type_checker'):
                 left_name = arg.name
@@ -274,17 +277,17 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
         return result
 
     if expr.type == wf_node.NodeType.block:
-        return _eval_block_items(checker, expr.body, imports, env, demanded, issues)
+        return _eval_block_items(checker, expr.body, imports, scope, demanded, issues)
 
     if expr.type == wf_node.NodeType.fun:
         fn_issues = []
         fn_demanded = set()
-        local_env = dict(env)
-        local_env[expr.param.name] = OpenRecord()
-        body_value = eval_function_body(checker, expr, imports, local_env, fn_demanded, fn_issues)
+        local_scope = Scope(parent=scope)
+        local_scope.declare(expr.param.name).value = OpenRecord()
+        body_value = eval_function_body(checker, expr, imports, local_scope, fn_demanded, fn_issues)
         batch = False
         if uses_map(checker, expr.body):
-            _, table_issues, table_value = eval_lambda_in_mode(checker, expr, imports, env, 'table', fn_demanded)
+            _, table_issues, table_value = eval_lambda_in_mode(checker, expr, imports, scope, 'table', fn_demanded)
             if value_is_table(table_value):
                 body_value = table_value
                 batch = True
@@ -298,7 +301,7 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
         if isinstance(body_value, (FunctionValue, ClosureValue)):
             body_outputs = dict(body_value.signature.outputs)
         if batch:
-            root_input_type = infer_root_table_type(checker, expr, imports, env, fn_demanded)
+            root_input_type = infer_root_table_type(checker, expr, imports, scope, fn_demanded)
             inputs = signature_inputs_from_table_type(checker, root_input_type)
             if not inputs:
                 inputs = {expr.param.name: Param(expr.param.name, None)}
@@ -306,7 +309,7 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
             if isinstance(body_value, ClosureValue):
                 inputs = dict(body_value.signature.inputs)
             else:
-                root_input_type = infer_root_record_type(checker, expr, imports, env, fn_demanded)
+                root_input_type = infer_root_record_type(checker, expr, imports, scope, fn_demanded)
                 inputs = signature_inputs_from_root_type(checker, root_input_type)
         signature = TaskSignature(inputs, body_outputs, {})
         return FunctionValue(
@@ -315,7 +318,7 @@ def eval_expr(checker, expr, imports, env, demanded, issues):
             'lambda',
             param=expr.param.name,
             body=expr.body,
-            env=env,
+            env=scope,
             imports=imports,
             batch=batch or value_is_table(body_value),
         )
@@ -344,14 +347,16 @@ def initial_param_value(mode, inferred_inputs=None):
     return OpenRecord()
 
 
-def eval_lambda_in_mode(checker, fn, imports, env, mode, inferred_inputs=None):
-    local_env = dict(env)
+def eval_lambda_in_mode(checker, fn, imports, scope, mode, inferred_inputs=None):
+    local_scope = Scope(parent=scope)
     demanded = set()
     issues = []
-    local_env[fn.param.name] = initial_param_value(mode, inferred_inputs)
-    result = eval_function_body(checker, fn, imports, local_env, demanded, issues)
+    local_scope.declare(fn.param.name).value = initial_param_value(mode, inferred_inputs)
+    result = eval_function_body(checker, fn, imports, local_scope, demanded, issues)
     if mode == 'table':
-        table_value = local_env.get(fn.param.name)
+        table_value = local_scope.resolve(fn.param.name)
+        if table_value is not None:
+            table_value = table_value.value
         if isinstance(table_value, TableValue) and table_value.columns:
             demanded = set(table_value.columns.keys())
         else:
@@ -360,7 +365,10 @@ def eval_lambda_in_mode(checker, fn, imports, env, mode, inferred_inputs=None):
 
 
 def eval_prefix_bindings(checker, exprs, imports, demanded=None, issues=None):
-    env = {}
+    '''Evaluate prefix bindings at top-level scope.
+    Import bindings are pre-resolved and skipped.
+    Only safe to call for top-level prefix bindings.'''
+    scope = Scope()
     local_demanded = demanded if demanded is not None else set()
     local_issues = issues if issues is not None else []
     for expr in exprs:
@@ -368,8 +376,9 @@ def eval_prefix_bindings(checker, exprs, imports, demanded=None, issues=None):
             continue
         if builtins.match_import(expr.value) is not None:
             continue
-        env[expr.id.name] = eval_expr(checker, expr.value, imports, env, local_demanded, local_issues)
-    return env
+        value = eval_expr(checker, expr.value, imports, scope, local_demanded, local_issues)
+        scope.set_local(expr.id.name, value=value)
+    return scope
 
 
 def looks_like_stale_record_errors(issues):
@@ -536,9 +545,9 @@ def application_result(checker, fun, bound, demanded, issues):
     if missing:
         return ClosureValue(base_fun, bound)
     if base_fun.kind == 'lambda' and base_fun.param is not None and base_fun.body is not None:
-        local_env = dict(base_fun.env)
-        local_env[base_fun.param] = bound
-        return eval_expr(checker, base_fun.body, base_fun.imports, local_env, demanded, issues)
+        local_scope = Scope(parent=base_fun.env)
+        local_scope.declare(base_fun.param).value = bound
+        return eval_expr(checker, base_fun.body, base_fun.imports, local_scope, demanded, issues)
     if base_fun.kind == 'workflow' and base_fun.imported_check is not None:
         return apply_imported_workflow(checker, base_fun, bound, demanded, issues)
     return computation_value(checker, fun, bound)
@@ -551,14 +560,14 @@ def apply_imported_workflow(checker, fun, bound, demanded, issues):
     final = tree.body[-1]
     if final.type != wf_node.NodeType.fun:
         return computation_value(checker, fun, bound)
-    env = {}
+    scope = Scope()
     for expr in tree.body[:-1]:
         if expr.type == wf_node.NodeType.bind:
             if builtins.match_import(expr.value) is not None:
                 continue
-            env[expr.id.name] = eval_expr(checker, expr.value, fun.imports, env, demanded, issues)
-    env[final.param.name] = bound
-    return eval_function_body(checker, final, fun.imports, env, demanded, issues)
+            scope.set_local(expr.id.name, value=eval_expr(checker, expr.value, fun.imports, scope, demanded, issues))
+    scope.declare(final.param.name, value=bound)
+    return eval_function_body(checker, final, fun.imports, scope, demanded, issues)
 
 
 def computation_value(checker, fun, bound):
@@ -753,25 +762,26 @@ def _typed_items(checker, items):
     return {name: value_type(checker, item) for name, item in sorted(items.items())}
 
 
-def infer_root_record_type(checker, fn, imports, env, inferred_inputs):
-    value = infer_root_input_value(checker, fn, imports, env, inferred_inputs, mode='record')
+def infer_root_record_type(checker, fn, imports, scope, inferred_inputs):
+    value = infer_root_input_value(checker, fn, imports, scope, inferred_inputs, mode='record')
     fields = getattr(value, 'fields', {}) if isinstance(value, (OpenRecord, ClosedRecord)) else {}
     return wf_type.RecordType(_typed_items(checker, fields))
 
 
-def infer_root_table_type(checker, fn, imports, env, inferred_inputs):
-    value = infer_root_input_value(checker, fn, imports, env, inferred_inputs, mode='table')
+def infer_root_table_type(checker, fn, imports, scope, inferred_inputs):
+    value = infer_root_input_value(checker, fn, imports, scope, inferred_inputs, mode='table')
     columns = getattr(value, 'columns', {}) if isinstance(value, TableValue) else {}
     if fn.param.name in columns and len(columns) > 1 and value_type(checker, columns[fn.param.name]) == wf_type.UNKNOWN:
         columns = {name: item for name, item in columns.items() if name != fn.param.name}
     return wf_type.TableType(_typed_items(checker, columns))
 
 
-def infer_root_input_value(checker, fn, imports, env, inferred_inputs, mode):
-    local_env = dict(env)
-    local_env[fn.param.name] = initial_param_value(mode, inferred_inputs)
-    eval_function_body(checker, fn, imports, local_env, set(), [])
-    return local_env[fn.param.name]
+def infer_root_input_value(checker, fn, imports, scope, inferred_inputs, mode):
+    local_scope = Scope(parent=scope)
+    local_scope.declare(fn.param.name).value = initial_param_value(mode, inferred_inputs)
+    eval_function_body(checker, fn, imports, local_scope, set(), [])
+    binding = local_scope.resolve(fn.param.name)
+    return binding.value if binding is not None else None
 
 
 def _signature_inputs_from_items(checker, items):
@@ -810,15 +820,18 @@ def inner_partial_remaining_inputs(checker, fn, imports, env):
         return None
     if getattr(result.fun, 'type', None) != wf_node.NodeType.id:
         return None
-    local_env = dict(env)
-    local_env[fn.param.name] = initial_param_value('record', None)
+    local_scope = Scope(parent=env) if env is not None else Scope()
+    local_scope.declare(fn.param.name).value = initial_param_value('record', None)
     for expr in body.body[:-1]:
         if expr.type != wf_node.NodeType.bind:
             continue
         if builtins.match_import(expr.value) is not None:
             continue
-        local_env[expr.id.name] = eval_expr(checker, expr.value, imports, local_env, set(), [])
-    callee = local_env.get(result.fun.name)
+        local_scope.declare(expr.id.name).value = eval_expr(checker, expr.value, imports, local_scope, set(), [])
+    callee_binding = local_scope.resolve(result.fun.name)
+    if callee_binding is None:
+        return None
+    callee = callee_binding.value
     if not isinstance(callee, ClosureValue):
         return None
     if getattr(result.arg, 'type', None) != wf_node.NodeType.id or result.arg.name != fn.param.name:

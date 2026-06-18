@@ -90,6 +90,7 @@ class Lambda(Node):
     body: 'Block'
     signature: Optional[TaskSignature] = None
     is_batch: bool = False
+    captures: Dict[str, Node] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

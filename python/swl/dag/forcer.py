@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 
 from swl.ir.lower import Lowerer
-from swl.dag.context import ForceEnv
+from swl.semantic.scope import Scope
 from swl.dag.evaluator import _assert_canonical, force_value
 from swl.dag.finalize import _finalize_dag
 from swl.dag.tooldefs import _force_root
@@ -28,7 +28,7 @@ def make_force_state(files=None):
 def force(node, files=None, state=None):
     state = state or make_force_state(files=files)
     _assert_canonical(state, node)
-    value = force_value(state, node, ForceEnv())
+    value = force_value(state, node, Scope())
     value = _force_root(state, value)
     return _finalize_dag(state, value)
 

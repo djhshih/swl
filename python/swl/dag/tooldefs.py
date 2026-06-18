@@ -1,5 +1,5 @@
 import swl.ir.node as ir
-from swl.dag.context import ForceEnv
+from swl.semantic.scope import Scope
 from swl.dag.evaluator import _available_inputs, _force_map, _value_key
 from swl.dag.node import Field, ForcedFunction, Input, Literal, Record, StepCall
 from swl.types import normalize_swl_type
@@ -110,7 +110,7 @@ def _materialize_workflow_dag_impl(forcer, function):
         value = ForcedFunction(function.body, None, signature)
     else:
         from swl.dag.evaluator import force_value
-        value = force_value(forcer, function.body, ForceEnv())
+        value = force_value(forcer, function.body, Scope())
     if isinstance(value, ForcedFunction):
         from swl.dag.evaluator import _apply
         value = _apply(forcer, value, arg)
